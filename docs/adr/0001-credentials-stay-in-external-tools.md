@@ -1,0 +1,3 @@
+# Credentials stay in external tools
+
+Kickoff stores no tokens or passwords. Each provider reads its tracker through a tool where the user has already logged in: `gh` for GitHub, Orca's own Jira connection (`orca jira`) or `twg` for Jira. Plugin storage holds only configuration and prompt templates. Calling an API directly with a token kept in plugin storage would have been simpler to code, but it would leave secrets in a store that was never meant for them and make Kickoff responsible for refreshing them. A future tracker that needs a token (Linear) reads it from an environment variable or from Orca's `secrets:own` keychain store, never from plugin storage.
