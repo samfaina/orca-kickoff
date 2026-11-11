@@ -20,7 +20,7 @@
       {
         "id": "tasks",
         "title": "Kickoff",
-        "icon": "rocket",
+        "icon": "zap",
         "entry": "src/panel.tsx",
         "ui": "components"
       }

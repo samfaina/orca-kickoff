@@ -7,7 +7,7 @@ export default function Panel() {
     <EmptyState
       title="Kickoff"
       description="Start tasks from your tracker in their own worktree. Task lists are coming soon."
-      icon="rocket"
+      icon="zap"
     />
   )
 }
