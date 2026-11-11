@@ -33,7 +33,7 @@ Update this file when a fact is confirmed or disproved. All example data is inve
   "main": "src/worker.ts",
   "capabilities": [{ "kind": "storage:own" }, { "kind": "workspace:read" }],
   "contributes": {
-    "panels": [{ "id": "tasks", "title": "Kickoff", "icon": "rocket", "entry": "src/panel.tsx", "ui": "components" }]
+    "panels": [{ "id": "tasks", "title": "Kickoff", "icon": "zap", "entry": "src/panel.tsx", "ui": "components" }]
   }
 }
 ```
@@ -168,6 +168,7 @@ Icons seen: `rocket`, `play`, `refresh`, `branch`, `close`, `check`.
   - `mockHost({ capabilities, results, requests, storage, settings, secrets })`.
   - `TestPanel` has `find`, `findAll`, `press`, `type`, `toggle`, `select`, `emit`, `post`, `errors`, `refusals`, `persisted` and more.
   - `TestWorker` has `request`, `emit`, `hooks.fire`, `logs`, `posts` and `deactivate`.
+- On Windows, `orca plugin test` and `orca plugin check` fail when the plugin folder is on a different drive from Orca's install (for example the plugin on `I:` and Orca under `C:\Users\...`). Every test file fails with `orca-testing.mjs: cannot import "./orca-runtime.mjs": no such file in the plugin`, and `check` reports the same error as a panel issue while still exiting 0. The scaffolded `worker-panel` template fails the same way on `I:` and passes on `C:`. A directory junction on `C:` does not help, because Orca resolves the real path. Workaround: copy `orca-plugin.json`, `tsconfig.json`, `src/` and `.orca/` to a folder on Orca's drive and run the commands there. `orca plugin validate` is not affected **[Verified]** with Orca 1.4.255.
 - `src/panel.check.ts` exports `defineCheck({ scenario: { storage, events, requests } })`, which `orca plugin check` and `orca plugin shot --scenario` render **[Original]**.
 
 Dev commands **[Verified]**: `orca plugin validate .`, `test .`, `check .`, `dev watch .`, `inspect`, `dev request`, `dev emit`, `shot --scenario`.
