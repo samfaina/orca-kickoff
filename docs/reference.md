@@ -108,6 +108,20 @@ What the API does **not** offer **[Verified]**: listing projects, creating workt
 
 That is why Kickoff uses the Orca CLI for projects, worktrees and creation.
 
+### Worker process
+
+On Windows with Orca 1.4.255, read from inside a running trusted worker **[Verified]**:
+
+- The worker is Orca's own `Orca.exe` with `ELECTRON_RUN_AS_NODE=1`, running `resources\app.asar.unpacked\out\main\plugin-host-entry.js`, with no `execArgv`.
+- Its current folder is Orca's install folder (`%LOCALAPPDATA%\Programs\orca`), the one that holds `Orca.exe`.
+- Its environment has only `COMSPEC`, `ELECTRON_RUN_AS_NODE`, `HOMEDRIVE`, `HOMEPATH`, `LOGONSERVER`, `NUMBER_OF_PROCESSORS`, `PATH`, `PATHEXT`, `PROCESSOR_ARCHITECTURE`, `SYSTEMDRIVE`, `SystemRoot`, `TEMP`, `TMP`, `USERDOMAIN`, `USERNAME`, `USERPROFILE` and `WINDIR`. So `APPDATA`, `LOCALAPPDATA`, `ProgramFiles`, `HOME`, `NODE_OPTIONS` and every `GH_*` variable are missing. `PATH` is the user's, with Orca's CLI folder and `gh` on it.
+- `execFile('orca', ...)` from that folder starts `Orca.exe`, not the CLI: Node looks in the current folder before `PATH`, and names are not case-sensitive on Windows. With `ELECTRON_RUN_AS_NODE=1` the app takes the first argument as a script and exits 1 with `Error: Cannot find module '<Orca's folder>\project'` on stderr, after a first line `node:internal/modules/cjs/loader:1575`.
+- From the home folder, the Orca CLI without `APPDATA` exits 1 with `{ ok: false, error: { code: 'runtime_unavailable', message: 'APPDATA is not set, so the Orca runtime metadata path cannot be resolved.' } }` on stdout.
+- `gh` without `APPDATA` answers "You are not logged into any GitHub hosts", because its login is in `%APPDATA%\GitHub CLI`.
+- With the current folder set to the home folder and `APPDATA` set to `%USERPROFILE%\AppData\Roaming`, both work. `ELECTRON_RUN_AS_NODE=1`, inherited, does not bother the Orca CLI.
+
+So Kickoff runs every tool from the home folder and puts back `APPDATA` and `LOCALAPPDATA` with their default values when they are missing (`childProcessSetup` in `src/cli.ts`). If a user's `APPDATA` is redirected elsewhere, that default is wrong and the tools fail as above; Kickoff does not handle it. On macOS and Linux the worker environment has not been read **[Assumed]**.
+
 ### Errors from worker to panel
 
 - Documented contract **[Verified]**: an error thrown in a handler whose `code` is a host error code (`invalid_params`, `conflict`, ...) reaches the panel with that code; any other becomes `action_failed`. The panel can also see `unknown_method`, `timeout` and `unavailable`.
@@ -179,7 +193,7 @@ Dev commands **[Verified]**: `orca plugin validate .`, `test .`, `check .`, `dev
 ## Orca CLI
 
 - The executable is `orca` on Windows and macOS. On Linux it is `orca-ide`, because `orca` is usually GNOME's screen reader **[Original]**; not checked on Linux.
-- On Windows, both `orca.cmd` and `orca.exe` are on PATH and `where` lists the `.cmd` first. `execFile('orca')` without a shell resolves the `.exe`. Never point at the `.cmd` **[Verified]**.
+- On Windows, both `orca.cmd` and `orca.exe` are on PATH and `where` lists the `.cmd` first. `execFile('orca')` without a shell resolves the `.exe`. Never point at the `.cmd` **[Verified]**. From Orca's install folder a bare `orca` finds the app instead: see [Worker process](#worker-process).
 - Every call takes about 0.5 s on Windows, mostly process start-up **[Verified]**.
 - Every `--json` response is wrapped as `{ id, ok: true, result: {...}, _meta: { runtimeId } }`. Errors are `{ ok: false, error: { code, message } }` on stdout, with exit 1 **[Verified]**.
 
@@ -282,7 +296,7 @@ No CLI command or plugin API exposes it; `orca settings` and `orca config` are u
 1. **Data folder** (`%APPDATA%\orca` on Windows **[Verified]**):
    - macOS: `~/Library/Application Support/orca` **[Original]**.
    - Linux: `$XDG_CONFIG_HOME/orca` or `~/.config/orca` **[Original]**.
-   - Orca removes `APPDATA` and `XDG_CONFIG_HOME` from the worker environment **[Original]**; not checked, because that needs a running worker.
+   - Orca removes `APPDATA` from the worker environment on Windows **[Verified]** (see [Worker process](#worker-process)), and `XDG_CONFIG_HOME` on Linux **[Original]**.
    - So the original plugin derives the folder from its own install path, `<data>/plugins/<publisher>.<id>/<64 hex>/...` **[Verified]**. It checks that the plugin folder ends with `.<id>`.
 2. **Active profile:** `activeProfileId` in `orca-profile-index.json` (keys `schemaVersion`, `activeProfileId`, `profiles[]`), with `orca-profile-index.json.bak` as a fallback and `local-default` as the default **[Verified]**. The original only accepts the id if it matches a pattern and is listed in `profiles[]` **[Original]**.
 3. **Settings:** `profiles/<profile>/profile-state.db`, table `profile_state_documents` (`domain`, `payload`, `domain_version`, `revision`, `updated_at`, `content_hash`). `SELECT payload FROM profile_state_documents WHERE domain = 'settings'` gives JSON with `defaultTuiAgent`, `disabledTuiAgents` and `agentDefaultSurface` **[Verified]**.
@@ -335,7 +349,7 @@ On Windows all three tools are `.exe` and on PATH **[Verified]**:
 
 - macOS: `orca` is at `/Applications/Orca.app/Contents/Resources/bin/orca`; `gh` at `/opt/homebrew/bin/gh` or `/usr/local/bin/gh` **[Original]**.
 - `twg` on macOS and Linux: no data **[Assumed]**.
-- Whether the worker inherits the user's PATH on Windows: **[Assumed]**. That is why full paths are tried too.
+- The worker inherits the user's `PATH` on Windows **[Verified]**. Full paths are still tried, for a tool that isn't on it.
 
 ## GitHub CLI
 
