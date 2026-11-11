@@ -14,23 +14,25 @@ export type RunCli = (tool: Tool, args: string[], options?: RunOptions) => Promi
 /** A failure whose message is ready for the panel. */
 export class CliError extends Error {}
 
-/** Starts one process. It rejects as Node's `execFile` does: `code` is `'ENOENT'` when the
- *  executable doesn't exist, the exit code when it failed, and `killed` is true on a timeout. */
+/** Starts one process in `cwd` with `env`. It rejects as Node's `execFile` does: `code` is
+ *  `'ENOENT'` when the executable doesn't exist, the exit code when it failed, and `killed` is
+ *  true on a timeout. */
 export type Exec = (
   file: string,
   args: string[],
-  options: { timeoutMs: number; signal?: AbortSignal }
+  options: { timeoutMs: number; signal?: AbortSignal } & ChildProcessSetup
 ) => Promise<{ stdout: string; stderr: string }>
 
 /** 20 s for Orca queries, 45 s for trackers. Callers pass longer ones, such as `worktree create`. */
 const DEFAULT_TIMEOUT_MS: Record<Tool, number> = { orca: 20_000, gh: 45_000, twg: 45_000 }
 
 export function createRunCli(environment: CliEnvironment, exec: Exec): RunCli {
+  const setup = childProcessSetup(environment)
   return async (tool, args, options = {}) => {
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS[tool]
     for (const file of cliCandidates(tool, environment)) {
       try {
-        const { stdout } = await exec(file, args, { timeoutMs, signal: options.signal })
+        const { stdout } = await exec(file, args, { timeoutMs, signal: options.signal, ...setup })
         return stdout
       } catch (error) {
         const failure = describeExecError(error)
@@ -56,12 +58,12 @@ function describeExecError(error: unknown): CliFailure | null {
 }
 
 /** Node's `execFile`, without a shell, with no console window on Windows and room for big output. */
-export const nodeExec: Exec = (file, args, { timeoutMs, signal }) =>
+export const nodeExec: Exec = (file, args, { timeoutMs, signal, cwd, env }) =>
   new Promise((resolve, reject) => {
     execFile(
       file,
       args,
-      { timeout: timeoutMs, signal, windowsHide: true, maxBuffer: 64 * 1024 * 1024, encoding: 'utf8' },
+      { cwd, env, timeout: timeoutMs, signal, windowsHide: true, maxBuffer: 64 * 1024 * 1024, encoding: 'utf8' },
       (error, stdout, stderr) => {
         if (error) reject(Object.assign(error, { stdout, stderr }))
         else resolve({ stdout, stderr })
@@ -79,6 +81,28 @@ export type CliEnvironment = {
   env: Record<string, string | undefined>
   /** The user's home folder. */
   home: string
+}
+
+export type ChildProcessSetup = { cwd: string; env: Record<string, string | undefined> }
+
+/** Where the tools run and with which variables.
+ *
+ *  - `cwd` is the home folder. The worker runs in Orca's install folder, and on Windows a bare
+ *    `orca` is looked up in the current folder first, which finds the Orca app (`Orca.exe`), not
+ *    its CLI.
+ *  - On Windows Orca starts the worker without `APPDATA` and `LOCALAPPDATA`. The Orca CLI needs
+ *    `APPDATA` to find the running Orca, and `gh` needs it to find its login, so both get their
+ *    default values back. A variable that is already set is kept. */
+export function childProcessSetup({ platform, env, home }: CliEnvironment): ChildProcessSetup {
+  if (platform !== 'win32') return { cwd: home, env }
+  return {
+    cwd: home,
+    env: {
+      ...env,
+      APPDATA: env.APPDATA || `${home}\\AppData\\Roaming`,
+      LOCALAPPDATA: env.LOCALAPPDATA || `${home}\\AppData\\Local`
+    }
+  }
 }
 
 const OVERRIDE_VARIABLE: Record<Tool, string> = {
@@ -127,7 +151,7 @@ const NOT_FOUND: Record<Tool, string> = {
 export function cliFailureMessage(tool: Tool, failure: CliFailure): string {
   if (failure.kind === 'not-found') return NOT_FOUND[tool]
   if (failure.kind === 'timeout') return `${tool} didn't answer in time.`
-  const reason = jsonErrorMessage(failure.stdout) ?? firstLine(failure.stderr)
+  const reason = jsonErrorMessage(failure.stdout) ?? stderrReason(failure.stderr)
   if (reason) return cleanMessage(`${tool} failed: ${reason}`)
   return `${tool} failed with exit code ${failure.exitCode ?? 'unknown'}.`
 }
@@ -153,6 +177,15 @@ export function cleanMessage(text: string): string {
   return clean.length > MAX_MESSAGE ? `${clean.slice(0, MAX_MESSAGE - 1)}…` : clean
 }
 
-function firstLine(text: string): string | null {
-  return text.split(/\r?\n/).map((line) => line.trim()).find((line) => line !== '') ?? null
+/** A line such as `Error: Cannot find module ...` or `TypeError [ERR_X]: ...`. */
+const ERROR_LINE = /^[A-Za-z]*Error( \[[A-Z0-9_]+\])?: \S/
+/** Lines of a Node.js crash that only say where it happened: `node:internal/...:1575`,
+ *  `throw err;`, the `^` marker and `at ...` stack frames. */
+const STACK_LINE = /^(\S+:\d+(:\d+)?|throw\b.*|\^+|at\s.*)$/
+
+/** The stderr line that says what went wrong: the first error line if there is one, otherwise the
+ *  first line that isn't a stack location, otherwise the first non-empty line. */
+export function stderrReason(stderr: string): string | null {
+  const lines = stderr.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== '')
+  return lines.find((line) => ERROR_LINE.test(line)) ?? lines.find((line) => !STACK_LINE.test(line)) ?? lines[0] ?? null
 }

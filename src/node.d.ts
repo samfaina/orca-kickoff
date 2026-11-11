@@ -6,6 +6,8 @@ declare module 'node:child_process' {
     file: string,
     args: readonly string[],
     options: {
+      cwd?: string
+      env?: Record<string, string | undefined>
       timeout?: number
       signal?: AbortSignal
       windowsHide?: boolean
