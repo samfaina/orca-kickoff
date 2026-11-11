@@ -108,18 +108,23 @@ export function projectProvider(settings: ProjectSettings, project: ProjectRef):
   return settings.provider ?? (project.repo !== null ? 'github' : null)
 }
 
-/** Chooses a provider, keeping every provider's configuration. A Jira provider chosen for the
- *  first time copies the JQL of the other one, or starts with DEFAULT_JQL. */
+/** A provider's stored configuration, or its defaults when none is stored. A Jira provider's
+ *  default JQL is the other Jira provider's, or DEFAULT_JQL. */
+export function providerConfig<K extends ProviderId>(settings: ProjectSettings, id: K): Required<ProviderConfigs>[K] {
+  const { providers } = settings
+  const defaults: Required<ProviderConfigs> = {
+    github: {},
+    'jira-orca': { jql: providers['jira-twg']?.jql ?? DEFAULT_JQL, siteId: '' },
+    'jira-twg': { jql: providers['jira-orca']?.jql ?? DEFAULT_JQL, site: '', profile: '' }
+  }
+  const configs: Required<ProviderConfigs> = { ...defaults, ...providers }
+  return configs[id]
+}
+
+/** Chooses a provider, keeping every provider's configuration and filling in the chosen one's
+ *  defaults the first time. */
 export function chooseProvider(settings: ProjectSettings, provider: ProviderId): ProjectSettings {
-  const providers = { ...settings.providers }
-  if (provider === 'github') providers.github ??= {}
-  if (provider === 'jira-orca' && !providers['jira-orca']) {
-    providers['jira-orca'] = { jql: providers['jira-twg']?.jql ?? DEFAULT_JQL, siteId: '' }
-  }
-  if (provider === 'jira-twg' && !providers['jira-twg']) {
-    providers['jira-twg'] = { jql: providers['jira-orca']?.jql ?? DEFAULT_JQL, site: '', profile: '' }
-  }
-  return { ...settings, provider, providers }
+  return { ...settings, provider, providers: { ...settings.providers, [provider]: providerConfig(settings, provider) } }
 }
 
 export type TaskWorktree = { worktreeId: string; name: string; agent: string | null }

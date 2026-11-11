@@ -86,6 +86,19 @@ test('with gh missing, the list is an error that says how to fix it, and keeps t
   })
 })
 
+test("with gh logged out, the list is an error with gh's own words on how to log in", async () => {
+  const loggedOut = Object.assign(new Error('Command failed'), {
+    code: 4,
+    stdout: '',
+    stderr: 'To get started with GitHub CLI, please run:  gh auth login\nAlternatively, populate the GH_TOKEN environment variable with a GitHub API authentication token.\n'
+  })
+  const failure = new CliError(cliFailureMessage('gh', { kind: 'failed', exitCode: 4, stdout: loggedOut.stdout, stderr: loggedOut.stderr }))
+  const { worker } = await start({ ...ORCA_OK, 'gh issue list': failure })
+  const list = await worker.request('tasks.load', {})
+  assert.ok(list.kind === 'error')
+  assert.equal(list.message, 'gh failed: To get started with GitHub CLI, please run:  gh auth login')
+})
+
 test('with no active worktree there is no project', async () => {
   const { worker } = await start({ ...ORCA_OK, 'orca worktree ps': wrap({ worktrees: [{ worktreeId: 'r1::/src/web', isActive: false, agents: [] }] }) })
   assert.deepEqual(await worker.request('tasks.load', {}), { kind: 'no-project' })

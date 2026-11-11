@@ -1,12 +1,12 @@
 // GitHub Issues through `gh`. gh has no cursor for this list, so a page is the first 100 issues.
-import { CliError } from '../cli'
-import { isRecord } from '../json'
+import { CliError, unreadableOutput } from '../cli'
+import { isRecord, parseJson, text } from '../json'
 import type { ProviderConfigs, Task } from '../protocol'
 import type { Provider } from './types'
 
 const LIMIT = 100
 
-export const github: Provider<NonNullable<ProviderConfigs['github']>> = {
+export const github: Provider<Required<ProviderConfigs>['github']> = {
   id: 'github',
   tracker: 'github',
   label: 'GitHub',
@@ -21,20 +21,15 @@ export const github: Provider<NonNullable<ProviderConfigs['github']>> = {
       '--limit', String(LIMIT),
       '--json', 'number,title,url,body,labels,assignees'
     ])
-    const tasks = parseIssues(stdout)
-    return { tasks, nextCursor: null, truncated: tasks.length >= LIMIT }
+    const issues = parseJson(stdout)
+    if (!Array.isArray(issues)) throw unreadableOutput('gh')
+    // Counted before dropping unusable issues: 100 from gh means there may be more.
+    return { tasks: toTasks(issues), nextCursor: null, truncated: issues.length >= LIMIT }
   }
 }
 
-function parseIssues(stdout: string): Task[] {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(stdout)
-  } catch {
-    parsed = undefined
-  }
-  if (!Array.isArray(parsed)) throw new CliError("gh returned output Kickoff couldn't read. Update gh and try again.")
-  return parsed.flatMap((issue): Task[] => {
+function toTasks(issues: unknown[]): Task[] {
+  return issues.flatMap((issue): Task[] => {
     if (!isRecord(issue) || typeof issue.number !== 'number') return []
     if (!text(issue.title) || !text(issue.url)) return []
     return [
@@ -51,10 +46,6 @@ function parseIssues(stdout: string): Task[] {
       }
     ]
   })
-}
-
-function text(value: unknown): string {
-  return typeof value === 'string' ? value : ''
 }
 
 function names(list: unknown, field: string): string[] {

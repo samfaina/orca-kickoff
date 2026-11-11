@@ -73,6 +73,13 @@ test('100 issues mean the list is truncated', async () => {
   assert.equal(page.truncated, true)
 })
 
+test('100 issues from gh mean the list is truncated even when some are dropped', async () => {
+  const issues = Array.from({ length: 100 }, (_, index) => issue(index + 1, index === 0 ? { title: '' } : {}))
+  const page = await github.list(answering(JSON.stringify(issues)).run, web, {})
+  assert.equal(page.tasks.length, 99)
+  assert.equal(page.truncated, true)
+})
+
 test('a GitHub Enterprise repository is passed as host/owner/name', async () => {
   const { run, calls } = answering('[]')
   await github.list(run, { id: 'github:github.acme.example/platform/billing', name: 'billing', repo: 'github.acme.example/platform/billing' }, {})
