@@ -1,0 +1,29 @@
+{
+  "manifestVersion": 2,
+  "id": "kickoff",
+  "name": "Kickoff",
+  "version": "0.1.0",
+  "description": "Lists open tasks from Jira or GitHub and starts each one in its own linked worktree, with an agent and per-project prompt templates.",
+  "license": "MIT",
+  "engines": {
+    "orca": ">=1.4.255"
+  },
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "src/worker.ts",
+  "capabilities": [
+    { "kind": "storage:own" },
+    { "kind": "workspace:read" }
+  ],
+  "contributes": {
+    "panels": [
+      {
+        "id": "tasks",
+        "title": "Kickoff",
+        "icon": "rocket",
+        "entry": "src/panel.tsx",
+        "ui": "components"
+      }
+    ]
+  }
+}
