@@ -169,6 +169,9 @@ Icons seen: `rocket`, `play`, `refresh`, `branch`, `close`, `check`.
   - `TestPanel` has `find`, `findAll`, `press`, `type`, `toggle`, `select`, `emit`, `post`, `errors`, `refusals`, `persisted` and more.
   - `TestWorker` has `request`, `emit`, `hooks.fire`, `logs`, `posts` and `deactivate`.
 - On Windows, `orca plugin test` and `orca plugin check` fail when the plugin folder is on a different drive from Orca's install (for example the plugin on `I:` and Orca under `C:\Users\...`). Every test file fails with `orca-testing.mjs: cannot import "./orca-runtime.mjs": no such file in the plugin`, and `check` reports the same error as a panel issue while still exiting 0. The scaffolded `worker-panel` template fails the same way on `I:` and passes on `C:`. A directory junction on `C:` does not help, because Orca resolves the real path. Workaround: copy `orca-plugin.json`, `tsconfig.json`, `src/` and `.orca/` to a folder on Orca's drive and run the commands there. `orca plugin validate` is not affected **[Verified]** with Orca 1.4.255.
+- `mount` and every act (`press`, `emit`, `settled`, ...) wait for the panel's pending `plugin.request` calls. A request that never resolves leaves the test pending until Node cancels it ("Promise resolution is still pending but the event loop has already resolved"). To see a loading state, mount the component alone (`mount(panel.default)`, which skips `setup`), or look from inside a request handler after a timer tick **[Verified]**.
+- `orca plugin check` runs the real worker on this machine, so the rendered panel uses the real `orca` and `gh` and shows real data. Its output is not safe to paste anywhere public **[Verified]**.
+- A trusted worker can `import { execFile } from 'node:child_process'`. With no `@types/node`, `src/node.d.ts` declares the few Node APIs used, for `tsc` only **[Verified]**.
 - `src/panel.check.ts` exports `defineCheck({ scenario: { storage, events, requests } })`, which `orca plugin check` and `orca plugin shot --scenario` render **[Original]**.
 
 Dev commands **[Verified]**: `orca plugin validate .`, `test .`, `check .`, `dev watch .`, `inspect`, `dev request`, `dev emit`, `shot --scenario`.
@@ -347,6 +350,7 @@ On Windows all three tools are `.exe` and on PATH **[Verified]**:
 ```
 
 - `--limit` defaults to 30. `--search`, `--assignee` and `--label` also exist.
+- Logged out (no stored login, no `GH_TOKEN`): exit 4, empty stdout, and stderr starting `To get started with GitHub CLI, please run:  gh auth login`, then a line about `GH_TOKEN` **[Verified]**.
 - For GitHub Enterprise, `--repo` takes `<host>/<owner>/<repo>` **[Assumed]**; it is the documented `gh` form, but not run here.
 
 ## Teamwork Graph CLI (twg)

@@ -1,7 +1,7 @@
-// The panel <-> worker contract and the data model from the spec. src/panel.tsx and
-// src/worker.ts both read it. Expected failures are data (`kind: 'error'`, `ok: false`):
-// no request throws for them.
-export {}
+// The panel <-> worker contract, the data model from the spec and the settings reader.
+// src/panel.tsx and src/worker.ts both read it, so it imports nothing from Node. Expected failures
+// are data (`kind: 'error'`, `ok: false`): no request throws for them.
+import { isRecord } from './json'
 
 export type TrackerId = 'github' | 'jira'
 export type ProviderId = 'github' | 'jira-orca' | 'jira-twg'
@@ -29,6 +29,97 @@ export type ProjectRef = {
   name: string
   /** "owner/name", or "host/owner/name" on GitHub Enterprise; null without providerIdentity. */
   repo: string | null
+}
+
+/** Each provider's configuration, kept separately so switching provider and back loses nothing. */
+export type ProviderConfigs = {
+  github?: {}
+  /** siteId '' = Orca's default site. */
+  'jira-orca'?: { jql: string; siteId: string }
+  /** '' = twg's default. */
+  'jira-twg'?: { jql: string; site: string; profile: string }
+}
+
+/** 'orca-default', 'none', or any other string as an Orca agent id. */
+export type AgentChoice = string
+
+export type ProjectSettings = {
+  /** undefined: GitHub when the project has a repo, else none. */
+  provider?: ProviderId
+  providers: ProviderConfigs
+  /** undefined: DEFAULT_TEMPLATE; '': the prompt is the task URL. */
+  template?: string
+  /** undefined: 'orca-default'. */
+  agent?: AgentChoice
+}
+
+export type Settings = { version: 1; projects: Record<string, ProjectSettings> }
+
+/** Where the settings live in the plugin's storage. */
+export const SETTINGS_KEY = 'settings'
+
+export const DEFAULT_JQL = 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC'
+
+const PROVIDER_IDS: readonly ProviderId[] = ['github', 'jira-orca', 'jira-twg']
+
+/** Settings as read from storage. Anything of an unexpected shape (empty, an old version,
+ *  corrupt data) falls back to the defaults instead of failing. */
+export function readSettings(raw: unknown): Settings {
+  const settings: Settings = { version: 1, projects: {} }
+  if (!isRecord(raw) || raw.version !== 1 || !isRecord(raw.projects)) return settings
+  for (const [id, project] of Object.entries(raw.projects)) {
+    if (isRecord(project)) settings.projects[id] = readProjectSettings(project)
+  }
+  return settings
+}
+
+function readProjectSettings(raw: Record<string, unknown>): ProjectSettings {
+  const project: ProjectSettings = { providers: readProviderConfigs(raw.providers) }
+  if (PROVIDER_IDS.includes(raw.provider as ProviderId)) project.provider = raw.provider as ProviderId
+  if (typeof raw.template === 'string') project.template = raw.template
+  if (typeof raw.agent === 'string' && raw.agent !== '') project.agent = raw.agent
+  return project
+}
+
+function readProviderConfigs(raw: unknown): ProviderConfigs {
+  const configs: ProviderConfigs = {}
+  if (!isRecord(raw)) return configs
+  if (isRecord(raw.github)) configs.github = {}
+  const orca = raw['jira-orca']
+  if (isRecord(orca) && strings(orca, 'jql', 'siteId')) configs['jira-orca'] = { jql: orca.jql, siteId: orca.siteId }
+  const twg = raw['jira-twg']
+  if (isRecord(twg) && strings(twg, 'jql', 'site', 'profile')) {
+    configs['jira-twg'] = { jql: twg.jql, site: twg.site, profile: twg.profile }
+  }
+  return configs
+}
+
+function strings<K extends string>(record: Record<string, unknown>, ...keys: K[]): record is Record<K, string> {
+  return keys.every((key) => typeof record[key] === 'string')
+}
+
+/** A project's settings, or empty ones when it has none. */
+export function projectSettings(settings: Settings, projectId: string): ProjectSettings {
+  return settings.projects[projectId] ?? { providers: {} }
+}
+
+/** The provider a project reads tasks with: the chosen one, else GitHub when it has a repo. */
+export function projectProvider(settings: ProjectSettings, project: ProjectRef): ProviderId | null {
+  return settings.provider ?? (project.repo !== null ? 'github' : null)
+}
+
+/** Chooses a provider, keeping every provider's configuration. A Jira provider chosen for the
+ *  first time copies the JQL of the other one, or starts with DEFAULT_JQL. */
+export function chooseProvider(settings: ProjectSettings, provider: ProviderId): ProjectSettings {
+  const providers = { ...settings.providers }
+  if (provider === 'github') providers.github ??= {}
+  if (provider === 'jira-orca' && !providers['jira-orca']) {
+    providers['jira-orca'] = { jql: providers['jira-twg']?.jql ?? DEFAULT_JQL, siteId: '' }
+  }
+  if (provider === 'jira-twg' && !providers['jira-twg']) {
+    providers['jira-twg'] = { jql: providers['jira-orca']?.jql ?? DEFAULT_JQL, site: '', profile: '' }
+  }
+  return { ...settings, provider, providers }
 }
 
 export type TaskWorktree = { worktreeId: string; name: string; agent: string | null }
