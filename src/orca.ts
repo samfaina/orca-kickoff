@@ -1,7 +1,7 @@
 // Reading the Orca CLI's answers: projects, worktrees and which worktree is active. Pure functions
 // over the `--json` stdout; the worker runs the commands.
-import { CliError, cleanMessage, jsonErrorMessage } from './cli'
-import { isRecord } from './json'
+import { CliError, cleanMessage, jsonErrorMessage, unreadableOutput } from './cli'
+import { isRecord, parseJson } from './json'
 import type { ProjectRef } from './protocol'
 
 export const PROJECT_LIST_ARGS = ['project', 'list', '--json']
@@ -62,13 +62,9 @@ export function findActiveProject(
 function orcaResult(stdout: string): unknown {
   const error = jsonErrorMessage(stdout)
   if (error) throw new CliError(cleanMessage(`orca failed: ${error}`))
-  try {
-    const parsed: unknown = JSON.parse(stdout)
-    if (isRecord(parsed) && parsed.ok === true && 'result' in parsed) return parsed.result
-  } catch {
-    // Reported below.
-  }
-  throw new CliError("orca returned output Kickoff couldn't read. Update Orca and try again.")
+  const parsed = parseJson(stdout)
+  if (isRecord(parsed) && parsed.ok === true && 'result' in parsed) return parsed.result
+  throw unreadableOutput('orca')
 }
 
 function listOf(result: unknown, key: string): unknown[] {

@@ -2,7 +2,7 @@
 // writing error messages are pure functions; `nodeExec` is the only part that starts processes.
 import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
-import { isRecord } from './json'
+import { isRecord, parseJson, text } from './json'
 
 export type Tool = 'orca' | 'gh' | 'twg'
 
@@ -46,7 +46,6 @@ function describeExecError(error: unknown): CliFailure | null {
   const fields = isRecord(error) ? error : {}
   if (fields.code === 'ENOENT') return null
   if (fields.killed === true) return { kind: 'timeout' }
-  const text = (value: unknown) => (typeof value === 'string' ? value : '')
   const stderr = text(fields.stderr) || (typeof fields.code === 'string' && error instanceof Error ? error.message : '')
   return {
     kind: 'failed',
@@ -135,14 +134,14 @@ export function cliFailureMessage(tool: Tool, failure: CliFailure): string {
 
 /** `error.message` of a `{ ok: false, error }` answer on stdout, as `orca` and `twg` print. */
 export function jsonErrorMessage(stdout: string): string | null {
-  try {
-    const parsed: unknown = JSON.parse(stdout)
-    if (!isRecord(parsed) || parsed.ok !== false || !isRecord(parsed.error)) return null
-    const message = parsed.error.message
-    return typeof message === 'string' && message.trim() ? message.trim() : null
-  } catch {
-    return null
-  }
+  const parsed = parseJson(stdout)
+  if (!isRecord(parsed) || parsed.ok !== false || !isRecord(parsed.error)) return null
+  return text(parsed.error.message).trim() || null
+}
+
+/** For a tool that answered with output of a shape Kickoff doesn't know. */
+export function unreadableOutput(tool: Tool): CliError {
+  return new CliError(`${tool} returned output Kickoff couldn't read. Update ${tool} and try again.`)
 }
 
 const MAX_MESSAGE = 300
