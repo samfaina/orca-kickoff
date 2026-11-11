@@ -33,7 +33,7 @@ Update this file when a fact is confirmed or disproved. All example data is inve
   "main": "src/worker.ts",
   "capabilities": [{ "kind": "storage:own" }, { "kind": "workspace:read" }],
   "contributes": {
-    "panels": [{ "id": "tasks", "title": "Kickoff", "icon": "rocket", "entry": "src/panel.tsx", "ui": "components" }]
+    "panels": [{ "id": "tasks", "title": "Kickoff", "icon": "zap", "entry": "src/panel.tsx", "ui": "components" }]
   }
 }
 ```
