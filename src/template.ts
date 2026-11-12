@@ -31,7 +31,7 @@ export type PromptResult = { ok: true; prompt: string } | { ok: false; message: 
  *  URL. A prompt over MAX_PROMPT characters is refused. */
 export function buildPrompt(template: string | undefined, task: Task, project: ProjectRef, branch: string): PromptResult {
   const source = template ?? DEFAULT_TEMPLATE
-  const prompt = source.trim() === '' ? task.url : fillTemplate(source, templateVariables(task, project, branch))
+  const prompt = source === '' ? task.url : fillTemplate(source, templateVariables(task, project, branch))
   if (prompt.length > MAX_PROMPT) {
     return {
       ok: false,

@@ -19,9 +19,14 @@ export function titleWords(text: string): string {
 /** `<prefix>-<up to four words of the title>`: `issue-42-add-dark-mode` on GitHub,
  *  `web-12-anadir-modo-oscuro-a` on Jira. */
 export function worktreeName(task: Pick<Task, 'tracker' | 'key' | 'title'>): string {
-  const prefix = task.tracker === 'github' ? `issue-${task.key.replace(/^#/, '')}` : task.key.toLowerCase()
+  const prefix = task.tracker === 'github' ? `issue-${githubIssueNumber(task.key)}` : task.key.toLowerCase()
   const words = titleWords(task.title).split('-').filter((word) => word !== '').slice(0, MAX_TITLE_WORDS)
   return [prefix, ...words].join('-')
+}
+
+/** `42` for the GitHub task key `#42`. */
+export function githubIssueNumber(key: string): string {
+  return key.replace(/^#/, '')
 }
 
 const GITHUB_NAME = /^issue-(\d+)(?:-|$)/
