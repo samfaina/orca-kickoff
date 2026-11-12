@@ -11,8 +11,16 @@ export type RunOptions = { timeoutMs?: number; signal?: AbortSignal }
 /** Runs a tool and resolves with its stdout, or rejects with a `CliError` the panel can show. */
 export type RunCli = (tool: Tool, args: string[], options?: RunOptions) => Promise<string>
 
-/** A failure whose message is ready for the panel. */
-export class CliError extends Error {}
+/** A failure whose message is ready for the panel. `timedOut` is true when the tool didn't answer
+ *  in time, so it may still be doing what it was asked. */
+export class CliError extends Error {
+  readonly timedOut: boolean
+
+  constructor(message: string, timedOut = false) {
+    super(message)
+    this.timedOut = timedOut
+  }
+}
 
 /** Starts one process in `cwd` with `env`. It rejects as Node's `execFile` does: `code` is
  *  `'ENOENT'` when the executable doesn't exist, the exit code when it failed, and `killed` is
@@ -36,7 +44,7 @@ export function createRunCli(environment: CliEnvironment, exec: Exec): RunCli {
         return stdout
       } catch (error) {
         const failure = describeExecError(error)
-        if (failure) throw new CliError(cliFailureMessage(tool, failure))
+        if (failure) throw new CliError(cliFailureMessage(tool, failure), failure.kind === 'timeout')
       }
     }
     throw new CliError(cliFailureMessage(tool, { kind: 'not-found' }))

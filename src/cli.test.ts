@@ -229,5 +229,10 @@ test('run reports a timeout when the process is killed', async () => {
     }
   })
   const run = createRunCli(mac, exec)
-  await assert.rejects(run('orca', ['project', 'list']), (error) => error instanceof CliError && error.message === "orca didn't answer in time.")
+  await assert.rejects(run('orca', ['project', 'list']), (error) => error instanceof CliError && error.message === "orca didn't answer in time." && error.timedOut)
+})
+
+test('a run that fails for another reason is not a timeout', async () => {
+  const run = createRunCli(mac, fakeExec({}).exec)
+  await assert.rejects(run('twg', []), (error) => error instanceof CliError && !error.timedOut)
 })
