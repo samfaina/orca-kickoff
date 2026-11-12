@@ -2,7 +2,7 @@
 // over the `--json` stdout; the worker runs the commands.
 import { CliError, cleanMessage, jsonErrorMessage, unreadableOutput } from './cli'
 import { isRecord, parseJson } from './json'
-import { taskKeyFromWorktreeName } from './naming'
+import { githubIssueNumber, taskKeyFromWorktreeName } from './naming'
 import type { ProjectRef, Task, TaskWorktree, TrackerId } from './protocol'
 
 export const PROJECT_LIST_ARGS = ['project', 'list', '--json']
@@ -136,7 +136,7 @@ export type WorktreeCreate = {
  *  on Jira (the full URL, so Orca needs no Jira connection to resolve it). */
 export function worktreeCreateArgs({ projectId, name, task, agent, prompt }: WorktreeCreate): string[] {
   const args = ['worktree', 'create', '--project', projectId, '--name', name, '--no-parent', '--json']
-  if (task.tracker === 'github') args.push('--issue', task.key.replace(/^#/, ''))
+  if (task.tracker === 'github') args.push('--issue', githubIssueNumber(task.key))
   else args.push('--reference', task.url)
   if (agent !== null) args.push('--agent', agent, '--prompt', prompt)
   return args

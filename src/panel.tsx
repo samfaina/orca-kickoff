@@ -88,7 +88,7 @@ async function flushOptions(): Promise<void> {
   await storage.set(SETTINGS_KEY, withStartOptions(settings, toSave.projectId, toSave.changes) as unknown as JsonValue)
 }
 
-function changeOptions(changes: StartOptionChanges & { agent?: string; template?: string }): void {
+function changeOptions(changes: StartOptionChanges): void {
   const current = read(options)
   if (!current) return
   set(options, { ...current, ...changes })

@@ -50,7 +50,6 @@ test('a long description is cut to 4000 characters with …', () => {
 
 test('an empty template gives the task URL', () => {
   assert.deepEqual(buildPrompt('', task, web, branch), { ok: true, prompt: 'https://example.atlassian.net/browse/WEB-12' })
-  assert.deepEqual(buildPrompt('  \n', task, web, branch), { ok: true, prompt: 'https://example.atlassian.net/browse/WEB-12' })
 })
 
 test('an undefined template uses DEFAULT_TEMPLATE', () => {

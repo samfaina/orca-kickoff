@@ -141,7 +141,7 @@ export function withStartOptions(settings: Settings, projectId: string, changes:
   return { ...settings, projects: { ...settings.projects, [projectId]: project } }
 }
 
-export type TaskWorktree ={ worktreeId: string; name: string; agent: string | null }
+export type TaskWorktree = { worktreeId: string; name: string; agent: string | null }
 
 export type TaskList =
   /** No worktree selected in Orca. */
