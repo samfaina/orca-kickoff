@@ -6,7 +6,7 @@ Read by the `ship-tickets` skill (samfaina/agent-skills).
 - **Merge method:** `merge`
 - **Merge approval:** `auto`
 - **Branch naming:** `issue-<n>-` followed by two or three key words of the issue title in kebab-case: #3 "List GitHub issues end to end with zero config" becomes `issue-3-github-issues-list`. Orca prepends its configured branch prefix, if one is set, to the branch name.
-- **After merge:** delete the remote branch with `git push origin --delete <branch>`.
+- **After merge:** nothing.
 - **CI:** `none`
 - **Workers:** `claude` (all roles)
 
