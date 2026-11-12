@@ -298,9 +298,12 @@ No CLI command or plugin API exposes it; `orca settings` and `orca config` are u
    - Linux: `$XDG_CONFIG_HOME/orca` or `~/.config/orca` **[Original]**.
    - Orca removes `APPDATA` from the worker environment on Windows **[Verified]** (see [Worker process](#worker-process)), and `XDG_CONFIG_HOME` on Linux **[Original]**.
    - So the original plugin derives the folder from its own install path, `<data>/plugins/<publisher>.<id>/<64 hex>/...` **[Verified]**. It checks that the plugin folder ends with `.<id>`.
+   - Each installed plugin folder holds the `<64 hex>` content folder (the `contentHash` in `plugins/plugins.lock.json`), a `current` file (not a link) and `.install-provenance` **[Verified]**. That the worker's `import.meta.url` points inside the content folder is **[Original]**; Kickoff falls back to the platform's default folder otherwise (`src/agent.ts`).
 2. **Active profile:** `activeProfileId` in `orca-profile-index.json` (keys `schemaVersion`, `activeProfileId`, `profiles[]`), with `orca-profile-index.json.bak` as a fallback and `local-default` as the default **[Verified]**. The original only accepts the id if it matches a pattern and is listed in `profiles[]` **[Original]**.
 3. **Settings:** `profiles/<profile>/profile-state.db`, table `profile_state_documents` (`domain`, `payload`, `domain_version`, `revision`, `updated_at`, `content_hash`). `SELECT payload FROM profile_state_documents WHERE domain = 'settings'` gives JSON with `defaultTuiAgent`, `disabledTuiAgents` and `agentDefaultSurface` **[Verified]**.
-   - A `profile_state_document_parts` table also exists, so large documents may be split **[Assumed]**.
+   - Read with Node's built-in `node:sqlite` (`DatabaseSync`, `readOnly: true`): the Node inside Orca 1.4.255 is v24.22.1 and has it **[Verified]**.
+   - `disabledTuiAgents` is an array of agent ids, and can be long **[Verified]**.
+   - A `profile_state_document_parts` table also exists, so large documents may be split **[Assumed]**. A payload that isn't valid JSON is treated as unreadable, and Kickoff tries `orca-data.json` next.
    - The older `profiles/<profile>/orca-data.json` still holds `settings.defaultTuiAgent` **[Verified]**.
 4. **Orca's own rule** (`pickTuiAgent`) **[Verified]**:
    - `blank` means no agent.

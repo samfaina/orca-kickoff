@@ -108,6 +108,11 @@ export function projectProvider(settings: ProjectSettings, project: ProjectRef):
   return settings.provider ?? (project.repo !== null ? 'github' : null)
 }
 
+/** The tracker a provider reads. */
+export function trackerOf(provider: ProviderId): TrackerId {
+  return provider === 'github' ? 'github' : 'jira'
+}
+
 /** A provider's stored configuration, or its defaults when none is stored. A Jira provider's
  *  default JQL is the other Jira provider's, or DEFAULT_JQL. */
 export function providerConfig<K extends ProviderId>(settings: ProjectSettings, id: K): Required<ProviderConfigs>[K] {
@@ -127,7 +132,16 @@ export function chooseProvider(settings: ProjectSettings, provider: ProviderId):
   return { ...settings, provider, providers: { ...settings.providers, [provider]: providerConfig(settings, provider) } }
 }
 
-export type TaskWorktree = { worktreeId: string; name: string; agent: string | null }
+/** What Start options change in a project's settings. */
+export type StartOptionChanges = Partial<Pick<ProjectSettings, 'agent' | 'template'>>
+
+/** `settings` with a project's agent choice or template changed, and everything else kept. */
+export function withStartOptions(settings: Settings, projectId: string, changes: StartOptionChanges): Settings {
+  const project = { ...projectSettings(settings, projectId), ...changes }
+  return { ...settings, projects: { ...settings.projects, [projectId]: project } }
+}
+
+export type TaskWorktree ={ worktreeId: string; name: string; agent: string | null }
 
 export type TaskList =
   /** No worktree selected in Orca. */

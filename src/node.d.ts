@@ -22,6 +22,14 @@ declare module 'node:os' {
   export function homedir(): string
 }
 
+declare module 'node:fs/promises' {
+  export function readFile(path: string, encoding: 'utf8'): Promise<string>
+}
+
+declare module 'node:url' {
+  export function fileURLToPath(url: string): string
+}
+
 declare const process: {
   readonly platform: string
   readonly env: Record<string, string | undefined>

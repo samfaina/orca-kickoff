@@ -1,6 +1,8 @@
-import { assert, hostError, mockHost, mount, test, type TestPanel } from 'orca/testing'
+import { assert, hostError, mockHost, mount, test, type MockHost, type MockRequests, type TestPanel } from 'orca/testing'
+import type { JsonValue } from 'orca'
 import type { Task, TaskList } from './protocol'
 import * as panel from './panel'
+import { DEFAULT_TEMPLATE } from './template'
 
 const web = { id: 'github:acme/web', name: 'web', repo: 'acme/web' }
 
@@ -173,5 +175,164 @@ test('a response that arrives after a newer request is dropped', async () => {
   assert.equal(calls, 3)
   assert.ok(view.find({ type: 'Link', text: '#3' }))
   assert.equal(view.find({ type: 'Link', text: '#20' }), null)
+  await view.unmount()
+})
+
+/** The panel with these worker answers and stored values, and its host. */
+async function showWith(requests: MockRequests, storage: Record<string, JsonValue> = {}) {
+  const host = mockHost({ capabilities: ['storage:own', 'workspace:read'], requests, storage })
+  return { view: await mount(panel, { host }), host }
+}
+
+const started = { worktreeId: 'r1::/src/web-42', name: 'issue-42-add-dark-mode', agent: 'claude' }
+
+const storedProject = (host: MockHost) => {
+  const settings = host.data().storage.settings as { projects: Record<string, unknown> } | undefined
+  return settings?.projects['github:acme/web']
+}
+
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+test('Start options show the agent choice and the template with its variables', async () => {
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) })
+  assert.equal(view.valueOf({ type: 'Select', label: 'Agent' }), 'orca-default')
+  assert.equal(view.valueOf({ type: 'Textarea', label: 'Prompt template' }), DEFAULT_TEMPLATE)
+  assert.ok(view.find({ type: 'Text', text: /\{\{task_description\}\}/ }))
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.warnings, [])
+  await view.unmount()
+})
+
+test("Start options show the project's stored agent and template", async () => {
+  const storage = { settings: { version: 1, projects: { 'github:acme/web': { providers: {}, agent: 'none', template: '' } } } }
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, storage)
+  assert.equal(view.valueOf({ type: 'Select', label: 'Agent' }), 'none')
+  assert.equal(view.valueOf({ type: 'Textarea', label: 'Prompt template' }), '')
+  await view.unmount()
+})
+
+test('template and agent changes save themselves after a pause', async () => {
+  const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) })
+  await view.type({ type: 'Textarea', label: 'Prompt template' }, 'Fix {{task_key}}', { replace: true })
+  await view.select({ type: 'Select', label: 'Agent' }, 'codex')
+  assert.equal(storedProject(host), undefined)
+  await wait(800)
+  assert.deepEqual(storedProject(host), { providers: {}, agent: 'codex', template: 'Fix {{task_key}}' })
+  await view.unmount()
+})
+
+test('a pending change is saved before a Start', async () => {
+  let seen: unknown
+  const { view, host } = await showWith({
+    'tasks.load': ready([task('#42')]),
+    'task.start': () => {
+      seen = storedProject(host)
+      return { ok: true }
+    },
+    'worktrees.load': { kind: 'ready', worktrees: {} }
+  })
+  await view.type({ type: 'Textarea', label: 'Prompt template' }, 'Go {{task_url}}', { replace: true })
+  await view.press({ testId: 'start:#42' })
+  assert.deepEqual(seen, { providers: {}, template: 'Go {{task_url}}' })
+  await view.unmount()
+})
+
+test('Start starts the task, then shows its worktree and agent, keeping the loaded tasks', async () => {
+  const starts: unknown[] = []
+  let loads = 0
+  const { view } = await showWith({
+    'tasks.load': () => {
+      loads++
+      return ready([task('#42'), task('#7')])
+    },
+    'task.start': (input) => {
+      starts.push(input)
+      return { ok: true }
+    },
+    'worktrees.load': { kind: 'ready', worktrees: { '#42': started } }
+  })
+  await view.press({ testId: 'start:#42' })
+  assert.deepEqual(starts, [{ projectId: 'github:acme/web', task: task('#42') }])
+  assert.ok(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }))
+  assert.ok(view.find({ type: 'Text', text: /claude/ }))
+  assert.equal(view.find({ testId: 'start:#42' }), null)
+  assert.ok(view.find({ testId: 'start:#7' }))
+  assert.equal(loads, 1)
+  await view.unmount()
+})
+
+test('a started task opens its worktree in Orca from the link', async () => {
+  const opened: unknown[] = []
+  const { view } = await showWith({
+    'tasks.load': ready([task('#42')], { worktrees: { '#42': { ...started, agent: null } } }),
+    'worktree.open': (input) => {
+      opened.push(input)
+      return { ok: true }
+    }
+  })
+  assert.ok(view.find({ type: 'Text', text: /No agent running/ }))
+  await view.press({ type: 'Link', text: 'issue-42-add-dark-mode' })
+  assert.deepEqual(opened, [{ worktreeId: 'r1::/src/web-42' }])
+  await view.unmount()
+})
+
+test('a spinner shows on the card while it starts', async () => {
+  let during: { spinner: boolean; button: boolean } | null = null
+  let view: TestPanel | null = null
+  ;({ view } = await showWith({
+    'tasks.load': ready([task('#42')]),
+    'task.start': async () => {
+      await wait(0)
+      during = {
+        spinner: view?.find({ type: 'Spinner', label: 'Starting #42' }) != null,
+        button: view?.find({ testId: 'start:#42' }) != null
+      }
+      return { ok: true }
+    },
+    'worktrees.load': { kind: 'ready', worktrees: { '#42': started } }
+  }))
+  await view.press({ testId: 'start:#42' })
+  assert.deepEqual(during, { spinner: true, button: false })
+  assert.equal(view.find({ type: 'Spinner', label: 'Starting #42' }), null)
+  await view.unmount()
+})
+
+test('a failed Start shows its error on the card and refreshes the worktrees', async () => {
+  let refreshed = 0
+  const { view } = await showWith({
+    'tasks.load': ready([task('#42'), task('#7')]),
+    'task.start': { ok: false, message: "Couldn't read Orca's default agent — pick one in the panel." },
+    'worktrees.load': () => {
+      refreshed++
+      return { kind: 'ready', worktrees: {} }
+    }
+  })
+  await view.press({ testId: 'start:#42' })
+  assert.equal(refreshed, 1)
+  assert.ok(view.find({ type: 'Text', text: "Couldn't read Orca's default agent — pick one in the panel." }))
+  assert.ok(view.find({ testId: 'start:#42' }))
+  await view.unmount()
+})
+
+test('a Start whose request timed out counts as done when the task now has a worktree', async () => {
+  const { view } = await showWith({
+    'tasks.load': ready([task('#42')]),
+    'task.start': () => {
+      throw hostError('timeout', 'Request timed out')
+    },
+    'worktrees.load': { kind: 'ready', worktrees: { '#42': started } }
+  })
+  await view.press({ testId: 'start:#42' })
+  assert.ok(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }))
+  assert.equal(view.find({ type: 'Text', text: /didn't answer/ }), null)
+  await view.unmount()
+})
+
+test("Start is disabled while Orca's worktrees couldn't be read", async () => {
+  const { view } = await showWith({
+    'tasks.load': ready([task('#42')], { worktrees: null, worktreesError: 'orca failed: Orca is not running.' })
+  })
+  assert.equal(view.find({ testId: 'start:#42' })?.disabled, true)
+  assert.ok(view.find({ type: 'Text', text: /Orca is not running/ }))
   await view.unmount()
 })
