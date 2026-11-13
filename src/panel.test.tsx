@@ -477,3 +477,125 @@ test('after a site list failure or no connected site, reloading the tasks asks f
   assert.equal(asked, 3)
   await view.unmount()
 })
+
+const twgStored = (config: { jql: string; site: string; profile: string }) => ({
+  settings: {
+    version: 1,
+    projects: {
+      'github:acme/web': {
+        provider: 'jira-twg',
+        providers: { 'jira-twg': config, 'jira-orca': { jql: 'project = OLD', siteId: 'site-1' } }
+      }
+    }
+  }
+})
+
+const twgTask = (key: string) => task(key, { tracker: 'jira', url: `https://example.atlassian.net/browse/${key}`, status: 'To Do' })
+const twgReady = (tasks: Task[], fields: Partial<Extract<TaskList, { kind: 'ready' }>> = {}) => ready(tasks, { provider: 'jira-twg', ...fields })
+
+test('choosing Jira (twg) shows its stored JQL, Site and Profile fields, with the twg login hint', async () => {
+  let loads = 0
+  const { view, host } = await showWith(
+    { 'tasks.load': () => (++loads === 1 ? ready([], { provider: 'jira-orca' }) : twgReady([])) },
+    jiraStored('project = WEB', 'site-1')
+  )
+  await openTracker(view)
+  await view.select({ type: 'Select', label: 'Tracker' }, 'jira-twg')
+  assert.equal(loads, 2)
+  assert.equal(view.valueOf({ type: 'Input', label: 'JQL' }), 'project = OLD')
+  assert.equal(view.valueOf({ type: 'Input', label: 'Site' }), '')
+  assert.equal(view.valueOf({ type: 'Input', label: 'Profile' }), 'work')
+  assert.equal(view.find({ type: 'Select', label: 'Site' }), null)
+  assert.ok(view.find({ type: 'Text', text: /twg login/ }))
+  assert.equal((storedProject(host) as { provider: string }).provider, 'jira-twg')
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.warnings, [])
+  await view.unmount()
+})
+
+test("the twg JQL, site and profile save themselves, keeping the other providers' settings, and Enter reloads", async () => {
+  let loads = 0
+  const { view, host } = await showWith({ 'tasks.load': () => (loads++, twgReady([])) }, twgStored({ jql: 'project = WEB', site: '', profile: '' }))
+  await openTracker(view)
+  await view.type({ type: 'Input', label: 'JQL' }, 'project = API', { replace: true })
+  await view.type({ type: 'Input', label: 'Site' }, 'example')
+  await view.type({ type: 'Input', label: 'Profile' }, 'work')
+  await wait(800)
+  assert.deepEqual(storedProject(host), {
+    provider: 'jira-twg',
+    providers: { 'jira-twg': { jql: 'project = API', site: 'example', profile: 'work' }, 'jira-orca': { jql: 'project = OLD', siteId: 'site-1' } }
+  })
+  for (const label of ['JQL', 'Site', 'Profile']) {
+    const before = loads
+    await view.submit({ type: 'Input', label })
+    assert.equal(loads, before + 1)
+  }
+  await view.unmount()
+})
+
+const keysShown = (view: TestPanel, keys: string[]) => keys.filter((key) => view.findAll({ type: 'Link', text: key }).length === 1)
+
+test('"Load more" appends the next page without duplicate keys, and the loaded pages stay in place after a Start', async () => {
+  const cursors: (string | undefined)[] = []
+  const { view } = await showWith(
+    {
+      'tasks.load': ({ cursor }) => {
+        cursors.push(cursor)
+        if (!cursor) return twgReady([twgTask('WEB-1'), twgTask('WEB-2')], { nextCursor: 'cursor-2' })
+        return twgReady([twgTask('WEB-2'), twgTask('WEB-3')], { nextCursor: null })
+      },
+      'task.start': { ok: true },
+      'worktrees.load': { kind: 'ready', worktrees: { 'WEB-3': { worktreeId: 'r1::/src/web-3', name: 'web-3-task-web-3', agent: 'claude' } } }
+    },
+    twgStored({ jql: 'project = WEB', site: '', profile: '' })
+  )
+  assert.deepEqual(keysShown(view, ['WEB-1', 'WEB-2', 'WEB-3']), ['WEB-1', 'WEB-2'])
+  await view.press({ type: 'Button', text: 'Load more' })
+  assert.deepEqual(cursors, [undefined, 'cursor-2'])
+  assert.deepEqual(keysShown(view, ['WEB-1', 'WEB-2', 'WEB-3']), ['WEB-1', 'WEB-2', 'WEB-3'])
+  assert.equal(view.find({ type: 'Button', text: 'Load more' }), null)
+
+  await view.press({ testId: 'start:WEB-3' })
+  assert.deepEqual(keysShown(view, ['WEB-1', 'WEB-2', 'WEB-3']), ['WEB-1', 'WEB-2', 'WEB-3'])
+  assert.ok(view.find({ type: 'Link', text: 'web-3-task-web-3' }))
+  assert.equal(cursors.length, 2)
+  assert.deepEqual(view.errors, [])
+  await view.unmount()
+})
+
+test('a "Load more" failure keeps the loaded tasks and says why', async () => {
+  const { view } = await showWith(
+    {
+      'tasks.load': ({ cursor }) =>
+        cursor ? { kind: 'error', project: web, message: 'twg failed: The cursor has expired.' } : twgReady([twgTask('WEB-1')], { nextCursor: 'cursor-2' })
+    },
+    twgStored({ jql: 'project = WEB', site: '', profile: '' })
+  )
+  await view.press({ type: 'Button', text: 'Load more' })
+  assert.ok(view.find({ type: 'Link', text: 'WEB-1' }))
+  assert.ok(view.find({ type: 'Text', text: /The cursor has expired/ }))
+  assert.ok(view.find({ type: 'Button', text: 'Load more' }))
+  await view.unmount()
+})
+
+test('a page that arrives after a reload is dropped', async () => {
+  let reloads = 0
+  let view: TestPanel | null = null
+  ;({ view } = await showWith(
+    {
+      'tasks.load': async ({ cursor }) => {
+        if (!cursor) return twgReady([twgTask(`WEB-${++reloads * 10}`)], { nextCursor: 'cursor-2' })
+        // The person reloads while this page is on its way.
+        void view?.press({ type: 'IconButton', label: 'Reload tasks' })
+        await wait(10)
+        return twgReady([twgTask('WEB-99')])
+      }
+    },
+    twgStored({ jql: 'project = WEB', site: '', profile: '' })
+  ))
+  await view.press({ type: 'Button', text: 'Load more' })
+  await view.settled()
+  assert.ok(view.find({ type: 'Link', text: 'WEB-20' }))
+  assert.equal(view.find({ type: 'Link', text: 'WEB-99' }), null)
+  await view.unmount()
+})
