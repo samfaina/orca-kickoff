@@ -1,4 +1,4 @@
-// Kickoff's side panel: the active project's open tasks, its Start options, and Start. No build
+// Kickoff's side panel: the active project's tracker, its open tasks, its Start options, and Start. No build
 // step: Orca strips the types and compiles the JSX when the panel loads. The worker does the work;
 // the panel asks it and draws the answers.
 import {
@@ -10,6 +10,7 @@ import {
   EmptyState,
   Heading,
   IconButton,
+  Input,
   Link,
   Row,
   Select,
@@ -29,11 +30,19 @@ import {
 } from 'orca'
 import { isRecord } from './json'
 import {
+  chooseProvider,
+  DEFAULT_JQL,
+  projectProvider,
   projectSettings,
+  providerConfig,
   readSettings,
   SETTINGS_KEY,
-  withStartOptions,
-  type StartOptionChanges,
+  withProjectChanges,
+  type JiraSitesResult,
+  type ProjectChanges,
+  type ProjectRef,
+  type ProviderConfigs,
+  type ProviderId,
   type Task,
   type TaskList,
   type TaskWorktree
@@ -57,13 +66,29 @@ const AGENT_OPTIONS = [
   { value: 'none', label: 'No agent' }
 ]
 
-type StartOptions = { projectId: string; agent: string; template: string }
+const PROVIDER_OPTIONS: { value: ProviderId; label: string }[] = [
+  { value: 'github', label: 'GitHub' },
+  { value: 'jira-orca', label: 'Jira (Orca connection)' },
+  { value: 'jira-twg', label: 'Jira (twg)' }
+]
+
+/** Select values can't be empty, so these stand for "no tracker yet" and "Orca's default site".
+ *  Neither can be a provider id or an Orca site id. */
+const NO_TRACKER = ':none'
+const DEFAULT_SITE = ':default'
+
+/** The listed project's settings, as the person sees them. `provider` is null while none is set. */
+type ShownSettings = { projectId: string; provider: ProviderId | null; providers: ProviderConfigs; agent: string; template: string }
 
 const list = atom<TaskList | null>(null)
 const loading = atom(false)
-/** The Start options of the listed project, as the person sees them. */
-const options = atom<StartOptions | null>(null)
+/** The tracker settings and Start options of the listed project, as the person sees them. */
+const shownSettings = atom<ShownSettings | null>(null)
 const optionsOpen = atom('startOptionsOpen', true, { persist: 'plugin' })
+/** Whether the person left the Tracker section open; it is always open while no list is loaded. */
+const trackerOpen = atom('trackerOpen', false, { persist: 'plugin' })
+/** The sites of Orca's Jira connection, asked for the first time they are needed. */
+const jiraSites = atom<JiraSitesResult | 'loading' | null>(null)
 /** Task keys with a Start under way. */
 const starting = atom<Record<string, true>>({})
 /** The error of each task's last Start, or of opening its worktree. */
@@ -72,36 +97,75 @@ const taskErrors = atom<Record<string, string>>({})
 /** Rises with each load, so an answer that arrives after a newer request is dropped. */
 let generation = 0
 
-/** Start option changes not saved yet, for one project. */
-let pending: { projectId: string; changes: StartOptionChanges } | null = null
+/** Settings changes not saved yet, for one project. */
+let pending: { projectId: string; changes: ProjectChanges } | null = null
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 
-/** Saves pending Start option changes now. The worker reads settings from storage, so this runs
+/** Saves pending settings changes now. The worker reads settings from storage, so this runs
  *  before every request that depends on them. */
-async function flushOptions(): Promise<void> {
+async function flushSettings(): Promise<void> {
   if (saveTimer !== null) clearTimeout(saveTimer)
   saveTimer = null
   const toSave = pending
   pending = null
   if (!toSave) return
   const settings = readSettings(await storage.get(SETTINGS_KEY))
-  await storage.set(SETTINGS_KEY, withStartOptions(settings, toSave.projectId, toSave.changes) as unknown as JsonValue)
+  await storage.set(SETTINGS_KEY, withProjectChanges(settings, toSave.projectId, toSave.changes) as unknown as JsonValue)
 }
 
-function changeOptions(changes: StartOptionChanges): void {
-  const current = read(options)
+function changeSettings(changes: ProjectChanges): void {
+  const current = read(shownSettings)
   if (!current) return
-  set(options, { ...current, ...changes })
-  pending = { projectId: current.projectId, changes: { ...(pending?.projectId === current.projectId ? pending.changes : {}), ...changes } }
+  const providers = { ...current.providers, ...changes.providers }
+  set(shownSettings, { ...current, ...changes, provider: changes.provider ?? current.provider, providers })
+  const earlier = pending?.projectId === current.projectId ? pending.changes : {}
+  pending = { projectId: current.projectId, changes: { ...earlier, ...changes, providers: { ...earlier.providers, ...changes.providers } } }
   if (saveTimer !== null) clearTimeout(saveTimer)
-  saveTimer = setTimeout(() => void flushOptions(), SAVE_DELAY_MS)
+  saveTimer = setTimeout(() => void flushSettings(), SAVE_DELAY_MS)
 }
 
-/** Shows the stored Start options of `projectId`, unless they are already shown. */
-async function showOptions(projectId: string): Promise<void> {
-  if (read(options)?.projectId === projectId) return
-  const settings = projectSettings(readSettings(await storage.get(SETTINGS_KEY)), projectId)
-  set(options, { projectId, agent: settings.agent ?? 'orca-default', template: settings.template ?? DEFAULT_TEMPLATE })
+/** Shows the stored settings of `project`, unless they are already shown. */
+async function showSettings(project: ProjectRef): Promise<void> {
+  if (read(shownSettings)?.projectId === project.id) return
+  const settings = projectSettings(readSettings(await storage.get(SETTINGS_KEY)), project.id)
+  const provider = projectProvider(settings, project)
+  set(shownSettings, {
+    projectId: project.id,
+    provider,
+    providers: settings.providers,
+    agent: settings.agent ?? 'orca-default',
+    template: settings.template ?? DEFAULT_TEMPLATE
+  })
+}
+
+/** Chooses the project's provider, saves it with its configuration and lists its tasks. */
+function chooseProviderFor(value: string): void {
+  const current = read(shownSettings)
+  const provider = PROVIDER_OPTIONS.find((option) => option.value === value)?.value
+  if (!current || !provider) return
+  set(trackerOpen, true)
+  const chosen = chooseProvider({ providers: current.providers }, provider)
+  changeSettings({ provider, providers: { [provider]: chosen.providers[provider] } })
+  void load()
+}
+
+function changeJiraOrcaConfig(changes: Partial<Required<ProviderConfigs>['jira-orca']>): void {
+  const current = read(shownSettings)
+  if (!current) return
+  changeSettings({ providers: { 'jira-orca': { ...providerConfig({ providers: current.providers }, 'jira-orca'), ...changes } } })
+}
+
+/** Asks for the sites of Orca's Jira connection, unless they are being asked for or some are
+ *  already listed: after a failure or with none connected, the person may have fixed it since. */
+async function loadJiraSites(): Promise<void> {
+  const sites = read(jiraSites)
+  if (sites === 'loading' || (sites?.kind === 'ready' && sites.sites.length > 0)) return
+  set(jiraSites, 'loading')
+  try {
+    set(jiraSites, await plugin.request('jira.sites', {}))
+  } catch (error) {
+    set(jiraSites, { kind: 'error', message: `Kickoff's worker didn't answer (${errorCode(error)}).` })
+  }
 }
 
 async function load(): Promise<void> {
@@ -109,7 +173,7 @@ async function load(): Promise<void> {
   set(loading, true)
   let answer: TaskList
   try {
-    await flushOptions()
+    await flushSettings()
     answer = await plugin.request('tasks.load', {}, { timeoutMs: LOAD_TIMEOUT_MS })
   } catch (error) {
     answer = { kind: 'error', project: null, message: `Kickoff's worker didn't answer (${errorCode(error)}). Reload to try again.` }
@@ -117,12 +181,13 @@ async function load(): Promise<void> {
   if (mine !== generation) return
   if ('project' in answer && answer.project) {
     try {
-      await showOptions(answer.project.id)
+      await showSettings(answer.project)
     } catch {
-      // Storage unreadable: the options stay hidden; Start still uses what the worker reads.
+      // Storage unreadable: the settings stay hidden; Start still uses what the worker reads.
     }
     if (mine !== generation) return
   }
+  if (read(shownSettings)?.provider === 'jira-orca') void loadJiraSites()
   set(list, answer)
   set(loading, false)
 }
@@ -161,7 +226,7 @@ async function startTask(task: Task): Promise<void> {
   setTaskError(task.key, null)
   let error: string | null = null
   try {
-    await flushOptions()
+    await flushSettings()
     const answer = await plugin.request('task.start', { projectId, task }, { timeoutMs: START_TIMEOUT_MS })
     if (!answer.ok) error = answer.message
   } catch (thrown) {
@@ -197,7 +262,7 @@ export function setup(ctx: PanelContext): void {
   }
   // Orca sends the current context to each new subscriber; load now only if it hasn't yet.
   ctx.subscriptions.push(on('workspace.changed', reload))
-  ctx.subscriptions.push({ dispose: () => void flushOptions() })
+  ctx.subscriptions.push({ dispose: () => void flushSettings() })
   if (!started) reload()
 }
 
@@ -214,14 +279,68 @@ export default function Panel() {
           <IconButton icon="refresh" label="Reload tasks" tooltip="Reload tasks" size="sm" variant="ghost" onPress={() => void load()} />
         </Row>
       </Row>
+      {project ? <TrackerSection listed={current?.kind === 'ready'} /> : null}
       {project ? <StartOptionsSection /> : null}
       {current ? <Body list={current} /> : <Spinner label="Loading tasks" />}
     </Stack>
   )
 }
 
+function TrackerSection({ listed }: { listed: boolean }) {
+  const shown = read(shownSettings)
+  if (!shown) return null
+  const providerOptions = shown.provider === null ? [{ value: NO_TRACKER, label: 'Choose a tracker' }, ...PROVIDER_OPTIONS] : PROVIDER_OPTIONS
+  return (
+    <Collapsible title="Tracker" open={!listed || read(trackerOpen)} onChange={(open) => set(trackerOpen, open)}>
+      <Stack gap="sm">
+        <Select label="Tracker" value={shown.provider ?? NO_TRACKER} options={providerOptions} onChange={chooseProviderFor} />
+        {shown.provider === 'jira-orca' ? <JiraOrcaSettings providers={shown.providers} /> : null}
+      </Stack>
+    </Collapsible>
+  )
+}
+
+function JiraOrcaSettings({ providers }: { providers: ProviderConfigs }) {
+  const config = providerConfig({ providers }, 'jira-orca')
+  const sites = read(jiraSites)
+  const answered = sites !== null && sites !== 'loading' ? sites : null
+  const connected = answered?.kind === 'ready' ? answered.sites : []
+  const siteOptions = [{ value: DEFAULT_SITE, label: 'Default site' }, ...connected.map((site) => ({ value: site.id, label: site.name }))]
+  if (config.siteId !== '' && !connected.some((site) => site.id === config.siteId)) {
+    siteOptions.push({ value: config.siteId, label: config.siteId })
+  }
+  return (
+    <Stack gap="sm">
+      <Input
+        label="JQL"
+        value={config.jql}
+        placeholder={DEFAULT_JQL}
+        onChange={(jql) => changeJiraOrcaConfig({ jql })}
+        onSubmit={() => void load()}
+      />
+      <Select
+        label="Site"
+        value={config.siteId || DEFAULT_SITE}
+        options={siteOptions}
+        onChange={(value) => {
+          changeJiraOrcaConfig({ siteId: value === DEFAULT_SITE ? '' : value })
+          void load()
+        }}
+      />
+      {answered?.kind === 'error' ? (
+        <Text size="sm" tone="danger">
+          {`Couldn't list Jira sites: ${answered.message}`}
+        </Text>
+      ) : null}
+      <Text size="sm" muted>
+        Kickoff reads Jira through the connection saved in Orca. Connect Jira in Orca's settings first if you haven't.
+      </Text>
+    </Stack>
+  )
+}
+
 function StartOptionsSection() {
-  const shown = read(options)
+  const shown = read(shownSettings)
   if (!shown) return null
   const agentOptions = AGENT_OPTIONS.some((option) => option.value === shown.agent)
     ? AGENT_OPTIONS
@@ -229,13 +348,13 @@ function StartOptionsSection() {
   return (
     <Collapsible title="Start options" open={read(optionsOpen)} onChange={(open) => set(optionsOpen, open)}>
       <Stack gap="sm">
-        <Select label="Agent" value={shown.agent} options={agentOptions} onChange={(agent) => changeOptions({ agent })} />
+        <Select label="Agent" value={shown.agent} options={agentOptions} onChange={(agent) => changeSettings({ agent })} />
         <Textarea
           label="Prompt template"
           value={shown.template}
           rows={4}
           placeholder="Empty: the prompt is the task URL"
-          onChange={(template) => changeOptions({ template })}
+          onChange={(template) => changeSettings({ template })}
         />
         <Text size="sm" muted>
           {`Variables: ${TEMPLATE_VARIABLES.map((name) => `{{${name}}}`).join(', ')}. An empty template gives the task URL.`}
@@ -253,7 +372,7 @@ function Body({ list }: { list: TaskList }) {
       return (
         <EmptyState
           title="No tracker for this project"
-          description={`Kickoff reads GitHub issues for projects with a GitHub repository, and ${list.project.name} has none.`}
+          description={`Choose a tracker above to list the tasks of ${list.project.name}.`}
           icon="settings"
         />
       )

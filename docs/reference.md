@@ -154,6 +154,7 @@ Components **[Verified]**:
 
 - `Field` (`label`, `description?`, `error?`, `required?`) wraps a control with help text or an error.
 - Limits per render: 5000 nodes, 16 KiB per text, 500 options per `Select`.
+- A `Select` option whose `value` is `''` is invalid: Orca drops the options with the warnings "Select: ignored invalid options" and "Select: missing required options; showing a placeholder", and draws no `Select`. Kickoff uses `:none` and `:default` for "Choose a tracker" and "Default site" **[Verified]** with `orca/testing`.
 
 Usage seen in the original **[Original]**:
 
@@ -319,6 +320,7 @@ No CLI command or plugin API exposes it; `orca settings` and `orca config` are u
 - All take `--site <id>` and `--json`. `list` and `search` take `--limit <n>`: 30 by default, clamped to 1–100.
 - `orca jira connection --json` → `result: { connected, sites: [{ id, siteUrl, displayName, authType: 'cloud' | 'server', apiBaseUrl, ... }], activeSiteId, selectedSiteId, viewer: {...} }`.
   - It lists saved connections; it does not test them.
+  - Without a connection it answers `ok: true` with `connected: false` and `sites: []`. `result` also has `credentialProtection` and `supportsScopedTokens` **[Verified]**.
   - `viewer` and `sites[]` contain the user's email: never show or log them.
 - `orca jira search "<jql>" --json` → `result: Issue[]`:
 

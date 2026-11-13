@@ -28,6 +28,7 @@ import {
   SETTINGS_KEY,
   trackerOf,
   type ActionResult,
+  type JiraSitesResult,
   type ProjectRef,
   type ProjectSettings,
   type Task,
@@ -35,6 +36,7 @@ import {
   type WorktreesResult
 } from './protocol'
 import { taskLister } from './providers'
+import { JIRA_CONNECTION_ARGS, parseJiraSites } from './providers/jira-orca'
 import { buildPrompt } from './template'
 
 const NOT_READY = 'Kickoff is not ready yet.'
@@ -184,6 +186,14 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
     }
   }
 
+  async function jiraSites(): Promise<JiraSitesResult> {
+    try {
+      return { kind: 'ready', sites: parseJiraSites(await run('orca', JIRA_CONNECTION_ARGS)) }
+    } catch (error) {
+      return { kind: 'error', message: messageOf(error) }
+    }
+  }
+
   async function openWorktree(worktreeId: string): Promise<ActionResult> {
     try {
       checkOrcaAnswer(await run('orca', worktreeActivateArgs(worktreeId)))
@@ -196,7 +206,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
   orca.panels.handle('tasks.load', ({ cursor }) => loadTasks(cursor))
   orca.panels.handle('worktrees.load', ({ projectId }) => loadWorktrees(projectId))
   orca.panels.handle('project.active', () => ({ kind: 'error' as const, message: NOT_READY }))
-  orca.panels.handle('jira.sites', () => ({ kind: 'error' as const, message: NOT_READY }))
+  orca.panels.handle('jira.sites', () => jiraSites())
   orca.panels.handle('task.start', ({ projectId, task }) => startTask(projectId, task))
   orca.panels.handle('worktree.open', ({ worktreeId }) => openWorktree(worktreeId))
 }
