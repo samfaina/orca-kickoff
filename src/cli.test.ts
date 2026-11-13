@@ -104,6 +104,21 @@ test('a JSON error on stdout gives its message and never the feedback URL', () =
   assert.equal(message, "twg failed: Error in the JQL query: the field 'sprnt' does not exist.")
 })
 
+test("without a JSON error, twg's readable stderr block gives its error line, without the feedback URL", () => {
+  const stderr = [
+    "Error: Error in the JQL query: the field 'sprnt' does not exist.",
+    '  Code:        TWG_TOOL_EXECUTION_FAILED',
+    '  Status code: 400',
+    '',
+    'Feedback:',
+    '  URL: https://feedback.example.com/?user=ana@example.com'
+  ].join('\n')
+  for (const stdout of ['', JSON.stringify({ ok: false, error: { code: 'TWG_TOOL_EXECUTION_FAILED', message: '' } })]) {
+    const message = cliFailureMessage('twg', { kind: 'failed', exitCode: 1, stdout, stderr })
+    assert.equal(message, "twg failed: Error: Error in the JQL query: the field 'sprnt' does not exist.")
+  }
+})
+
 test('any other failure gives the first non-empty stderr line', () => {
   const stderr = '\nTo get started with GitHub CLI, please run:  gh auth login\nAlternatively, populate the GH_TOKEN environment variable.\n'
   assert.equal(

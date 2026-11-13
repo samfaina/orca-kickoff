@@ -30,6 +30,7 @@ import {
 } from 'orca'
 import { isRecord } from './json'
 import {
+  appendTasks,
   chooseProvider,
   DEFAULT_JQL,
   projectProvider,
@@ -38,6 +39,7 @@ import {
   readSettings,
   SETTINGS_KEY,
   withProjectChanges,
+  type JiraProviderId,
   type JiraSitesResult,
   type ProjectChanges,
   type ProjectRef,
@@ -94,6 +96,10 @@ const starting = atom<Record<string, true>>({})
 /** The error of each task's last Start, or of opening its worktree. */
 const taskErrors = atom<Record<string, string>>({})
 
+/** Whether a "Load more" is under way, and the error of the last one. */
+const loadingMore = atom(false)
+const moreError = atom<string | null>(null)
+
 /** Rises with each load, so an answer that arrives after a newer request is dropped. */
 let generation = 0
 
@@ -149,10 +155,11 @@ function chooseProviderFor(value: string): void {
   void load()
 }
 
-function changeJiraOrcaConfig(changes: Partial<Required<ProviderConfigs>['jira-orca']>): void {
+/** Changes some of a Jira provider's settings, keeping the rest. */
+function changeJiraConfig<K extends JiraProviderId>(id: K, changes: Partial<Required<ProviderConfigs>[K]>): void {
   const current = read(shownSettings)
   if (!current) return
-  changeSettings({ providers: { 'jira-orca': { ...providerConfig({ providers: current.providers }, 'jira-orca'), ...changes } } })
+  changeSettings({ providers: { [id]: { ...providerConfig({ providers: current.providers }, id), ...changes } } })
 }
 
 /** Asks for the sites of Orca's Jira connection, unless they are being asked for or some are
@@ -171,6 +178,8 @@ async function loadJiraSites(): Promise<void> {
 async function load(): Promise<void> {
   const mine = ++generation
   set(loading, true)
+  set(loadingMore, false)
+  set(moreError, null)
   let answer: TaskList
   try {
     await flushSettings()
@@ -190,6 +199,36 @@ async function load(): Promise<void> {
   if (read(shownSettings)?.provider === 'jira-orca') void loadJiraSites()
   set(list, answer)
   set(loading, false)
+}
+
+/** Asks for the next page and appends its tasks, skipping keys already listed. A page that
+ *  arrives after a reload is dropped; one for another project means the project changed, so the
+ *  list is loaded again. Pending settings are not saved first: the cursor belongs to the query
+ *  that listed the first page. */
+async function loadMore(): Promise<void> {
+  const current = read(list)
+  if (current?.kind !== 'ready' || current.nextCursor === null || read(loadingMore)) return
+  const mine = generation
+  set(loadingMore, true)
+  set(moreError, null)
+  let answer: TaskList
+  try {
+    answer = await plugin.request('tasks.load', { cursor: current.nextCursor }, { timeoutMs: LOAD_TIMEOUT_MS })
+  } catch (error) {
+    answer = { kind: 'error', project: null, message: `Kickoff's worker didn't answer (${errorCode(error)}).` }
+  }
+  const shown = read(list)
+  if (mine !== generation || shown?.kind !== 'ready') return
+  set(loadingMore, false)
+  if (answer.kind === 'error') {
+    set(moreError, answer.message)
+    return
+  }
+  if (answer.kind !== 'ready' || answer.project.id !== shown.project.id || answer.provider !== shown.provider) {
+    void load()
+    return
+  }
+  set(list, { ...answer, tasks: appendTasks(shown.tasks, answer.tasks) })
 }
 
 /** The listed project's id, when the list is ready. */
@@ -295,6 +334,7 @@ function TrackerSection({ listed }: { listed: boolean }) {
       <Stack gap="sm">
         <Select label="Tracker" value={shown.provider ?? NO_TRACKER} options={providerOptions} onChange={chooseProviderFor} />
         {shown.provider === 'jira-orca' ? <JiraOrcaSettings providers={shown.providers} /> : null}
+        {shown.provider === 'jira-twg' ? <JiraTwgSettings providers={shown.providers} /> : null}
       </Stack>
     </Collapsible>
   )
@@ -311,19 +351,13 @@ function JiraOrcaSettings({ providers }: { providers: ProviderConfigs }) {
   }
   return (
     <Stack gap="sm">
-      <Input
-        label="JQL"
-        value={config.jql}
-        placeholder={DEFAULT_JQL}
-        onChange={(jql) => changeJiraOrcaConfig({ jql })}
-        onSubmit={() => void load()}
-      />
+      <JqlInput provider="jira-orca" jql={config.jql} />
       <Select
         label="Site"
         value={config.siteId || DEFAULT_SITE}
         options={siteOptions}
         onChange={(value) => {
-          changeJiraOrcaConfig({ siteId: value === DEFAULT_SITE ? '' : value })
+          changeJiraConfig('jira-orca', { siteId: value === DEFAULT_SITE ? '' : value })
           void load()
         }}
       />
@@ -334,6 +368,45 @@ function JiraOrcaSettings({ providers }: { providers: ProviderConfigs }) {
       ) : null}
       <Text size="sm" muted>
         Kickoff reads Jira through the connection saved in Orca. Connect Jira in Orca's settings first if you haven't.
+      </Text>
+    </Stack>
+  )
+}
+
+/** The JQL of a Jira provider. Enter lists the tasks with it. */
+function JqlInput({ provider, jql }: { provider: JiraProviderId; jql: string }) {
+  return (
+    <Input
+      label="JQL"
+      value={jql}
+      placeholder={DEFAULT_JQL}
+      onChange={(value) => changeJiraConfig(provider, { jql: value })}
+      onSubmit={() => void load()}
+    />
+  )
+}
+
+function JiraTwgSettings({ providers }: { providers: ProviderConfigs }) {
+  const config = providerConfig({ providers }, 'jira-twg')
+  return (
+    <Stack gap="sm">
+      <JqlInput provider="jira-twg" jql={config.jql} />
+      <Input
+        label="Site"
+        value={config.site}
+        placeholder="twg's default site"
+        onChange={(site) => changeJiraConfig('jira-twg', { site })}
+        onSubmit={() => void load()}
+      />
+      <Input
+        label="Profile"
+        value={config.profile}
+        placeholder="twg's default profile"
+        onChange={(profile) => changeJiraConfig('jira-twg', { profile })}
+        onSubmit={() => void load()}
+      />
+      <Text size="sm" muted>
+        Kickoff reads Jira through the Teamwork Graph CLI. Run `twg login` in a terminal first if you haven't. Leave Site and Profile empty to use twg's defaults.
       </Text>
     </Stack>
   )
@@ -400,6 +473,7 @@ function Body({ list }: { list: TaskList }) {
           ) : (
             list.tasks.map((task) => <TaskCard key={task.key} task={task} worktrees={list.worktrees} />)
           )}
+          {list.nextCursor !== null ? <LoadMore /> : null}
           {list.truncated ? (
             <Text size="sm" muted>
               {list.provider === 'github'
@@ -410,6 +484,25 @@ function Body({ list }: { list: TaskList }) {
         </Stack>
       )
   }
+}
+
+function LoadMore() {
+  const error = read(moreError)
+  return (
+    <Stack gap="xs">
+      {error ? (
+        <Text size="sm" tone="danger">
+          {`Couldn't load more tasks: ${error}`}
+        </Text>
+      ) : null}
+      <Row gap="xs" align="center">
+        <Button key="load-more" size="sm" variant="ghost" disabled={read(loadingMore)} onPress={() => void loadMore()}>
+          Load more
+        </Button>
+        {read(loadingMore) ? <Spinner label="Loading more tasks" labelHidden /> : null}
+      </Row>
+    </Stack>
+  )
 }
 
 function TaskCard({ task, worktrees }: { task: Task; worktrees: Record<string, TaskWorktree> | null }) {

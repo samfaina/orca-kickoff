@@ -5,6 +5,8 @@ import { isRecord } from './json'
 
 export type TrackerId = 'github' | 'jira'
 export type ProviderId = 'github' | 'jira-orca' | 'jira-twg'
+/** The providers that read Jira, and share its JQL. */
+export type JiraProviderId = Exclude<ProviderId, 'github'>
 
 export type Task = {
   tracker: TrackerId
@@ -142,6 +144,19 @@ export function withProjectChanges(settings: Settings, projectId: string, change
   const current = projectSettings(settings, projectId)
   const project = { ...current, ...changes, providers: { ...current.providers, ...changes.providers } }
   return { ...settings, projects: { ...settings.projects, [projectId]: project } }
+}
+
+/** `tasks` followed by the tasks of a next page, skipping keys already listed. */
+export function appendTasks(tasks: Task[], next: Task[]): Task[] {
+  const keys = new Set(tasks.map((task) => task.key))
+  return [
+    ...tasks,
+    ...next.filter((task) => {
+      if (keys.has(task.key)) return false
+      keys.add(task.key)
+      return true
+    })
+  ]
 }
 
 export type TaskWorktree = { worktreeId: string; name: string; agent: string | null }
