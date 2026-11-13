@@ -459,3 +459,21 @@ test('a load failure keeps the provider settings visible', async () => {
   assert.equal(view.valueOf({ type: 'Input', label: 'JQL' }), 'project = ')
   await view.unmount()
 })
+
+test('after a site list failure or no connected site, reloading the tasks asks for the sites again', async () => {
+  const answers = [{ kind: 'error' as const, message: 'orca failed: Orca is not running.' }, { kind: 'ready' as const, sites: [] }, SITES]
+  let asked = 0
+  const { view } = await showWith(
+    { 'tasks.load': jiraReady(), 'jira.sites': () => answers[Math.min(asked++, answers.length - 1)] },
+    jiraStored('project = WEB', '')
+  )
+  await openTracker(view)
+  assert.ok(view.find({ type: 'Text', text: /Orca is not running/ }))
+  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  assert.deepEqual(optionLabels(view, 'Site'), ['Default site'])
+  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  assert.deepEqual(optionLabels(view, 'Site'), ['Default site', 'Example', 'Other'])
+  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  assert.equal(asked, 3)
+  await view.unmount()
+})
