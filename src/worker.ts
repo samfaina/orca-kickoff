@@ -103,11 +103,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
       const settings = await readProjectSettings(project.id)
       const providerId = projectProvider(settings, project)
       if (!providerId) return { kind: 'needs-config', project }
-      const listTasks = taskLister(providerId)
-      if (!listTasks) {
-        return { kind: 'error', project, message: `This version of Kickoff can't read tasks with "${providerId}" yet.` }
-      }
-      const page = await listTasks(run, project, settings, cursor)
+      const page = await taskLister(providerId)(run, project, settings, cursor)
       const { state } = active
       return {
         kind: 'ready',

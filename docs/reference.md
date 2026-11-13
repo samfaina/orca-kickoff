@@ -411,9 +411,19 @@ Successful output **[Verified]** (no `ok` key):
 - An empty result is `data.issues: []` with exit 0 **[Verified]**.
 - `pageInfo` is **missing** in some responses, for example with 0 or 1 results and limit 50 **[Verified]**. Treat a missing `pageInfo` as "no next page".
 - Without `-o json`, success starts with `✓ Completed jira.workitem.query.` and failure with `x Failed jira.workitem.query.` on stderr **[Verified]**.
+- Each issue also has `self` and `expand`. `status` is the Jira REST v3 status object (`self`, `description`, `name`, `id`, `statusCategory`), and `statusCategory` has `self`, `id`, `key`, `colorName` and `name` **[Verified]**.
 - Only `statusCategory.key: "new"` has been seen. `indeterminate` and `done` are Jira's documented values **[Assumed]**.
-- Shape of a non-null `assignee`: **[Assumed]** to be the Jira REST v3 user object, with `displayName`. The response meta says `sourceMode: 'rest'` and `apiVersion: 'rest-v3'`.
-- `description` is ADF (Jira's JSON document format) **[Assumed]**.
+- A non-null `assignee` is the Jira REST v3 user object **[Verified]** with an assigned task:
+
+  ```json
+  { "self": "https://example.atlassian.net/rest/api/3/user?accountId=acc-1", "accountId": "acc-1",
+    "emailAddress": "ana@example.com", "displayName": "Ana Example", "active": true,
+    "timeZone": "Europe/Madrid", "accountType": "atlassian" }
+  ```
+
+  - `emailAddress` is the assignee's email: Kickoff reads only `displayName`.
+  - An unassigned task has `assignee: null` **[Verified]**.
+- `description` is ADF (Jira's JSON document format), an object `{ type: 'doc', version: 1, content: [...] }` **[Verified]**. An empty description is expected to be `null` **[Assumed]**. Node types seen: `paragraph`, `orderedList` (with `attrs.order`), `listItem` and `text`. Others, such as `heading`, `bulletList`, `codeBlock`, `hardBreak`, `mention` and `inlineCard`, follow Atlassian's ADF documentation **[Assumed]**; `src/adf.ts` handles them.
 
 Errors **[Verified]**:
 
