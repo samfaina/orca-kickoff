@@ -1,5 +1,5 @@
 import { assert, test } from 'orca/testing'
-import { chooseProvider, projectProvider, projectSettings, readSettings } from './protocol'
+import { chooseProvider, projectProvider, projectSettings, readSettings, withProjectChanges } from './protocol'
 
 const web = { id: 'github:acme/web', name: 'web', repo: 'acme/web' }
 const notes = { id: 'repo:r1', name: 'notes', repo: null }
@@ -64,4 +64,27 @@ test('a Jira provider starts with the default JQL, or copies it from the other J
 
   const back = chooseProvider({ ...other, providers: { ...other.providers, 'jira-orca': { jql: 'project = API', siteId: '' } } }, 'jira-twg')
   assert.deepEqual(back.providers['jira-twg'], { jql: 'project = WEB', site: '', profile: '' })
+})
+
+test("project changes keep the other projects, fields and providers' configurations", () => {
+  const settings = {
+    version: 1 as const,
+    projects: {
+      [web.id]: { provider: 'jira-twg' as const, providers: { 'jira-twg': { jql: 'project = OLD', site: '', profile: 'work' } }, agent: 'codex' },
+      [notes.id]: { providers: {}, template: '' }
+    }
+  }
+  const changed = withProjectChanges(settings, web.id, { provider: 'jira-orca', providers: { 'jira-orca': { jql: 'project = WEB', siteId: '' } } })
+  assert.deepEqual(changed, {
+    version: 1,
+    projects: {
+      [web.id]: {
+        provider: 'jira-orca',
+        providers: { 'jira-twg': { jql: 'project = OLD', site: '', profile: 'work' }, 'jira-orca': { jql: 'project = WEB', siteId: '' } },
+        agent: 'codex'
+      },
+      [notes.id]: { providers: {}, template: '' }
+    }
+  })
+  assert.deepEqual(withProjectChanges(readSettings(null), 'repo:new', { agent: 'none' }).projects['repo:new'], { providers: {}, agent: 'none' })
 })

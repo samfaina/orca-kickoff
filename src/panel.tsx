@@ -31,6 +31,7 @@ import {
 import { isRecord } from './json'
 import {
   chooseProvider,
+  DEFAULT_JQL,
   projectProvider,
   projectSettings,
   providerConfig,
@@ -82,7 +83,7 @@ type ShownSettings = { projectId: string; provider: ProviderId | null; providers
 const list = atom<TaskList | null>(null)
 const loading = atom(false)
 /** The tracker settings and Start options of the listed project, as the person sees them. */
-const options = atom<ShownSettings | null>(null)
+const shownSettings = atom<ShownSettings | null>(null)
 const optionsOpen = atom('startOptionsOpen', true, { persist: 'plugin' })
 /** Whether the person left the Tracker section open; it is always open while no list is loaded. */
 const trackerOpen = atom('trackerOpen', false, { persist: 'plugin' })
@@ -102,7 +103,7 @@ let saveTimer: ReturnType<typeof setTimeout> | null = null
 
 /** Saves pending settings changes now. The worker reads settings from storage, so this runs
  *  before every request that depends on them. */
-async function flushOptions(): Promise<void> {
+async function flushSettings(): Promise<void> {
   if (saveTimer !== null) clearTimeout(saveTimer)
   saveTimer = null
   const toSave = pending
@@ -112,52 +113,53 @@ async function flushOptions(): Promise<void> {
   await storage.set(SETTINGS_KEY, withProjectChanges(settings, toSave.projectId, toSave.changes) as unknown as JsonValue)
 }
 
-function changeOptions(changes: ProjectChanges): void {
-  const current = read(options)
+function changeSettings(changes: ProjectChanges): void {
+  const current = read(shownSettings)
   if (!current) return
   const providers = { ...current.providers, ...changes.providers }
-  set(options, { ...current, ...changes, provider: changes.provider ?? current.provider, providers })
+  set(shownSettings, { ...current, ...changes, provider: changes.provider ?? current.provider, providers })
   const earlier = pending?.projectId === current.projectId ? pending.changes : {}
   pending = { projectId: current.projectId, changes: { ...earlier, ...changes, providers: { ...earlier.providers, ...changes.providers } } }
   if (saveTimer !== null) clearTimeout(saveTimer)
-  saveTimer = setTimeout(() => void flushOptions(), SAVE_DELAY_MS)
+  saveTimer = setTimeout(() => void flushSettings(), SAVE_DELAY_MS)
 }
 
 /** Shows the stored settings of `project`, unless they are already shown. */
-async function showOptions(project: ProjectRef): Promise<void> {
-  if (read(options)?.projectId === project.id) return
+async function showSettings(project: ProjectRef): Promise<void> {
+  if (read(shownSettings)?.projectId === project.id) return
   const settings = projectSettings(readSettings(await storage.get(SETTINGS_KEY)), project.id)
   const provider = projectProvider(settings, project)
-  set(options, {
+  set(shownSettings, {
     projectId: project.id,
     provider,
     providers: settings.providers,
     agent: settings.agent ?? 'orca-default',
     template: settings.template ?? DEFAULT_TEMPLATE
   })
-  if (provider === 'jira-orca') void loadJiraSites()
 }
 
 /** Chooses the project's provider, saves it with its configuration and lists its tasks. */
-function chooseTracker(value: string): void {
-  const current = read(options)
+function chooseProviderFor(value: string): void {
+  const current = read(shownSettings)
   const provider = PROVIDER_OPTIONS.find((option) => option.value === value)?.value
   if (!current || !provider) return
   set(trackerOpen, true)
   const chosen = chooseProvider({ providers: current.providers }, provider)
-  changeOptions({ provider, providers: { [provider]: chosen.providers[provider] } })
-  if (provider === 'jira-orca') void loadJiraSites()
+  changeSettings({ provider, providers: { [provider]: chosen.providers[provider] } })
   void load()
 }
 
-function changeJiraOrca(changes: Partial<Required<ProviderConfigs>['jira-orca']>): void {
-  const current = read(options)
+function changeJiraOrcaConfig(changes: Partial<Required<ProviderConfigs>['jira-orca']>): void {
+  const current = read(shownSettings)
   if (!current) return
-  changeOptions({ providers: { 'jira-orca': { ...providerConfig({ providers: current.providers }, 'jira-orca'), ...changes } } })
+  changeSettings({ providers: { 'jira-orca': { ...providerConfig({ providers: current.providers }, 'jira-orca'), ...changes } } })
 }
 
+/** Asks for the sites of Orca's Jira connection, unless they are being asked for or some are
+ *  already listed: after a failure or with none connected, the person may have fixed it since. */
 async function loadJiraSites(): Promise<void> {
-  if (read(jiraSites) !== null) return
+  const sites = read(jiraSites)
+  if (sites === 'loading' || (sites?.kind === 'ready' && sites.sites.length > 0)) return
   set(jiraSites, 'loading')
   try {
     set(jiraSites, await plugin.request('jira.sites', {}))
@@ -171,7 +173,7 @@ async function load(): Promise<void> {
   set(loading, true)
   let answer: TaskList
   try {
-    await flushOptions()
+    await flushSettings()
     answer = await plugin.request('tasks.load', {}, { timeoutMs: LOAD_TIMEOUT_MS })
   } catch (error) {
     answer = { kind: 'error', project: null, message: `Kickoff's worker didn't answer (${errorCode(error)}). Reload to try again.` }
@@ -179,12 +181,13 @@ async function load(): Promise<void> {
   if (mine !== generation) return
   if ('project' in answer && answer.project) {
     try {
-      await showOptions(answer.project)
+      await showSettings(answer.project)
     } catch {
-      // Storage unreadable: the options stay hidden; Start still uses what the worker reads.
+      // Storage unreadable: the settings stay hidden; Start still uses what the worker reads.
     }
     if (mine !== generation) return
   }
+  if (read(shownSettings)?.provider === 'jira-orca') void loadJiraSites()
   set(list, answer)
   set(loading, false)
 }
@@ -223,7 +226,7 @@ async function startTask(task: Task): Promise<void> {
   setTaskError(task.key, null)
   let error: string | null = null
   try {
-    await flushOptions()
+    await flushSettings()
     const answer = await plugin.request('task.start', { projectId, task }, { timeoutMs: START_TIMEOUT_MS })
     if (!answer.ok) error = answer.message
   } catch (thrown) {
@@ -259,7 +262,7 @@ export function setup(ctx: PanelContext): void {
   }
   // Orca sends the current context to each new subscriber; load now only if it hasn't yet.
   ctx.subscriptions.push(on('workspace.changed', reload))
-  ctx.subscriptions.push({ dispose: () => void flushOptions() })
+  ctx.subscriptions.push({ dispose: () => void flushSettings() })
   if (!started) reload()
 }
 
@@ -284,13 +287,13 @@ export default function Panel() {
 }
 
 function TrackerSection({ listed }: { listed: boolean }) {
-  const shown = read(options)
+  const shown = read(shownSettings)
   if (!shown) return null
   const providerOptions = shown.provider === null ? [{ value: NO_TRACKER, label: 'Choose a tracker' }, ...PROVIDER_OPTIONS] : PROVIDER_OPTIONS
   return (
     <Collapsible title="Tracker" open={!listed || read(trackerOpen)} onChange={(open) => set(trackerOpen, open)}>
       <Stack gap="sm">
-        <Select label="Tracker" value={shown.provider ?? NO_TRACKER} options={providerOptions} onChange={chooseTracker} />
+        <Select label="Tracker" value={shown.provider ?? NO_TRACKER} options={providerOptions} onChange={chooseProviderFor} />
         {shown.provider === 'jira-orca' ? <JiraOrcaSettings providers={shown.providers} /> : null}
       </Stack>
     </Collapsible>
@@ -311,8 +314,8 @@ function JiraOrcaSettings({ providers }: { providers: ProviderConfigs }) {
       <Input
         label="JQL"
         value={config.jql}
-        placeholder="assignee = currentUser() AND statusCategory != Done"
-        onChange={(jql) => changeJiraOrca({ jql })}
+        placeholder={DEFAULT_JQL}
+        onChange={(jql) => changeJiraOrcaConfig({ jql })}
         onSubmit={() => void load()}
       />
       <Select
@@ -320,7 +323,7 @@ function JiraOrcaSettings({ providers }: { providers: ProviderConfigs }) {
         value={config.siteId || DEFAULT_SITE}
         options={siteOptions}
         onChange={(value) => {
-          changeJiraOrca({ siteId: value === DEFAULT_SITE ? '' : value })
+          changeJiraOrcaConfig({ siteId: value === DEFAULT_SITE ? '' : value })
           void load()
         }}
       />
@@ -337,7 +340,7 @@ function JiraOrcaSettings({ providers }: { providers: ProviderConfigs }) {
 }
 
 function StartOptionsSection() {
-  const shown = read(options)
+  const shown = read(shownSettings)
   if (!shown) return null
   const agentOptions = AGENT_OPTIONS.some((option) => option.value === shown.agent)
     ? AGENT_OPTIONS
@@ -345,13 +348,13 @@ function StartOptionsSection() {
   return (
     <Collapsible title="Start options" open={read(optionsOpen)} onChange={(open) => set(optionsOpen, open)}>
       <Stack gap="sm">
-        <Select label="Agent" value={shown.agent} options={agentOptions} onChange={(agent) => changeOptions({ agent })} />
+        <Select label="Agent" value={shown.agent} options={agentOptions} onChange={(agent) => changeSettings({ agent })} />
         <Textarea
           label="Prompt template"
           value={shown.template}
           rows={4}
           placeholder="Empty: the prompt is the task URL"
-          onChange={(template) => changeOptions({ template })}
+          onChange={(template) => changeSettings({ template })}
         />
         <Text size="sm" muted>
           {`Variables: ${TEMPLATE_VARIABLES.map((name) => `{{${name}}}`).join(', ')}. An empty template gives the task URL.`}
