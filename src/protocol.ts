@@ -132,12 +132,15 @@ export function chooseProvider(settings: ProjectSettings, provider: ProviderId):
   return { ...settings, provider, providers: { ...settings.providers, [provider]: providerConfig(settings, provider) } }
 }
 
-/** What Start options change in a project's settings. */
-export type StartOptionChanges = Partial<Pick<ProjectSettings, 'agent' | 'template'>>
+/** What the panel changes in a project's settings. `providers` holds only the providers whose
+ *  configuration changed. */
+export type ProjectChanges = Partial<ProjectSettings>
 
-/** `settings` with a project's agent choice or template changed, and everything else kept. */
-export function withStartOptions(settings: Settings, projectId: string, changes: StartOptionChanges): Settings {
-  const project = { ...projectSettings(settings, projectId), ...changes }
+/** `settings` with a project's changes applied, and everything else kept, including the
+ *  configuration of every provider that didn't change. */
+export function withProjectChanges(settings: Settings, projectId: string, changes: ProjectChanges): Settings {
+  const current = projectSettings(settings, projectId)
+  const project = { ...current, ...changes, providers: { ...current.providers, ...changes.providers } }
   return { ...settings, projects: { ...settings.projects, [projectId]: project } }
 }
 

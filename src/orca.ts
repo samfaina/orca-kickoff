@@ -152,7 +152,7 @@ export function checkOrcaAnswer(stdout: string): void {
 }
 
 /** `result` of an `{ ok: true, result }` answer. An error answer or unreadable output throws. */
-function orcaResult(stdout: string): unknown {
+export function orcaResult(stdout: string): unknown {
   const error = jsonErrorMessage(stdout)
   if (error) throw new CliError(cleanMessage(`orca failed: ${error}`))
   const parsed = parseJson(stdout)
