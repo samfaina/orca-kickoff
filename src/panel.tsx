@@ -30,6 +30,7 @@ import {
 } from 'orca'
 import { isRecord } from './json'
 import {
+  appendTasks,
   chooseProvider,
   DEFAULT_JQL,
   projectProvider,
@@ -38,6 +39,7 @@ import {
   readSettings,
   SETTINGS_KEY,
   withProjectChanges,
+  type JiraProviderId,
   type JiraSitesResult,
   type ProjectChanges,
   type ProjectRef,
@@ -154,7 +156,7 @@ function chooseProviderFor(value: string): void {
 }
 
 /** Changes some of a Jira provider's settings, keeping the rest. */
-function changeJiraConfig<K extends 'jira-orca' | 'jira-twg'>(id: K, changes: Partial<Required<ProviderConfigs>[K]>): void {
+function changeJiraConfig<K extends JiraProviderId>(id: K, changes: Partial<Required<ProviderConfigs>[K]>): void {
   const current = read(shownSettings)
   if (!current) return
   changeSettings({ providers: { [id]: { ...providerConfig({ providers: current.providers }, id), ...changes } } })
@@ -226,14 +228,7 @@ async function loadMore(): Promise<void> {
     void load()
     return
   }
-  const tasks = [...shown.tasks]
-  const keys = new Set(tasks.map((task) => task.key))
-  for (const task of answer.tasks) {
-    if (keys.has(task.key)) continue
-    keys.add(task.key)
-    tasks.push(task)
-  }
-  set(list, { ...answer, tasks })
+  set(list, { ...answer, tasks: appendTasks(shown.tasks, answer.tasks) })
 }
 
 /** The listed project's id, when the list is ready. */
@@ -356,13 +351,7 @@ function JiraOrcaSettings({ providers }: { providers: ProviderConfigs }) {
   }
   return (
     <Stack gap="sm">
-      <Input
-        label="JQL"
-        value={config.jql}
-        placeholder={DEFAULT_JQL}
-        onChange={(jql) => changeJiraConfig('jira-orca', { jql })}
-        onSubmit={() => void load()}
-      />
+      <JqlInput provider="jira-orca" jql={config.jql} />
       <Select
         label="Site"
         value={config.siteId || DEFAULT_SITE}
@@ -384,17 +373,24 @@ function JiraOrcaSettings({ providers }: { providers: ProviderConfigs }) {
   )
 }
 
+/** The JQL of a Jira provider. Enter lists the tasks with it. */
+function JqlInput({ provider, jql }: { provider: JiraProviderId; jql: string }) {
+  return (
+    <Input
+      label="JQL"
+      value={jql}
+      placeholder={DEFAULT_JQL}
+      onChange={(value) => changeJiraConfig(provider, { jql: value })}
+      onSubmit={() => void load()}
+    />
+  )
+}
+
 function JiraTwgSettings({ providers }: { providers: ProviderConfigs }) {
   const config = providerConfig({ providers }, 'jira-twg')
   return (
     <Stack gap="sm">
-      <Input
-        label="JQL"
-        value={config.jql}
-        placeholder={DEFAULT_JQL}
-        onChange={(jql) => changeJiraConfig('jira-twg', { jql })}
-        onSubmit={() => void load()}
-      />
+      <JqlInput provider="jira-twg" jql={config.jql} />
       <Input
         label="Site"
         value={config.site}

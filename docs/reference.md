@@ -418,7 +418,7 @@ Successful output **[Verified]** (no `ok` key):
   ```json
   { "self": "https://example.atlassian.net/rest/api/3/user?accountId=acc-1", "accountId": "acc-1",
     "emailAddress": "ana@example.com", "displayName": "Ana Example", "active": true,
-    "timeZone": "Europe/Madrid", "accountType": "atlassian" }
+    "timeZone": "UTC", "accountType": "atlassian" }
   ```
 
   - `emailAddress` is the assignee's email: Kickoff reads only `displayName`.

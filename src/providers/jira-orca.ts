@@ -4,7 +4,7 @@ import { unreadableOutput } from '../cli'
 import { isRecord, text } from '../json'
 import { orcaResult } from '../orca'
 import type { ProviderConfigs, Task } from '../protocol'
-import { jiraStatusCategory, requireJql } from './jira'
+import { jiraTask, requireJql } from './jira'
 import type { Provider } from './types'
 
 const LIMIT = 100
@@ -38,21 +38,18 @@ export function parseJiraSites(stdout: string): { id: string; name: string }[] {
 
 function toTasks(issues: unknown[]): Task[] {
   return issues.flatMap((issue): Task[] => {
-    if (!isRecord(issue) || !text(issue.key) || !text(issue.url)) return []
+    if (!isRecord(issue)) return []
     const status = isRecord(issue.status) ? issue.status : {}
-    const assignee = isRecord(issue.assignee) ? text(issue.assignee.displayName) : ''
-    return [
-      {
-        tracker: 'jira',
-        key: text(issue.key),
-        title: text(issue.title),
-        url: text(issue.url),
-        description: text(issue.description),
-        status: text(status.name) || null,
-        statusCategory: jiraStatusCategory(status.categoryKey),
-        assignees: assignee ? [assignee] : [],
-        labels: Array.isArray(issue.labels) ? issue.labels.filter((label): label is string => text(label) !== '') : []
-      }
-    ]
+    const task = jiraTask({
+      key: issue.key,
+      url: issue.url,
+      title: issue.title,
+      description: text(issue.description),
+      statusName: status.name,
+      categoryKey: status.categoryKey,
+      assignee: issue.assignee,
+      labels: issue.labels
+    })
+    return task ? [task] : []
   })
 }
