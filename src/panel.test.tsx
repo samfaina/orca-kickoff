@@ -95,10 +95,12 @@ test('says when no project is selected', async () => {
   await view.unmount()
 })
 
-test('says when the project has no tracker, without an error', async () => {
+test('a project without a provider shows the tracker settings, not an error', async () => {
   const view = await show({ kind: 'needs-config', project: { id: 'repo:r1', name: 'notes', repo: null } })
   assert.equal(view.find({ type: 'EmptyState' })?.label, 'No tracker for this project')
   assert.equal(view.find({ type: 'Callout' }), null)
+  assert.equal(view.valueOf({ type: 'Select', label: 'Tracker' }), ':none')
+  assert.deepEqual(optionLabels(view, 'Tracker'), ['Choose a tracker', 'GitHub', 'Jira (Orca connection)', 'Jira (twg)'])
   await view.unmount()
 })
 
@@ -192,6 +194,11 @@ const storedProject = (host: MockHost) => {
 }
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+function optionLabels(view: TestPanel, label: string): string[] {
+  const options = view.find({ type: 'Select', label })?.props.options as { label: string }[] | undefined
+  return (options ?? []).map((option) => option.label)
+}
 
 test('Start options show the agent choice and the template with its variables', async () => {
   const { view } = await showWith({ 'tasks.load': ready([task('#42')]) })
@@ -334,5 +341,139 @@ test("Start is disabled while Orca's worktrees couldn't be read", async () => {
   })
   assert.equal(view.find({ testId: 'start:#42' })?.disabled, true)
   assert.ok(view.find({ type: 'Text', text: /Orca is not running/ }))
+  await view.unmount()
+})
+
+const notes = { id: 'repo:r1', name: 'notes', repo: null }
+const SITES = { kind: 'ready' as const, sites: [{ id: 'site-1', name: 'Example' }, { id: 'site-2', name: 'Other' }] }
+
+/** The Tracker section closes once a list is loaded, unless the person left it open. */
+const openTracker = (view: TestPanel) => view.toggle({ type: 'Collapsible', label: 'Tracker' })
+
+test('the Tracker section is open while no list is loaded, and keeps how the person left it after', async () => {
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) })
+  assert.equal(view.find({ type: 'Select', label: 'Tracker' }), null)
+  await openTracker(view)
+  assert.ok(view.find({ type: 'Select', label: 'Tracker' }))
+  assert.deepEqual(view.persisted.plugin.trackerOpen, true)
+  await view.unmount()
+})
+
+test('a GitHub project shows GitHub as its tracker, without the "Choose a tracker" option', async () => {
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) })
+  await openTracker(view)
+  assert.equal(view.valueOf({ type: 'Select', label: 'Tracker' }), 'github')
+  assert.deepEqual(optionLabels(view, 'Tracker'), ['GitHub', 'Jira (Orca connection)', 'Jira (twg)'])
+  assert.equal(view.find({ type: 'Input', label: 'JQL' }), null)
+  await view.unmount()
+})
+
+test('choosing Jira (Orca connection) saves it with the default JQL, shows its settings and reloads', async () => {
+  let loads = 0
+  let seen: unknown
+  let host: MockHost | null = null
+  let view: TestPanel
+  ;({ view, host } = await showWith({
+    'tasks.load': () => {
+      seen = host?.data().storage.settings
+      return ++loads === 1 ? { kind: 'needs-config', project: notes } : ready([], { project: notes, provider: 'jira-orca' })
+    },
+    'jira.sites': SITES
+  }))
+  await view.select({ type: 'Select', label: 'Tracker' }, 'jira-orca')
+  assert.equal(loads, 2)
+  assert.deepEqual(seen, {
+    version: 1,
+    projects: {
+      'repo:r1': {
+        provider: 'jira-orca',
+        providers: { 'jira-orca': { jql: 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC', siteId: '' } }
+      }
+    }
+  })
+  assert.equal(view.valueOf({ type: 'Input', label: 'JQL' }), 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC')
+  assert.equal(view.valueOf({ type: 'Select', label: 'Site' }), ':default')
+  assert.deepEqual(optionLabels(view, 'Site'), ['Default site', 'Example', 'Other'])
+  assert.deepEqual(optionLabels(view, 'Tracker'), ['GitHub', 'Jira (Orca connection)', 'Jira (twg)'])
+  assert.ok(view.find({ type: 'Text', text: /Connect Jira in Orca's settings/ }))
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.warnings, [])
+  await view.unmount()
+})
+
+const jiraStored = (jql: string, siteId: string) => ({
+  settings: {
+    version: 1,
+    projects: {
+      'github:acme/web': {
+        provider: 'jira-orca',
+        providers: { 'jira-orca': { jql, siteId }, 'jira-twg': { jql: 'project = OLD', site: '', profile: 'work' } }
+      }
+    }
+  }
+})
+
+const jiraReady = (tasks: Task[] = []) => ready(tasks, { provider: 'jira-orca' })
+
+test("the JQL and site save themselves, keeping the other providers' settings, and Enter reloads", async () => {
+  let loads = 0
+  const { view, host } = await showWith(
+    { 'tasks.load': () => (loads++, jiraReady()), 'jira.sites': SITES },
+    jiraStored('project = WEB', 'site-1')
+  )
+  await openTracker(view)
+  assert.equal(view.valueOf({ type: 'Input', label: 'JQL' }), 'project = WEB')
+  assert.equal(view.valueOf({ type: 'Select', label: 'Site' }), 'site-1')
+  await view.type({ type: 'Input', label: 'JQL' }, 'project = API', { replace: true })
+  await view.select({ type: 'Select', label: 'Site' }, 'site-2')
+  await wait(800)
+  assert.deepEqual(storedProject(host), {
+    provider: 'jira-orca',
+    providers: { 'jira-orca': { jql: 'project = API', siteId: 'site-2' }, 'jira-twg': { jql: 'project = OLD', site: '', profile: 'work' } }
+  })
+  const before = loads
+  await view.submit({ type: 'Input', label: 'JQL' })
+  assert.equal(loads, before + 1)
+  await view.unmount()
+})
+
+test("a stored site that isn't connected any more stays selectable, and a site list failure is shown", async () => {
+  const { view } = await showWith(
+    { 'tasks.load': jiraReady(), 'jira.sites': { kind: 'error', message: 'orca failed: Orca is not running.' } },
+    jiraStored('project = WEB', 'site-9')
+  )
+  await openTracker(view)
+  assert.equal(view.valueOf({ type: 'Select', label: 'Site' }), 'site-9')
+  assert.deepEqual(optionLabels(view, 'Site'), ['Default site', 'site-9'])
+  assert.ok(view.find({ type: 'Text', text: /Orca is not running/ }))
+  await view.unmount()
+})
+
+test('a load failure keeps the provider settings visible', async () => {
+  const { view } = await showWith(
+    { 'tasks.load': { kind: 'error', project: web, message: 'orca failed: Error 400: JQL no válida.' }, 'jira.sites': SITES },
+    jiraStored('project = ', '')
+  )
+  assert.ok(view.find({ type: 'Callout', text: /JQL no válida/ }))
+  assert.equal(view.valueOf({ type: 'Select', label: 'Tracker' }), 'jira-orca')
+  assert.equal(view.valueOf({ type: 'Input', label: 'JQL' }), 'project = ')
+  await view.unmount()
+})
+
+test('after a site list failure or no connected site, reloading the tasks asks for the sites again', async () => {
+  const answers = [{ kind: 'error' as const, message: 'orca failed: Orca is not running.' }, { kind: 'ready' as const, sites: [] }, SITES]
+  let asked = 0
+  const { view } = await showWith(
+    { 'tasks.load': jiraReady(), 'jira.sites': () => answers[Math.min(asked++, answers.length - 1)] },
+    jiraStored('project = WEB', '')
+  )
+  await openTracker(view)
+  assert.ok(view.find({ type: 'Text', text: /Orca is not running/ }))
+  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  assert.deepEqual(optionLabels(view, 'Site'), ['Default site'])
+  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  assert.deepEqual(optionLabels(view, 'Site'), ['Default site', 'Example', 'Other'])
+  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  assert.equal(asked, 3)
   await view.unmount()
 })
