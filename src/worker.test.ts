@@ -199,9 +199,108 @@ test('the requests not built yet answer with data instead of throwing', async ()
   const { worker } = await start({})
   const active = await worker.request('project.active', {})
   assert.ok('kind' in active && active.kind === 'error')
-  assert.equal((await worker.request('jira.sites', {})).kind, 'error')
   assert.deepEqual(worker.refusals, [])
   await worker.deactivate()
+})
+
+const JIRA_SEARCH = wrap([
+  {
+    key: 'WEB-12',
+    title: 'Añadir modo oscuro a ajustes',
+    description: '',
+    url: 'https://example.atlassian.net/browse/WEB-12',
+    status: { name: 'Por hacer', categoryKey: 'new' },
+    labels: []
+  },
+  { key: 'WEB-13', title: 'Arreglar el login', description: '', url: 'https://example.atlassian.net/browse/WEB-13', status: { name: 'Por hacer', categoryKey: 'new' }, labels: [] }
+])
+
+const jiraSettings = (siteId = '') => ({
+  settings: { version: 1, projects: { 'github:acme/web': { provider: 'jira-orca', providers: { 'jira-orca': { jql: 'project = WEB', siteId } } } } }
+})
+
+test("a project on Jira (Orca connection) lists the JQL's tasks, with task worktrees linked or named after them", async () => {
+  const { worker, calls } = await start(
+    {
+      ...ORCA_OK,
+      'orca worktree list': worktreesWith(
+        {
+          id: 'r1::/src/dark', projectId: 'github:acme/web', displayName: 'dark-mode', isArchived: false, linkedIssue: null,
+          linkedItems: [{ provider: 'jira', type: 'issue', number: 0, identifier: 'web-12', jiraIdentifier: 'web-12', url: 'https://example.atlassian.net/browse/WEB-12' }]
+        },
+        { id: 'r1::/src/login', projectId: 'github:acme/web', displayName: 'web-13-arreglar-el-login', isArchived: false, linkedIssue: null, linkedItems: [] }
+      ),
+      'orca jira search': JIRA_SEARCH
+    },
+    { storage: jiraSettings('site-2') }
+  )
+  const list = await worker.request('tasks.load', {})
+  assert.ok(list.kind === 'ready')
+  assert.equal(list.provider, 'jira-orca')
+  assert.deepEqual(list.tasks.map((task) => task.key), ['WEB-12', 'WEB-13'])
+  assert.deepEqual(list.worktrees, {
+    'WEB-12': { worktreeId: 'r1::/src/dark', name: 'dark-mode', agent: null },
+    'WEB-13': { worktreeId: 'r1::/src/login', name: 'web-13-arreglar-el-login', agent: null }
+  })
+  const search = calls.find((call) => call.args[0] === 'jira')
+  assert.deepEqual(search?.args, ['jira', 'search', 'project = WEB', '--limit', '100', '--json', '--site', 'site-2'])
+})
+
+test('a blank JQL is an error asking for one, and keeps the project so the settings stay', async () => {
+  const settings = { version: 1, projects: { 'github:acme/web': { provider: 'jira-orca', providers: { 'jira-orca': { jql: '', siteId: '' } } } } }
+  const { worker, calls } = await start({ ...ORCA_OK }, { storage: { settings } })
+  const list = await worker.request('tasks.load', {})
+  assert.ok(list.kind === 'error' && list.project?.id === 'github:acme/web')
+  assert.match(list.message, /Enter a JQL query/)
+  assert.equal(calls.some((call) => call.args[0] === 'jira'), false)
+})
+
+test("jira.sites answers the connected sites' ids and names, never email", async () => {
+  const connection = wrap({
+    connected: true,
+    sites: [{ id: 'site-1', siteUrl: 'https://example.atlassian.net', displayName: 'Example', email: 'ana@example.com' }],
+    viewer: { email: 'ana@example.com' }
+  })
+  const { worker, calls } = await start({ 'orca jira connection': connection })
+  assert.deepEqual(await worker.request('jira.sites', {}), { kind: 'ready', sites: [{ id: 'site-1', name: 'Example' }] })
+  assert.deepEqual(calls[0].args, ['jira', 'connection', '--json'])
+})
+
+test('jira.sites answers a failure as data', async () => {
+  const { worker } = await start({ 'orca jira connection': new CliError('orca failed: Orca is not running.') })
+  assert.deepEqual(await worker.request('jira.sites', {}), { kind: 'error', message: 'orca failed: Orca is not running.' })
+})
+
+const web12: Task = {
+  tracker: 'jira',
+  key: 'WEB-12',
+  title: 'Añadir modo oscuro a ajustes',
+  url: 'https://example.atlassian.net/browse/WEB-12',
+  description: '',
+  status: 'Por hacer',
+  statusCategory: 'todo',
+  assignees: [],
+  labels: []
+}
+
+test('Start on Jira links the worktree with --reference <task URL>, never --issue', async () => {
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED }, { storage: jiraSettings() })
+  assert.deepEqual(await worker.request('task.start', { projectId: 'github:acme/web', task: web12 }), { ok: true })
+  assert.deepEqual(creates(calls)[0].args, [
+    'worktree', 'create', '--project', 'github:acme/web', '--name', 'web-12-anadir-modo-oscuro-a', '--no-parent', '--json',
+    '--reference', 'https://example.atlassian.net/browse/WEB-12',
+    '--agent', 'claude', '--prompt', 'Complete WEB-12: https://example.atlassian.net/browse/WEB-12'
+  ])
+})
+
+test("a Start of a Jira task already linked in Orca doesn't run worktree create", async () => {
+  const linked = {
+    id: 'r1::/src/dark', projectId: 'github:acme/web', displayName: 'dark-mode', isArchived: false, linkedIssue: null,
+    linkedItems: [{ provider: 'jira', type: 'issue', jiraIdentifier: 'WEB-12', url: 'https://example.atlassian.net/browse/WEB-12' }]
+  }
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree list': worktreesWith(linked) }, { storage: jiraSettings() })
+  assert.deepEqual(await worker.request('task.start', { projectId: 'github:acme/web', task: web12 }), { ok: true })
+  assert.equal(creates(calls).length, 0)
 })
 
 test('worktrees.load answers the task worktrees of a project', async () => {
