@@ -20,9 +20,7 @@ function blockLines(node: unknown): string[] {
     case 'paragraph':
     case 'heading':
     case 'codeBlock':
-      return inlineText(children(node))
-        .split('\n')
-        .filter((line, _, lines) => lines.length > 1 || line.trim() !== '')
+      return withoutTrailingBlankLines(inlineText(children(node)).split('\n'))
     case 'bulletList':
       return children(node).flatMap((item) => listItemLines(item, '- '))
     case 'orderedList': {
@@ -34,6 +32,14 @@ function blockLines(node: unknown): string[] {
     default:
       return children(node).flatMap(blockLines)
   }
+}
+
+/** `lines` without the blank ones at the end, so an empty paragraph gives no line and a trailing
+ *  line break adds none. Blank lines in between, as in a code block, stay. */
+function withoutTrailingBlankLines(lines: string[]): string[] {
+  let end = lines.length
+  while (end > 0 && lines[end - 1].trim() === '') end--
+  return lines.slice(0, end)
 }
 
 /** A list item's lines: the first after its marker, the rest indented under it. */

@@ -25,7 +25,7 @@ const issue = (key: string, fields: Record<string, unknown> = {}) => ({
   ...fields
 })
 
-/** A `twg jira workitem query --output json` answer, trimmed from a real one. */
+/** A `twg jira workitem query --output json` answer: a real one's shape, trimmed, with invented values. */
 const response = (issues: unknown[], pageInfo?: unknown) =>
   JSON.stringify({
     apiVersion: 'v2',
@@ -59,7 +59,7 @@ const ana = {
   emailAddress: 'ana@example.com',
   displayName: 'Ana Example',
   active: true,
-  timeZone: 'Europe/Madrid',
+  timeZone: 'UTC',
   accountType: 'atlassian'
 }
 
@@ -76,11 +76,11 @@ test('a trimmed real response becomes tasks, with the status category rather tha
     type: 'doc',
     version: 1,
     content: [
-      { type: 'paragraph', content: [{ type: 'text', text: 'La página de ajustes necesita un tema oscuro.' }] },
+      { type: 'paragraph', content: [{ type: 'text', text: 'The settings page needs a dark theme.' }] },
       {
         type: 'orderedList',
         attrs: { order: 1 },
-        content: [{ type: 'listItem', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Colores' }] }] }]
+        content: [{ type: 'listItem', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Colors' }] }] }]
       }
     ]
   }
@@ -89,7 +89,7 @@ test('a trimmed real response becomes tasks, with the status category rather tha
       issue('WEB-12', {
         expand: 'renderedFields',
         self: 'https://example.atlassian.net/rest/api/3/issue/10012',
-        summary: 'Añadir modo oscuro a ajustes',
+        summary: 'Add dark mode to settings',
         assignee: ana,
         status: status('En curso', 'indeterminate'),
         labels: ['ui'],
@@ -97,7 +97,7 @@ test('a trimmed real response becomes tasks, with the status category rather tha
       }),
       issue('WEB-13', { status: status('Listo', 'done') }),
       issue('WEB-14', { description: null }),
-      issue('WEB-15', { status: status('Raro', 'other') })
+      issue('WEB-15', { status: status('Odd', 'other') })
     ])
   )
   const page = await jiraTwg.list(run, notes, config)
@@ -105,9 +105,9 @@ test('a trimmed real response becomes tasks, with the status category rather tha
   assert.deepEqual(page.tasks[0], {
     tracker: 'jira',
     key: 'WEB-12',
-    title: 'Añadir modo oscuro a ajustes',
+    title: 'Add dark mode to settings',
     url: 'https://example.atlassian.net/browse/WEB-12',
-    description: 'La página de ajustes necesita un tema oscuro.\n1. Colores',
+    description: 'The settings page needs a dark theme.\n1. Colors',
     status: 'En curso',
     statusCategory: 'in_progress',
     assignees: ['Ana Example'],
@@ -132,8 +132,8 @@ test('an item without key or URL is dropped', async () => {
 test('the arguments include --output json, and --site, --profile and --after only when set', async () => {
   const { run, calls } = answering(response([]))
   await jiraTwg.list(run, notes, config)
-  await jiraTwg.list(run, notes, { jql: 'project = WEB', site: 'example', profile: 'work' }, 'cursor-2')
-  await jiraTwg.list(run, notes, config, '')
+  await jiraTwg.list(run, notes, { jql: 'project = WEB', site: ' example ', profile: 'work' }, 'cursor-2')
+  await jiraTwg.list(run, notes, { jql: 'project = WEB', site: '  ', profile: ' ' }, '')
   assert.deepEqual(calls[0], { tool: 'twg', args: BASE_ARGS })
   assert.deepEqual(calls[1].args, [...BASE_ARGS, '--site', 'example', '--profile', 'work', '--after', 'cursor-2'])
   assert.deepEqual(calls[2].args, BASE_ARGS)
