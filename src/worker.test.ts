@@ -151,12 +151,34 @@ test('a project without a repo or a chosen provider needs configuration, not an 
   assert.deepEqual(await worker.request('tasks.load', {}), { kind: 'needs-config', project: { id: 'repo:r2', name: 'notes', repo: null } })
 })
 
-test('a provider this version cannot read yet is an error that keeps the project', async () => {
-  const settings = { version: 1, projects: { 'github:acme/web': { provider: 'jira-twg', providers: {} } } }
-  const { worker } = await start({ ...ORCA_OK }, { storage: { settings } })
-  const list = await worker.request('tasks.load', {})
-  assert.equal(list.kind, 'error')
-  assert.ok(list.kind === 'error' && list.project?.id === 'github:acme/web')
+test('a project with Jira (twg) lists its tasks through twg, one page at a time', async () => {
+  const settings = {
+    version: 1,
+    projects: { 'github:acme/web': { provider: 'jira-twg', providers: { 'jira-twg': { jql: 'project = WEB', site: '', profile: 'work' } } } }
+  }
+  const page = (key: string, nextCursor: string | null) =>
+    JSON.stringify({
+      data: { issues: [{ key, summary: `Task ${key}`, assignee: null, url: `https://example.atlassian.net/browse/${key}` }] },
+      ...(nextCursor ? { pageInfo: { hasNextPage: true, nextCursor } } : {})
+    })
+  const { worker, calls } = await start(
+    { ...ORCA_OK, 'twg jira workitem': (args) => (args.includes('--after') ? page('WEB-2', null) : page('WEB-1', 'cursor-2')) },
+    { storage: { settings } }
+  )
+  const first = await worker.request('tasks.load', {})
+  assert.ok(first.kind === 'ready')
+  assert.equal(first.provider, 'jira-twg')
+  assert.deepEqual(first.tasks.map((task) => task.key), ['WEB-1'])
+  assert.equal(first.nextCursor, 'cursor-2')
+
+  const second = await worker.request('tasks.load', { cursor: 'cursor-2' })
+  assert.ok(second.kind === 'ready')
+  assert.deepEqual(second.tasks.map((task) => task.key), ['WEB-2'])
+  assert.equal(second.nextCursor, null)
+  const twgCalls = calls.filter((call) => call.tool === 'twg')
+  assert.equal(twgCalls.length, 2)
+  assert.deepEqual(twgCalls[0].args.slice(-2), ['--profile', 'work'])
+  assert.deepEqual(twgCalls[1].args.slice(-4), ['--profile', 'work', '--after', 'cursor-2'])
 })
 
 test("when Orca fails, its real message is shown, or the last known project is used with a warning", async () => {
