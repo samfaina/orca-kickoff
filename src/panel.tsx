@@ -62,6 +62,9 @@ const START_TIMEOUT_MS = 60_000
 const SAVE_DELAY_MS = 600
 /** How often the panel asks for the active project while it is visible. */
 const POLL_MS = 3_000
+/** Orca detects the agent of a new worktree a few seconds after its create ends, so the panel
+ *  reads the worktrees once more after this pause. */
+const AGENT_CHECK_MS = 5_000
 
 const AGENT_OPTIONS = [
   { value: 'orca-default', label: 'Orca default' },
@@ -107,6 +110,10 @@ const endedEarly = new Map<string, StartEnded>()
 let startClock = 0
 /** When each task's `task.start` answered that it is under way, on `startClock`. */
 const underWaySince = new Map<string, number>()
+/** Task keys whose Start passed an agent that Orca doesn't report running yet. */
+const agentStarting = atom<Record<string, true>>({})
+/** The pending read of the worktrees for each task in `agentStarting`. */
+const agentChecks = new Map<string, ReturnType<typeof setTimeout>>()
 /** The error of each task's last Start, or of opening its worktree. */
 const taskErrors = atom<Record<string, string>>({})
 
@@ -336,16 +343,41 @@ function onStartEnded(end: StartEnded): void {
 
 async function endStart(end: StartEnded): Promise<void> {
   if (readyProjectId() !== end.projectId) return
-  await finishStart(end.projectId, end.taskKey, end.ok ? null : end.message)
+  await finishStart(end.projectId, end.taskKey, end.ok ? null : end.message, end.agent)
 }
 
 /** Clears a Start's spinner once Orca's worktrees are read again, and shows its error unless the
- *  task now has a worktree: a Start that timed out may have finished. */
-async function finishStart(projectId: string, key: string, error: string | null): Promise<void> {
+ *  task now has a worktree: a Start that timed out may have finished. When the Start passed an
+ *  agent that Orca doesn't report yet, the card says it is starting until one more read. */
+async function finishStart(projectId: string, key: string, error: string | null, agent: string | null = null): Promise<void> {
   const worktrees = await refreshWorktrees(projectId)
   underWaySince.delete(key)
   update(starting, ({ [key]: _, ...rest }) => rest)
-  if (readyProjectId() === projectId) setTaskError(key, worktrees?.[key] ? null : error)
+  if (readyProjectId() !== projectId) return
+  const worktree = worktrees?.[key]
+  setTaskError(key, worktree ? null : error)
+  if (agent !== null && worktree && worktree.agent === null) checkAgentLater(projectId, key)
+}
+
+/** Shows the task's agent as starting, and reads the worktrees again after a pause; from then on
+ *  the card shows what Orca reports. */
+function checkAgentLater(projectId: string, key: string): void {
+  update(agentStarting, (keys): Record<string, true> => ({ ...keys, [key]: true as const }))
+  const earlier = agentChecks.get(key)
+  if (earlier !== undefined) clearTimeout(earlier)
+  agentChecks.set(
+    key,
+    setTimeout(() => {
+      agentChecks.delete(key)
+      void refreshWorktrees(projectId).finally(() => update(agentStarting, ({ [key]: _, ...rest }) => rest))
+    }, AGENT_CHECK_MS)
+  )
+}
+
+/** Cancels the pending reads of `checkAgentLater`, when the panel closes. */
+function cancelAgentChecks(): void {
+  for (const timer of agentChecks.values()) clearTimeout(timer)
+  agentChecks.clear()
 }
 
 async function openWorktree(key: string, worktreeId: string): Promise<void> {
@@ -380,6 +412,7 @@ export function setup(ctx: PanelContext): void {
   ctx.subscriptions.push(on('workspace.changed', reload))
   ctx.subscriptions.push(plugin.on('start.ended', onStartEnded))
   ctx.subscriptions.push({ dispose: () => void flushSettings() })
+  ctx.subscriptions.push({ dispose: cancelAgentChecks })
 
   // Orca sends no workspace.changed between two worktrees with the same branch and name, such
   // as two `main` worktrees of different projects, so the panel also asks while it is visible,
@@ -641,7 +674,7 @@ function TaskCard({ task, worktrees }: { task: Task; worktrees: Record<string, T
         <Row gap="xs" align="center" wrap>
           <Link onPress={() => void openWorktree(task.key, worktree.worktreeId)}>{worktree.name}</Link>
           <Text size="sm" muted>
-            {worktree.agent ? `Agent: ${worktree.agent}` : 'No agent running'}
+            {worktree.agent ? `Agent: ${worktree.agent}` : read(agentStarting)[task.key] ? 'Agent starting…' : 'No agent running'}
           </Text>
         </Row>
       ) : null}
