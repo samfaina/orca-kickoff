@@ -204,8 +204,10 @@ export type ActionResult = { ok: true } | { ok: false; message: string }
  *  otherwise the task already has its worktree. */
 export type StartResult = { ok: true; underWay: boolean } | { ok: false; message: string }
 
-/** Posted when the `worktree create` of a Start under way ends. A timeout is a failure. */
-export type StartEnded = { projectId: string; taskKey: string } & ActionResult
+/** Posted when the `worktree create` of a Start under way ends. A timeout is a failure. `agent`
+ *  is the agent the create passed, null for none: Orca reports it running only a few seconds
+ *  after the create ends. */
+export type StartEnded = { projectId: string; taskKey: string; agent: string | null } & ActionResult
 
 declare module 'orca' {
   interface PluginRequests {
