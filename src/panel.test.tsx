@@ -53,9 +53,10 @@ const turn = () => new Promise<void>((resolve) => setImmediate(resolve))
 /** Waits until the panel draws an element that matches `query`, for a state drawn while a request
  *  is held, when `settled()` would wait for that request. Orca's test runtime draws on its own
  *  event-loop turn, so this yields turns, and fails if the element never appears. */
-async function drawn(view: TestPanel, query: TestQuery): Promise<void> {
+async function drawn(view: TestPanel, query: TestQuery, eachTurn: () => void = () => {}): Promise<void> {
   for (let turns = 0; turns < 100; turns++) {
     if (view.find(query)) return
+    eachTurn()
     await turn()
   }
   assert.fail(`the panel never drew ${JSON.stringify(query)}`)
@@ -691,6 +692,132 @@ test('after a Start with an agent, the card says the agent is starting until Orc
     await fire(view)
     assert.ok(view.find({ type: 'Text', text: 'Agent: claude' }))
     assert.equal(view.find({ type: 'Text', text: 'Agent starting…' }), null)
+    await view.unmount()
+  })
+})
+
+/** `drawn`, while another act waits for a held request. That act draws nothing more until the
+ *  request answers, so each turn asks for a draw with `rerender`, as Orca would draw a change.
+ *  Returns the rerenders, which also wait for the held request: await them once it is released. */
+async function drawnWhileHeld(view: TestPanel, query: TestQuery): Promise<Promise<void>[]> {
+  const rerenders: Promise<void>[] = []
+  await drawn(view, query, () => rerenders.push(view.rerender()))
+  return rerenders
+}
+
+test('after a Start with an agent, no card says no agent is running before it says the agent is starting', async () => {
+  await withTimeouts(AGENT_CHECK_MS, async ({ pending }) => {
+    const refresh = held()
+    let created = false
+    const { view } = await showWith({
+      'tasks.load': () => ready([task('#42')], { worktrees: created ? { '#42': { ...started, agent: null } } : {} }),
+      'task.start': { ok: true, underWay: true },
+      'worktrees.load': async () => {
+        await refresh.released
+        return { kind: 'ready', worktrees: { '#42': { ...started, agent: null } } }
+      }
+    })
+    await view.press({ testId: 'start:#42' })
+    // Orca hasn't detected the new agent yet when the create ends, and it switches to the new
+    // worktree while the Start reads the worktrees again, so the list loads again meanwhile.
+    created = true
+    const ended = view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', agent: 'claude', ok: true })
+    const switched = view.emit('workspace.changed', { context: { branch: 'issue-42-add-dark-mode', displayName: 'web', terminals: [] } })
+    const rerenders = await drawnWhileHeld(view, { type: 'Link', text: 'issue-42-add-dark-mode' })
+    const flashed = view.find({ type: 'Text', text: 'No agent running' })
+    const startingWhileRead = view.find({ type: 'Text', text: 'Agent starting…' })
+    refresh.release()
+    await Promise.all([ended, switched, ...rerenders])
+    assert.equal(flashed, null)
+    assert.ok(startingWhileRead)
+    assert.ok(view.find({ type: 'Text', text: 'Agent starting…' }))
+    assert.equal(pending(), 1)
+    await view.unmount()
+  })
+})
+
+test('after a Start with an agent that Orca already reports, the card shows it and reads the worktrees no more', async () => {
+  await withTimeouts(AGENT_CHECK_MS, async ({ pending }) => {
+    let worktrees = {}
+    const { view } = await showWith({
+      'tasks.load': ready([task('#42')]),
+      'task.start': { ok: true, underWay: true },
+      'worktrees.load': () => ({ kind: 'ready', worktrees })
+    })
+    await view.press({ testId: 'start:#42' })
+    worktrees = { '#42': started }
+    await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', agent: 'claude', ok: true })
+    assert.ok(view.find({ type: 'Text', text: 'Agent: claude' }))
+    assert.equal(view.find({ type: 'Text', text: 'Agent starting…' }), null)
+    assert.equal(pending(), 0)
+    await view.unmount()
+  })
+})
+
+test('after a Start with an agent that left no worktree, the card shows its error and no agent starting', async () => {
+  await withTimeouts(AGENT_CHECK_MS, async ({ pending }) => {
+    const { view } = await showWith({
+      'tasks.load': ready([task('#42')]),
+      'task.start': { ok: true, underWay: true },
+      'worktrees.load': { kind: 'ready', worktrees: {} }
+    })
+    await view.press({ testId: 'start:#42' })
+    await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', agent: 'claude', ok: false, message: 'Orca could not create the worktree.' })
+    assert.ok(view.find({ type: 'Text', text: 'Orca could not create the worktree.' }))
+    assert.ok(view.find({ testId: 'start:#42' }))
+    assert.equal(view.find({ type: 'Text', text: 'Agent starting…' }), null)
+    assert.equal(pending(), 0)
+    await view.unmount()
+  })
+})
+
+test("after a Start with an agent whose worktree Orca doesn't list yet, the card shows Start and no agent starting", async () => {
+  await withTimeouts(AGENT_CHECK_MS, async ({ pending }) => {
+    const { view } = await showWith({
+      'tasks.load': ready([task('#42')]),
+      'task.start': { ok: true, underWay: true },
+      'worktrees.load': { kind: 'ready', worktrees: {} }
+    })
+    await view.press({ testId: 'start:#42' })
+    await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', agent: 'claude', ok: true })
+    assert.ok(view.find({ testId: 'start:#42' }))
+    assert.equal(view.find({ type: 'Text', text: 'Agent starting…' }), null)
+    assert.equal(pending(), 0)
+    await view.unmount()
+  })
+})
+
+test("an earlier Start's delayed load in another project doesn't end the agent starting of a new Start", async () => {
+  await withTimeouts(AGENT_CHECK_MS, async ({ fire, pending }) => {
+    const refresh = held()
+    let project = web
+    let webReads = 0
+    let apiAsked = false
+    const { view } = await showWith({
+      'tasks.load': () => ready([task('#42')], { project, worktrees: {} }),
+      'task.start': { ok: true, underWay: true },
+      'worktrees.load': async ({ projectId }: { projectId: string }) => {
+        if (projectId === web.id) return (webReads++, { kind: 'ready', worktrees: { '#42': { ...started, agent: null } } })
+        apiAsked = true
+        await refresh.released
+        return { kind: 'ready', worktrees: { '#42': { ...started, worktreeId: 'r2::/src/api-42', agent: null } } }
+      }
+    })
+    await view.press({ testId: 'start:#42' })
+    await view.post('start.ended', { projectId: web.id, taskKey: '#42', agent: 'claude', ok: true })
+    project = api
+    await view.emit('workspace.changed', { context: { branch: 'main', displayName: 'api', terminals: [] } })
+    await view.press({ testId: 'start:#42' })
+    const ended = view.post('start.ended', { projectId: api.id, taskKey: '#42', agent: 'claude', ok: true })
+    for (let turns = 0; turns < 100 && !apiAsked; turns++) await turn()
+    // The web Start's delayed load runs while the api Start reads the worktrees.
+    const fired = fire(view)
+    for (let turns = 0; turns < 100 && webReads < 2; turns++) await turn()
+    assert.equal(webReads, 2)
+    refresh.release()
+    await Promise.all([ended, fired])
+    assert.ok(view.find({ type: 'Text', text: 'Agent starting…' }))
+    assert.equal(pending(), 1)
     await view.unmount()
   })
 })
