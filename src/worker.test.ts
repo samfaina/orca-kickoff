@@ -217,10 +217,22 @@ test('the task list carries task worktrees with their running agent', async () =
   assert.deepEqual(list.worktrees, { '#42': { worktreeId: 'r1::/src/web-42', name: 'issue-42-add-dark-mode', agent: 'claude' } })
 })
 
-test('the requests not built yet answer with data instead of throwing', async () => {
-  const { worker } = await start({})
-  const active = await worker.request('project.active', {})
-  assert.ok('kind' in active && active.kind === 'error')
+test("project.active answers the active worktree's project id, or null with none active", async () => {
+  const { worker, calls, answer } = await start(ORCA_OK)
+  assert.deepEqual(await worker.request('project.active', {}), { projectId: 'github:acme/web' })
+  // The panel asks every few seconds, so only the two queries that tell it run.
+  assert.deepEqual(calls.map((call) => call.args.slice(0, 2).join(' ')).sort(), ['worktree list', 'worktree ps'])
+
+  answer({ ...ORCA_OK, 'orca worktree ps': wrap({ worktrees: [{ worktreeId: 'r2::/src/notes', isActive: true, agents: [] }] }) })
+  assert.deepEqual(await worker.request('project.active', {}), { projectId: 'repo:r2' })
+
+  answer({ ...ORCA_OK, 'orca worktree ps': wrap({ worktrees: [{ worktreeId: 'r1::/src/web', isActive: false, agents: [] }] }) })
+  assert.deepEqual(await worker.request('project.active', {}), { projectId: null })
+})
+
+test("project.active answers Orca's real message as data when Orca fails", async () => {
+  const { worker } = await start({ ...ORCA_OK, 'orca worktree ps': new CliError('orca failed: Orca is not running.') })
+  assert.deepEqual(await worker.request('project.active', {}), { kind: 'error', message: 'orca failed: Orca is not running.' })
   assert.deepEqual(worker.refusals, [])
   await worker.deactivate()
 })

@@ -57,6 +57,8 @@ const LOAD_TIMEOUT_MS = 90_000
 const START_TIMEOUT_MS = 120_000
 /** Start options save themselves after this pause. */
 const SAVE_DELAY_MS = 600
+/** How often the panel asks for the active project while it is visible. */
+const POLL_MS = 3_000
 
 const AGENT_OPTIONS = [
   { value: 'orca-default', label: 'Orca default' },
@@ -293,6 +295,14 @@ function errorCode(error: unknown): string {
   return isRecord(error) && typeof error.code === 'string' ? error.code : 'unknown error'
 }
 
+/** The listed project's id, null when no project is selected, or undefined when the list says
+ *  neither. */
+function listedProjectId(): string | null | undefined {
+  const current = read(list)
+  if (current?.kind === 'no-project') return null
+  return current && 'project' in current && current.project ? current.project.id : undefined
+}
+
 export function setup(ctx: PanelContext): void {
   let started = false
   const reload = () => {
@@ -302,6 +312,30 @@ export function setup(ctx: PanelContext): void {
   // Orca sends the current context to each new subscriber; load now only if it hasn't yet.
   ctx.subscriptions.push(on('workspace.changed', reload))
   ctx.subscriptions.push({ dispose: () => void flushSettings() })
+
+  // Orca sends no workspace.changed between two worktrees with the same branch and name, such
+  // as two `main` worktrees of different projects, so the panel also asks while it is visible.
+  // A change is measured against the last answer, so a project the list can't show doesn't
+  // reload it on every poll; the first answer is measured against the list.
+  let polled: string | null | undefined
+  let polling = false
+  const poll = async () => {
+    if (polling || !read(ctx.visible)) return
+    polling = true
+    try {
+      const answer = await plugin.request('project.active', {})
+      if (!('projectId' in answer)) return
+      const before = polled === undefined ? listedProjectId() : polled
+      polled = answer.projectId
+      if (before !== undefined && answer.projectId !== before) reload()
+    } catch {
+      // The worker didn't answer: the next poll asks again.
+    } finally {
+      polling = false
+    }
+  }
+  const timer = setInterval(() => void poll(), POLL_MS)
+  ctx.subscriptions.push({ dispose: () => clearInterval(timer) })
   if (!started) reload()
 }
 
