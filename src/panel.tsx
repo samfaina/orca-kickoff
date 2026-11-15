@@ -351,19 +351,23 @@ async function endStart(end: StartEnded): Promise<void> {
 }
 
 /** Clears a Start's spinner once Orca's worktrees are read again, and shows its error unless the
- *  task now has a worktree: a Start that timed out may have finished. When the Start passed an
- *  agent, the card says it is starting from before that read, so it never shows the new worktree
- *  without one, until Orca reports the agent or one more read. */
+ *  task now has a worktree: a Start that timed out may have finished.
+ *
+ *  A Start that passed an agent marks it as starting before that read, so no card draws the new
+ *  worktree as having no agent. The read ends the mark when Orca already reports the agent
+ *  (`agentsReported`), and so does a read that finds no worktree or a project that changed. A mark
+ *  that is left gets one more read later. */
 async function finishStart(projectId: string, key: string, error: string | null, agent: string | null): Promise<void> {
   if (agent !== null) update(agentStarting, (keys) => ({ ...keys, [key]: projectId }))
   const worktrees = await refreshWorktrees(projectId)
   underWaySince.delete(key)
   update(starting, ({ [key]: _, ...rest }) => rest)
-  const worktree = readyProjectId() === projectId ? worktrees?.[key] : undefined
-  if (!worktree) stopAgentStarting(projectId, key)
-  if (readyProjectId() !== projectId) return
+  const worktree = worktrees?.[key]
+  const shown = readyProjectId() === projectId
+  if (!shown || !worktree) stopAgentStarting(projectId, key)
+  if (!shown) return
   setTaskError(key, worktree ? null : error)
-  if (read(agentStarting)[key] === projectId) checkAgentLater(projectId, key)
+  if (agent !== null && read(agentStarting)[key] === projectId) checkAgentLater(projectId, key)
 }
 
 /** Stops showing the task's agent as starting in the project. */
@@ -384,7 +388,7 @@ function checkAgentLater(projectId: string, key: string): void {
     key,
     setTimeout(() => {
       agentChecks.delete(key)
-      void refreshWorktrees(projectId).finally(() => update(agentStarting, ({ [key]: _, ...rest }) => rest))
+      void refreshWorktrees(projectId).finally(() => stopAgentStarting(projectId, key))
     }, AGENT_CHECK_MS)
   )
 }
@@ -392,10 +396,7 @@ function checkAgentLater(projectId: string, key: string): void {
 /** Stops showing as starting the agents of the project's tasks whose worktree Orca now reports
  *  running one. */
 function agentsReported(projectId: string, worktrees: Record<string, TaskWorktree>): void {
-  const shown = read(agentStarting)
-  const reported = Object.keys(shown).filter((key) => shown[key] === projectId && worktrees[key]?.agent)
-  if (reported.length === 0) return
-  set(agentStarting, Object.fromEntries(Object.entries(shown).filter(([key]) => !reported.includes(key))))
+  for (const key of Object.keys(read(agentStarting))) if (worktrees[key]?.agent) stopAgentStarting(projectId, key)
 }
 
 /** Cancels the pending reads of `checkAgentLater`, when the panel closes. */
