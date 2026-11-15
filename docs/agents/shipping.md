@@ -15,7 +15,7 @@ Read by the `ship-tickets` skill (samfaina/agent-skills).
 - **Title:** the issue title, unchanged.
 - **Body:**
   1. `## Summary`: what the PR adds or changes, with the file layout when files are added, and any fact recorded in `docs/reference.md`.
-  2. `## Evidence`: **Before** and **After**, with each check command (`orca plugin validate .`, `orca plugin test .`, `orca plugin check .`, and anything confirmed manually inside Orca) and its result.
+  2. `## Evidence`: **Before** and **After**, with each check command (`orca plugin validate .`, `orca plugin test .`, `orca plugin check .`, `npx -y -p typescript@5.6.3 tsc -p .`, and anything confirmed manually inside Orca) and its result.
   3. `## Merge Danger`: **Door** (one-way or two-way), **Blast Radius**, and a sentence on what depends on the change.
 
   End with `Closes #<n>`.
