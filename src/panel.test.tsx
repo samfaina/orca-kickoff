@@ -920,6 +920,139 @@ test('no delayed worktrees.load runs after the panel is deactivated', async () =
   })
 })
 
+/** How long the panel waits after a workspace is created or removed before it reads the worktrees. */
+const WORKSPACE_REFRESH_MS = 300
+
+const removed = { workspaceId: 'r1::/src/web-42', kind: 'worktree' as const, path: '/src/web-42' }
+const created = { ...removed, branch: 'someone/issue-42-add-dark-mode' }
+
+test('a removed worktree reads the worktrees again once, and its card shows Start again', async () => {
+  await withTimeouts(WORKSPACE_REFRESH_MS, async ({ fire, pending }) => {
+    const reads: unknown[] = []
+    const { view } = await showWith({
+      'tasks.load': ready([task('#42'), task('#7')], { worktrees: { '#42': started } }),
+      'worktrees.load': (input) => (reads.push(input), { kind: 'ready', worktrees: {} })
+    })
+    assert.ok(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }))
+    await view.emit('workspace.removed', removed)
+    assert.equal(pending(), 1)
+    await fire(view)
+    assert.deepEqual(reads, [{ projectId: 'github:acme/web' }])
+    assert.equal(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }), null)
+    assert.ok(view.find({ testId: 'start:#42' }))
+    assert.ok(view.find({ testId: 'start:#7' }))
+    await view.unmount()
+  })
+})
+
+test('workspaces created and removed within the pause read the worktrees once', async () => {
+  await withTimeouts(WORKSPACE_REFRESH_MS, async ({ fire, pending }) => {
+    let reads = 0
+    const { view } = await showWith({
+      'tasks.load': ready([task('#42')]),
+      'worktrees.load': () => (reads++, { kind: 'ready', worktrees: {} })
+    })
+    await view.emit('workspace.created', created)
+    await view.emit('workspace.removed', removed)
+    await view.emit('workspace.created', { ...created, kind: 'folder' })
+    await view.emit('workspace.removed', { ...removed, workspaceId: 'r1::/src/web-7' })
+    assert.equal(pending(), 1)
+    await fire(view)
+    assert.equal(reads, 1)
+    await view.unmount()
+  })
+})
+
+test('a workspace event reads no worktrees while no project is listed, nor after the panel closes', async () => {
+  await withTimeouts(WORKSPACE_REFRESH_MS, async ({ fire, pending }) => {
+    let reads = 0
+    const worktreesLoad = () => (reads++, { kind: 'ready' as const, worktrees: {} })
+    const none = await showWith({ 'tasks.load': { kind: 'no-project' }, 'worktrees.load': worktreesLoad })
+    await none.view.emit('workspace.removed', removed)
+    await fire(none.view)
+    await none.view.unmount()
+
+    const closed = await showWith({ 'tasks.load': ready([task('#42')]), 'worktrees.load': worktreesLoad })
+    await closed.view.emit('workspace.removed', removed)
+    await closed.view.unmount()
+    assert.equal(pending(), 0)
+    assert.equal(reads, 0)
+  })
+})
+
+test("a workspace event during a Start under way reads the worktrees but leaves that card's spinner", async () => {
+  await withTimeouts(WORKSPACE_REFRESH_MS, async ({ fire }) => {
+    let reads = 0
+    const other = { worktreeId: 'r1::/src/web-7', name: 'issue-7-task-7', agent: null }
+    const { view } = await showWith({
+      'tasks.load': ready([task('#42'), task('#7')]),
+      'task.start': { ok: true, underWay: true },
+      // Orca lists the Start's new worktree before the create ends.
+      'worktrees.load': () => (reads++, { kind: 'ready', worktrees: { '#42': { ...started, agent: null }, '#7': other } })
+    })
+    await view.press({ testId: 'start:#42' })
+    await view.emit('workspace.created', created)
+    await fire(view)
+    assert.equal(reads, 1)
+    assert.ok(view.find({ type: 'Link', text: 'issue-7-task-7' }))
+    assert.ok(view.find({ type: 'Spinner', label: 'Starting #42' }))
+    assert.ok(view.find({ type: 'Text', text: CAN_TAKE_A_MINUTE }))
+    assert.equal(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }), null)
+
+    await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', agent: 'claude', ok: true })
+    assert.equal(view.find({ type: 'Spinner', label: 'Starting #42' }), null)
+    assert.ok(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }))
+    assert.ok(view.find({ type: 'Text', text: 'Agent starting…' }))
+    await view.unmount()
+  })
+})
+
+test("a workspace event before a Start's task.start answers reads the worktrees but leaves that card's spinner", async () => {
+  await withTimeouts(WORKSPACE_REFRESH_MS, async ({ fire, pending }) => {
+    const start = held()
+    let reads = 0
+    const { view } = await showWith({
+      'tasks.load': ready([task('#42')]),
+      'task.start': async () => {
+        await start.released
+        return { ok: true, underWay: true }
+      },
+      'worktrees.load': () => (reads++, { kind: 'ready', worktrees: { '#42': { ...started, agent: null } } })
+    })
+    const pressed = view.press({ testId: 'start:#42' })
+    await drawn(view, { type: 'Spinner', label: 'Starting #42' })
+    // Every act waits for the held task.start, so the event and the pause run without awaiting.
+    const emitted = view.emit('workspace.created', created)
+    for (let turns = 0; turns < 100 && pending() === 0; turns++) await turn()
+    const fired = fire(view)
+    for (let turns = 0; turns < 100 && reads === 0; turns++) await turn()
+    assert.equal(reads, 1)
+    start.release()
+    await Promise.all([pressed, emitted, fired])
+    assert.ok(view.find({ type: 'Spinner', label: 'Starting #42' }))
+    assert.equal(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }), null)
+    await view.unmount()
+  })
+})
+
+test("a Start's error stays on its card after a workspace event reads the worktrees", async () => {
+  await withTimeouts(WORKSPACE_REFRESH_MS, async ({ fire }) => {
+    let reads = 0
+    const { view } = await showWith({
+      'tasks.load': ready([task('#42')]),
+      'task.start': { ok: false, message: "Couldn't read Orca's default agent — pick one in the panel." },
+      'worktrees.load': () => (reads++, { kind: 'ready', worktrees: {} })
+    })
+    await view.press({ testId: 'start:#42' })
+    await view.emit('workspace.removed', removed)
+    await fire(view)
+    assert.equal(reads, 2)
+    assert.ok(view.find({ type: 'Text', text: "Couldn't read Orca's default agent — pick one in the panel." }))
+    assert.ok(view.find({ testId: 'start:#42' }))
+    await view.unmount()
+  })
+})
+
 const notes = { id: 'repo:r1', name: 'notes', repo: null }
 const SITES = { kind: 'ready' as const, sites: [{ id: 'site-1', name: 'Example' }, { id: 'site-2', name: 'Other' }] }
 

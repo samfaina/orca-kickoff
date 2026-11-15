@@ -146,10 +146,11 @@ So Kickoff runs every tool from the home folder and puts back `APPDATA` and `LOC
 
 ### Events
 
-- `workspace.changed` delivers `{ context: { branch: string; displayName: string; terminals: { id; title? }[] } | null }`, with no workspace or project id. Each new subscriber first gets the current context **[Verified]**.
+- `workspace.changed` delivers `{ context: { workspaceId?: string; branch: string; displayName: string; terminals: { id; title? }[] } | null }`, with no project id. Each new subscriber first gets the current context **[Verified]**. The optional `workspaceId` is new in the generated types of Orca 1.4.259 **[Verified]**; Kickoff doesn't read it.
 - `mount()` from `orca/testing` does not emit it on its own; tests emit it **[Verified]**.
 - Orca does not emit `workspace.changed` when switching between two workspaces with the same branch, name and terminals, for example two `main` worktrees of different projects. The original plugin polls the active worktree every 2 s while the panel is visible **[Original]**. That this is why a panel must poll, and that polling the active worktree's project covers it, has not been checked inside Orca **[Assumed]**.
-- Other events: `workspace.created` and `workspace.removed` (`{ workspaceId, kind, path, branch? }`), `agent.status.changed` (`agent:read`), and `theme` in the panel. A panel subscribes with `on(...)` without `contributes.events`, but needs `workspace:read` **[Verified]**.
+- Other events: `workspace.created` and `workspace.removed` (`{ workspaceId: string; workspaceListId?: string; kind: 'worktree' | 'folder'; path: string }`, and `branch: string` on `created`), `agent.status.changed` (`agent:read`), and `theme` in the panel. A panel subscribes with `on(...)` without `contributes.events`, but needs `workspace:read` **[Verified]** (generated types of Orca 1.4.259).
+- Kickoff's panel reads the task worktrees again (`worktrees.load`, keeping the loaded pages) on `workspace.created` and `workspace.removed`, 300 ms after the last of a burst, so a task whose worktree is deleted outside the active one shows Start again without a reload. It reads them for folders too, which are never task worktrees. Orca sends `workspace.created` during Kickoff's own Start, so that read leaves the cards of the Starts still running as they were: each Start reads the worktrees itself when it ends (issue #15).
 
 ### Panel
 
