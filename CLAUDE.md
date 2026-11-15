@@ -12,7 +12,7 @@ An Orca plugin (`id: kickoff`) that lists open tasks from a project's tracker (G
 - **Pure logic apart from I/O.** Parsing CLI output, building CLI arguments, naming worktrees and filling templates are pure functions with tests. The worker only runs commands and wires things together.
 - **Verify before asserting.** `docs/reference.md` tags each fact as Verified, Original or Assumed. When an Assumed fact matters to what you write, check it by running the CLI or reading the generated types, then update the file.
 - **MIT.** If you copy or adapt code from [rr235/orca-task-launcher](https://github.com/rr235/orca-task-launcher), keep its copyright notice in `LICENSE` and add a header to the affected file.
-- **Checks before done:** `orca plugin validate .`, `orca plugin test .` and `orca plugin check .` must pass. Anything that can only be seen inside Orca, ask the user to try.
+- **Checks before done:** `orca plugin validate .`, `orca plugin test .`, `orca plugin check .` and the type check `npx -y -p typescript@5.6.3 tsc -p .` (after `orca plugin types .`) must pass. Run the type check exactly as written: `.claude/settings.json` allows only that string. Anything that can only be seen inside Orca, ask the user to try.
 
 ## Agent skills
 
