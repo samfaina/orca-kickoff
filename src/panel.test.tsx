@@ -28,6 +28,7 @@ const ready = (tasks: Task[], fields: Partial<Extract<TaskList, { kind: 'ready' 
   truncated: false,
   worktrees: {},
   worktreesError: null,
+  starting: [],
   warning: null,
   ...fields
 })
@@ -277,6 +278,34 @@ test('an active project the list never shows reloads it once, not on every poll'
   })
 })
 
+test('while a Start shows its spinner, the poll asks the worker, so a worker that restarted clears it', async () => {
+  await withIntervals(async ({ tick }) => {
+    let underWay = ['#42']
+    const asked: unknown[] = []
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read'],
+      requests: {
+        'tasks.load': ready([task('#42')], { starting: ['#42'] }),
+        'project.active': { projectId: web.id },
+        'starts.load': (input) => (asked.push(input), { starting: underWay })
+      }
+    })
+    const view = await mount(panel, { host })
+    await tick(view)
+    assert.deepEqual(asked, [{ projectId: web.id }])
+    assert.ok(view.find({ type: 'Spinner', label: 'Starting #42' }))
+
+    // The worker restarted: it knows no Start, and no end will come.
+    underWay = []
+    await tick(view)
+    assert.equal(view.find({ type: 'Spinner', label: 'Starting #42' }), null)
+    assert.ok(view.find({ testId: 'start:#42' }))
+    await tick(view)
+    assert.equal(asked.length, 2)
+    await view.unmount()
+  })
+})
+
 test('polling stops while the panel is hidden, and when it closes', async () => {
   await withIntervals(async ({ tick, live }) => {
     let polls = 0
@@ -371,7 +400,7 @@ test('a pending change is saved before a Start', async () => {
     'tasks.load': ready([task('#42')]),
     'task.start': () => {
       seen = storedProject(host)
-      return { ok: true }
+      return { ok: true, underWay: false }
     },
     'worktrees.load': { kind: 'ready', worktrees: {} }
   })
@@ -391,7 +420,7 @@ test('Start starts the task, then shows its worktree and agent, keeping the load
     },
     'task.start': (input) => {
       starts.push(input)
-      return { ok: true }
+      return { ok: true, underWay: false }
     },
     'worktrees.load': { kind: 'ready', worktrees: { '#42': started } }
   })
@@ -431,13 +460,108 @@ test('a spinner shows on the card while it starts', async () => {
         spinner: view?.find({ type: 'Spinner', label: 'Starting #42' }) != null,
         button: view?.find({ testId: 'start:#42' }) != null
       }
-      return { ok: true }
+      return { ok: true, underWay: false }
     },
     'worktrees.load': { kind: 'ready', worktrees: { '#42': started } }
   }))
   await view.press({ testId: 'start:#42' })
   assert.deepEqual(during, { spinner: true, button: false })
   assert.equal(view.find({ type: 'Spinner', label: 'Starting #42' }), null)
+  await view.unmount()
+})
+
+const CAN_TAKE_A_MINUTE = /Creating the worktree can take a minute/
+
+test('a Start under way shows the spinner and says that creating the worktree can take a minute', async () => {
+  const { view } = await showWith({
+    'tasks.load': ready([task('#42'), task('#7')]),
+    'task.start': { ok: true, underWay: true }
+  })
+  await view.press({ testId: 'start:#42' })
+  assert.ok(view.find({ type: 'Spinner', label: 'Starting #42' }))
+  assert.equal(view.find({ testId: 'start:#42' }), null)
+  assert.equal(view.findAll({ type: 'Text', text: CAN_TAKE_A_MINUTE }).length, 1)
+  assert.ok(view.find({ testId: 'start:#7' }))
+  await view.unmount()
+})
+
+test('a panel opened while the worker reports a Start under way shows its spinner and line, then its end', async () => {
+  let worktrees = {}
+  const { view } = await showWith({
+    'tasks.load': ready([task('#42'), task('#7')], { starting: ['#42'] }),
+    'worktrees.load': () => ({ kind: 'ready', worktrees })
+  })
+  assert.ok(view.find({ type: 'Spinner', label: 'Starting #42' }))
+  assert.ok(view.find({ type: 'Text', text: CAN_TAKE_A_MINUTE }))
+  assert.equal(view.find({ testId: 'start:#42' }), null)
+  assert.ok(view.find({ testId: 'start:#7' }))
+
+  worktrees = { '#42': started }
+  await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', ok: true })
+  assert.ok(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }))
+  assert.equal(view.find({ type: 'Spinner', label: 'Starting #42' }), null)
+  await view.unmount()
+})
+
+test('a list asked for before a Start went under way, and answered after, keeps its spinner', async () => {
+  let loads = 0
+  let startAnswered: () => void = () => {}
+  const answered = new Promise<void>((resolve) => (startAnswered = resolve))
+  const { view } = await showWith({
+    'tasks.load': async () => {
+      if (++loads === 1) return ready([task('#42')])
+      // The worker read its Starts before this one was under way.
+      await answered
+      await wait(0)
+      return ready([task('#42')], { starting: [] })
+    },
+    'task.start': () => {
+      startAnswered()
+      return { ok: true, underWay: true }
+    }
+  })
+  await Promise.all([view.press({ type: 'IconButton', label: 'Reload tasks' }), view.press({ testId: 'start:#42' })])
+  assert.equal(loads, 2)
+  assert.ok(view.find({ type: 'Spinner', label: 'Starting #42' }))
+  assert.ok(view.find({ type: 'Text', text: CAN_TAKE_A_MINUTE }))
+  await view.unmount()
+})
+
+test("a Start's successful end clears the spinner and shows the worktree", async () => {
+  let worktrees = {}
+  const { view } = await showWith({
+    'tasks.load': ready([task('#42')]),
+    'task.start': { ok: true, underWay: true },
+    'worktrees.load': () => ({ kind: 'ready', worktrees })
+  })
+  await view.press({ testId: 'start:#42' })
+  worktrees = { '#42': started }
+  await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', ok: true })
+  assert.equal(view.find({ type: 'Spinner', label: 'Starting #42' }), null)
+  assert.equal(view.find({ type: 'Text', text: CAN_TAKE_A_MINUTE }), null)
+  assert.ok(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }))
+  await view.unmount()
+})
+
+test("a Start's failed end clears the spinner and shows its message, unless the worktree is there anyway", async () => {
+  let worktrees = {}
+  const { view } = await showWith({
+    'tasks.load': ready([task('#42'), task('#7')]),
+    'task.start': { ok: true, underWay: true },
+    'worktrees.load': () => ({ kind: 'ready', worktrees })
+  })
+  await view.press({ testId: 'start:#42' })
+  await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', ok: false, message: 'orca failed: Pick a different worktree name' })
+  assert.equal(view.find({ type: 'Spinner', label: 'Starting #42' }), null)
+  assert.ok(view.find({ type: 'Text', text: 'orca failed: Pick a different worktree name' }))
+  assert.ok(view.find({ testId: 'start:#42' }))
+
+  // A timed-out create that Orca finished anyway.
+  await view.press({ testId: 'start:#7' })
+  worktrees = { '#7': { worktreeId: 'r1::/src/web-7', name: 'issue-7-task-7', agent: null } }
+  await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#7', ok: false, message: "Orca didn't finish creating the worktree for #7 in time" })
+  assert.ok(view.find({ type: 'Link', text: 'issue-7-task-7' }))
+  assert.equal(view.find({ type: 'Text', text: /didn't finish/ }), null)
   await view.unmount()
 })
 
@@ -684,7 +808,7 @@ test('"Load more" appends the next page without duplicate keys, and the loaded p
         if (!cursor) return twgReady([twgTask('WEB-1'), twgTask('WEB-2')], { nextCursor: 'cursor-2' })
         return twgReady([twgTask('WEB-2'), twgTask('WEB-3')], { nextCursor: null })
       },
-      'task.start': { ok: true },
+      'task.start': { ok: true, underWay: false },
       'worktrees.load': { kind: 'ready', worktrees: { 'WEB-3': { worktreeId: 'r1::/src/web-3', name: 'web-3-task-web-3', agent: 'claude' } } }
     },
     twgStored({ jql: 'project = WEB', site: '', profile: '' })

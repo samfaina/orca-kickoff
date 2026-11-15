@@ -33,6 +33,8 @@ import {
   type JiraSitesResult,
   type ProjectRef,
   type ProjectSettings,
+  type StartEnded,
+  type StartResult,
   type Task,
   type TaskList,
   type WorktreesResult
@@ -61,8 +63,10 @@ type OrcaState = { projects: ProjectRef[]; worktrees: OrcaWorktree[]; statuses: 
 export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }: WorkerDependencies): void {
   /** The project of the last successful lookup, used when Orca can't answer. */
   let lastProject: ProjectRef | null = null
-  /** Starts under way, by project and task, so a second Start joins the first. */
-  const starting = new Map<string, Promise<ActionResult>>()
+  /** Starts running their quick checks, by project and task, so a second Start joins the first. */
+  const checking = new Map<string, Promise<StartResult>>()
+  /** Starts whose `worktree create` runs, by project and task. */
+  const creating = new Map<string, { projectId: string; taskKey: string }>()
   /** When the last Start of a task timed out, by project and task. */
   const timedOutAt = new Map<string, number>()
 
@@ -113,6 +117,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
         ...page,
         worktrees: state ? findTaskWorktrees(trackerOf(providerId), project.id, state.worktrees, state.statuses) : null,
         worktreesError: state ? null : active.orcaError,
+        starting: startsUnderWay(project.id),
         warning: active.warning
       }
     } catch (error) {
@@ -133,16 +138,24 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
     }
   }
 
-  function startTask(projectId: string, task: Task): Promise<ActionResult> {
-    const id = `${projectId}\n${task.key}`
-    const running = starting.get(id)
-    if (running) return running
-    const started = createTaskWorktree(id, projectId, task).finally(() => starting.delete(id))
-    starting.set(id, started)
-    return started
+  /** Keys of the project's tasks whose `worktree create` runs. A restarted worker knows none. */
+  function startsUnderWay(projectId: string): string[] {
+    return [...creating.values()].filter((start) => start.projectId === projectId).map((start) => start.taskKey)
   }
 
-  async function createTaskWorktree(id: string, projectId: string, task: Task): Promise<ActionResult> {
+  /** Runs the quick checks and answers with their failure, or starts the create and answers that
+   *  it is under way without waiting for it. */
+  function startTask(projectId: string, task: Task): Promise<StartResult> {
+    const id = `${projectId}\n${task.key}`
+    if (creating.has(id)) return Promise.resolve({ ok: true, underWay: true })
+    const running = checking.get(id)
+    if (running) return running
+    const checked = checkAndCreate(id, projectId, task).finally(() => checking.delete(id))
+    checking.set(id, checked)
+    return checked
+  }
+
+  async function checkAndCreate(id: string, projectId: string, task: Task): Promise<StartResult> {
     try {
       const [projectsOut, worktreesOut] = await Promise.all([run('orca', PROJECT_LIST_ARGS), run('orca', WORKTREE_LIST_ARGS)])
       const project = parseProjects(projectsOut).find((candidate) => candidate.id === projectId)
@@ -150,7 +163,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
       // Already started, maybe by a Start that timed out but that Orca finished.
       if (findTaskWorktrees(task.tracker, projectId, parseWorktrees(worktreesOut), [])[task.key]) {
         timedOutAt.delete(id)
-        return { ok: true }
+        return { ok: true, underWay: false }
       }
       const timedOut = timedOutAt.get(id)
       if (timedOut !== undefined && now() - timedOut < TIMEOUT_GUARD_MS) {
@@ -166,20 +179,31 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
       const prompt = buildPrompt(settings.template, task, project, name)
       if (!prompt.ok) return prompt
       const args = worktreeCreateArgs({ projectId, name, task, agent: agent.agent, prompt: prompt.prompt })
-      try {
-        checkOrcaAnswer(await run('orca', args, { timeoutMs: WORKTREE_CREATE_TIMEOUT_MS }))
-      } catch (error) {
-        if (!(error instanceof CliError && error.timedOut)) throw error
-        timedOutAt.set(id, now())
-        return {
-          ok: false,
-          message: `Orca didn't finish creating the worktree for ${task.key} in time, and may still be creating it. Wait a few minutes and reload the tasks.`
-        }
-      }
+      creating.set(id, { projectId, taskKey: task.key })
+      void createWorktree(id, task.key, args).then((result) => {
+        creating.delete(id)
+        const end: StartEnded = { projectId, taskKey: task.key, ...result }
+        orca.panels.post('start.ended', end)
+      })
+      return { ok: true, underWay: true }
+    } catch (error) {
+      return { ok: false, message: messageOf(error) }
+    }
+  }
+
+  /** Runs `worktree create` and says how it ended. A timeout sets the five-minute guard. */
+  async function createWorktree(id: string, taskKey: string, args: string[]): Promise<ActionResult> {
+    try {
+      checkOrcaAnswer(await run('orca', args, { timeoutMs: WORKTREE_CREATE_TIMEOUT_MS }))
       timedOutAt.delete(id)
       return { ok: true }
     } catch (error) {
-      return { ok: false, message: messageOf(error) }
+      if (!(error instanceof CliError && error.timedOut)) return { ok: false, message: messageOf(error) }
+      timedOutAt.set(id, now())
+      return {
+        ok: false,
+        message: `Orca didn't finish creating the worktree for ${taskKey} in time, and may still be creating it. Wait a few minutes and reload the tasks.`
+      }
     }
   }
 
@@ -216,6 +240,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
   orca.panels.handle('project.active', () => activeProjectId())
   orca.panels.handle('jira.sites', () => jiraSites())
   orca.panels.handle('task.start', ({ projectId, task }) => startTask(projectId, task))
+  orca.panels.handle('starts.load', ({ projectId }) => ({ starting: startsUnderWay(projectId) }))
   orca.panels.handle('worktree.open', ({ worktreeId }) => openWorktree(worktreeId))
 }
 

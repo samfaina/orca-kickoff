@@ -9,8 +9,10 @@ export const PROJECT_LIST_ARGS = ['project', 'list', '--json']
 export const WORKTREE_LIST_ARGS = ['worktree', 'list', '--json']
 export const WORKTREE_PS_ARGS = ['worktree', 'ps', '--json']
 
-/** `worktree create` can take long: Orca creates the worktree, runs setup and starts the agent. */
-export const WORKTREE_CREATE_TIMEOUT_MS = 110_000
+/** `worktree create` can take long: Orca creates the worktree, runs setup and starts the agent.
+ *  It often takes 30 s and can take over a minute. No request waits for it, so this is not
+ *  bound by `plugin.request`'s limit. */
+export const WORKTREE_CREATE_TIMEOUT_MS = 10 * 60_000
 
 /** One row of `orca worktree list`, with the fields Kickoff reads. */
 export type OrcaWorktree = {

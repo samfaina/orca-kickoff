@@ -177,6 +177,8 @@ export type TaskList =
       /** null when Orca's worktrees couldn't be read. */
       worktrees: Record<string, TaskWorktree> | null
       worktreesError: string | null
+      /** Keys of the tasks whose Start is under way in the worker. */
+      starting: string[]
       /** For example "using the last known project". */
       warning: string | null
     }
@@ -186,6 +188,10 @@ export type WorktreesResult =
   | { kind: 'ready'; worktrees: Record<string, TaskWorktree> }
   | { kind: 'error'; message: string }
 
+/** Keys of a project's tasks whose Start is under way in the worker. A restarted worker knows
+ *  none, so a panel that asks stops waiting for their end. */
+export type StartsResult = { starting: string[] }
+
 export type ActiveProjectResult = { projectId: string | null } | { kind: 'error'; message: string }
 
 export type JiraSitesResult =
@@ -194,14 +200,24 @@ export type JiraSitesResult =
 
 export type ActionResult = { ok: true } | { ok: false; message: string }
 
+/** A Start's answer. `underWay`: Orca is creating the worktree and `start.ended` follows;
+ *  otherwise the task already has its worktree. */
+export type StartResult = { ok: true; underWay: boolean } | { ok: false; message: string }
+
+/** Posted when the `worktree create` of a Start under way ends. A timeout is a failure. */
+export type StartEnded = { projectId: string; taskKey: string } & ActionResult
+
 declare module 'orca' {
   interface PluginRequests {
     'tasks.load': { input: { cursor?: string }; output: TaskList }
     'worktrees.load': { input: { projectId: string }; output: WorktreesResult }
     'project.active': { input: {}; output: ActiveProjectResult }
     'jira.sites': { input: {}; output: JiraSitesResult }
-    'task.start': { input: { projectId: string; task: Task }; output: ActionResult }
+    'task.start': { input: { projectId: string; task: Task }; output: StartResult }
+    'starts.load': { input: { projectId: string }; output: StartsResult }
     'worktree.open': { input: { worktreeId: string }; output: ActionResult }
   }
-  interface PluginPanelEvents {}
+  interface PluginPanelEvents {
+    'start.ended': StartEnded
+  }
 }

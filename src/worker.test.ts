@@ -2,7 +2,7 @@ import { assert, mockHost, mountWorker, test } from 'orca/testing'
 import type { JsonValue } from 'orca'
 import { AGENT_UNREADABLE, type DefaultAgent } from './agent'
 import { CliError, cliFailureMessage, type RunCli } from './cli'
-import type { Task } from './protocol'
+import type { StartEnded, Task } from './protocol'
 import { activateWith } from './worker'
 
 const wrap = (result: unknown) => JSON.stringify({ id: 'req-1', ok: true, result, _meta: { runtimeId: 'rt-1' } })
@@ -112,6 +112,7 @@ test('a project with a GitHub repo lists its open issues with no configuration',
     truncated: false,
     worktrees: {},
     worktreesError: null,
+    starting: [],
     warning: null
   })
   assert.deepEqual(worker.refusals, [])
@@ -319,7 +320,7 @@ const web12: Task = {
 
 test('Start on Jira links the worktree with --reference <task URL>, never --issue', async () => {
   const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED }, { storage: jiraSettings() })
-  assert.deepEqual(await worker.request('task.start', { projectId: 'github:acme/web', task: web12 }), { ok: true })
+  assert.deepEqual(await worker.request('task.start', { projectId: 'github:acme/web', task: web12 }), { ok: true, underWay: true })
   assert.deepEqual(creates(calls)[0].args, [
     'worktree', 'create', '--project', 'github:acme/web', '--name', 'web-12-anadir-modo-oscuro-a', '--no-parent', '--json',
     '--reference', 'https://example.atlassian.net/browse/WEB-12',
@@ -333,7 +334,7 @@ test("a Start of a Jira task already linked in Orca doesn't run worktree create"
     linkedItems: [{ provider: 'jira', type: 'issue', jiraIdentifier: 'WEB-12', url: 'https://example.atlassian.net/browse/WEB-12' }]
   }
   const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree list': worktreesWith(linked) }, { storage: jiraSettings() })
-  assert.deepEqual(await worker.request('task.start', { projectId: 'github:acme/web', task: web12 }), { ok: true })
+  assert.deepEqual(await worker.request('task.start', { projectId: 'github:acme/web', task: web12 }), { ok: true, underWay: false })
   assert.equal(creates(calls).length, 0)
 })
 
@@ -355,13 +356,14 @@ test('worktrees.load answers an error as data when Orca fails', async () => {
 
 test("Start creates a linked worktree with Orca's default agent and the filled-in prompt", async () => {
   const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED })
-  assert.deepEqual(await worker.request('task.start', startWeb42), { ok: true })
+  assert.deepEqual(await worker.request('task.start', startWeb42), { ok: true, underWay: true })
   const [create] = creates(calls)
   assert.deepEqual(create.args, [
     'worktree', 'create', '--project', 'github:acme/web', '--name', 'issue-42-add-dark-mode', '--no-parent', '--json',
     '--issue', '42', '--agent', 'claude', '--prompt', 'Complete #42: https://github.com/acme/web/issues/42'
   ])
-  assert.equal(create.timeoutMs, 110_000)
+  // The request doesn't wait for the create, so its limit is Orca's, not the panel's.
+  assert.equal(create.timeoutMs, 600_000)
 })
 
 test("Start uses the project's template and agent choice, and no agent means no prompt", async () => {
@@ -378,39 +380,119 @@ test("Start uses the project's template and agent choice, and no agent means no 
   assert.ok(!args.includes('--agent') && !args.includes('--prompt'))
 })
 
+test('Start of a project Orca no longer has fails in its answer, without creating anything', async () => {
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED })
+  assert.deepEqual(await worker.request('task.start', { projectId: 'repo:gone', task: issue42 }), {
+    ok: false,
+    message: 'Orca has no project "repo:gone".'
+  })
+  assert.equal(creates(calls).length, 0)
+  assert.deepEqual(worker.posts, [])
+})
+
 test("Start fails without creating anything when Orca's default agent can't be read", async () => {
   const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED }, { defaultAgent: { kind: 'unreadable' } })
   assert.deepEqual(await worker.request('task.start', startWeb42), { ok: false, message: AGENT_UNREADABLE })
   assert.equal(creates(calls).length, 0)
 })
 
-test('two simultaneous Starts of the same task create one worktree', async () => {
-  let finish: (stdout: string) => void = () => {}
+/** Waits until `done` holds, a millisecond at a time. */
+async function until(done: () => boolean): Promise<void> {
+  for (let tick = 0; tick < 500 && !done(); tick++) await new Promise((resolve) => setTimeout(resolve, 1))
+}
+
+/** A `worktree create` that answers only when the test calls `finish` or `fail`. */
+function slowCreate() {
+  const create = { finish: (_stdout: string) => {}, fail: (_error: Error) => {} }
+  const answer = () =>
+    new Promise<string>((resolve, reject) => {
+      create.finish = resolve
+      create.fail = reject
+    })
+  return { create, answer }
+}
+
+test('Start answers that it is under way before a slow worktree create ends, then posts the end', async () => {
+  const { create, answer } = slowCreate()
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': answer })
+  assert.deepEqual(await worker.request('task.start', startWeb42), { ok: true, underWay: true })
+  assert.equal(creates(calls).length, 1)
+  assert.deepEqual(worker.posts, [])
+
+  create.finish(CREATED)
+  await until(() => worker.posts.length > 0)
+  assert.deepEqual(worker.posts, [{ event: 'start.ended', payload: { projectId: 'github:acme/web', taskKey: '#42', ok: true } }])
+})
+
+test("the task list and starts.load report the project's Starts under way until each create ends", async () => {
+  const creates42 = slowCreate()
+  const creates7 = slowCreate()
   const { worker, calls } = await start({
     ...ORCA_OK,
-    'orca worktree create': () => new Promise<string>((resolve) => (finish = resolve))
+    'orca worktree create': (args) => (args.includes('42') ? creates42.answer() : creates7.answer()),
+    'gh issue list': GH_ISSUES
   })
-  const first = worker.request('task.start', startWeb42)
-  const second = worker.request('task.start', startWeb42)
-  for (let tick = 0; tick < 500 && creates(calls).length === 0; tick++) await new Promise((resolve) => setTimeout(resolve, 1))
-  finish(CREATED)
-  assert.deepEqual(await Promise.all([first, second]), [{ ok: true }, { ok: true }])
+  const underWay = async () => {
+    const list = await worker.request('tasks.load', {})
+    const before = calls.length
+    const starts = await worker.request('starts.load', { projectId: 'github:acme/web' })
+    // The panel asks it every few seconds, so it runs no command.
+    assert.equal(calls.length, before)
+    assert.ok(list.kind === 'ready')
+    assert.deepEqual(list.starting, starts.starting)
+    return [...starts.starting].sort()
+  }
+  assert.deepEqual(await underWay(), [])
+  await worker.request('task.start', startWeb42)
+  await worker.request('task.start', { projectId: 'github:acme/web', task: { ...issue42, key: '#7', url: 'https://github.com/acme/web/issues/7' } })
+  assert.deepEqual(await underWay(), ['#42', '#7'])
+  assert.deepEqual(await worker.request('starts.load', { projectId: 'repo:r2' }), { starting: [] })
+
+  creates42.create.finish(CREATED)
+  await until(() => worker.posts.length === 1)
+  assert.deepEqual(await underWay(), ['#7'])
+  creates7.create.fail(new CliError('orca failed: Pick a different worktree name'))
+  await until(() => worker.posts.length === 2)
+  assert.deepEqual(await underWay(), [])
+})
+
+test('a second Start, during the checks or the create of the first, answers under way and creates once', async () => {
+  const { create, answer } = slowCreate()
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': answer })
+  const together = await Promise.all([worker.request('task.start', startWeb42), worker.request('task.start', startWeb42)])
+  assert.deepEqual(together, [{ ok: true, underWay: true }, { ok: true, underWay: true }])
+  assert.deepEqual(await worker.request('task.start', startWeb42), { ok: true, underWay: true })
   assert.equal(creates(calls).length, 1)
+  create.finish(CREATED)
+  await until(() => worker.posts.length > 0)
+  assert.equal(worker.posts.length, 1)
 })
 
 test("a Start of an already started task doesn't run worktree create", async () => {
   const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree list': worktreesWith(started42), 'orca worktree create': CREATED })
-  assert.deepEqual(await worker.request('task.start', startWeb42), { ok: true })
+  assert.deepEqual(await worker.request('task.start', startWeb42), { ok: true, underWay: false })
   assert.equal(creates(calls).length, 0)
+  assert.deepEqual(worker.posts, [])
 })
 
-test('after a timed-out Start, the same task waits five minutes before creating again', async () => {
+/** The `count`th Start end the worker posted, once it has. */
+async function nthEnd(worker: { posts: readonly { event: string; payload?: unknown }[] }, count = 1): Promise<StartEnded> {
+  await until(() => worker.posts.length >= count)
+  const post = worker.posts[count - 1]
+  assert.equal(post?.event, 'start.ended')
+  return post.payload as StartEnded
+}
+
+test('a timed-out create posts a failed end, and the same task waits five minutes before creating again', async () => {
   let clock = 1_000_000
   const timeout = new CliError("orca didn't answer in time.", true)
   const { worker, calls, answer } = await start({ ...ORCA_OK, 'orca worktree create': timeout }, { now: () => clock })
-  const failed = await worker.request('task.start', startWeb42)
-  assert.ok(!failed.ok)
-  assert.match(failed.message, /may still be creating/)
+  assert.deepEqual(await worker.request('task.start', startWeb42), { ok: true, underWay: true })
+  const ended = await nthEnd(worker)
+  assert.equal(ended.taskKey, '#42')
+  assert.equal(ended.projectId, 'github:acme/web')
+  assert.ok(!ended.ok)
+  assert.match(ended.message, /may still be creating/)
 
   answer({ ...ORCA_OK, 'orca worktree create': CREATED })
   clock += 4 * 60_000
@@ -420,22 +502,30 @@ test('after a timed-out Start, the same task waits five minutes before creating 
   assert.equal(creates(calls).length, 1)
 
   clock += 61_000
-  assert.deepEqual(await worker.request('task.start', startWeb42), { ok: true })
+  assert.deepEqual(await worker.request('task.start', startWeb42), { ok: true, underWay: true })
   assert.equal(creates(calls).length, 2)
+  assert.deepEqual(await nthEnd(worker, 2), { projectId: 'github:acme/web', taskKey: '#42', ok: true })
 })
 
 test('a worktree Orca finished after a timeout counts as started', async () => {
   const timeout = new CliError("orca didn't answer in time.", true)
   const { worker, calls, answer } = await start({ ...ORCA_OK, 'orca worktree create': timeout })
   await worker.request('task.start', startWeb42)
+  await nthEnd(worker)
   answer({ ...ORCA_OK, 'orca worktree list': worktreesWith(started42) })
-  assert.deepEqual(await worker.request('task.start', startWeb42), { ok: true })
+  assert.deepEqual(await worker.request('task.start', startWeb42), { ok: true, underWay: false })
   assert.equal(creates(calls).length, 1)
 })
 
-test("Start answers Orca's real message when worktree create fails", async () => {
+test("a failed create posts a failed end with Orca's real message", async () => {
   const { worker } = await start({ ...ORCA_OK, 'orca worktree create': new CliError('orca failed: Pick a different worktree name') })
-  assert.deepEqual(await worker.request('task.start', startWeb42), { ok: false, message: 'orca failed: Pick a different worktree name' })
+  assert.deepEqual(await worker.request('task.start', startWeb42), { ok: true, underWay: true })
+  assert.deepEqual(await nthEnd(worker), {
+    projectId: 'github:acme/web',
+    taskKey: '#42',
+    ok: false,
+    message: 'orca failed: Pick a different worktree name'
+  })
 })
 
 test('a prompt over the limit fails Start without creating anything', async () => {
