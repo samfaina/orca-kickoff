@@ -45,6 +45,8 @@ import {
   type ProjectRef,
   type ProviderConfigs,
   type ProviderId,
+  type StartEnded,
+  type StartResult,
   type Task,
   type TaskList,
   type TaskWorktree
@@ -53,8 +55,9 @@ import { DEFAULT_TEMPLATE, TEMPLATE_VARIABLES } from './template'
 
 /** Orca queries and the tracker can take up to about 65 s together. */
 const LOAD_TIMEOUT_MS = 90_000
-/** `worktree create` may take 110 s in the worker; this is the most a request may wait. */
-const START_TIMEOUT_MS = 120_000
+/** `task.start` answers after its quick checks, two Orca queries of at most 20 s each; the create
+ *  goes on in the worker, which posts `start.ended` when it ends. */
+const START_TIMEOUT_MS = 60_000
 /** Start options save themselves after this pause. */
 const SAVE_DELAY_MS = 600
 /** How often the panel asks for the active project while it is visible. */
@@ -93,8 +96,12 @@ const optionsOpen = atom('startOptionsOpen', true, { persist: 'plugin' })
 const trackerOpen = atom('trackerOpen', false, { persist: 'plugin' })
 /** The sites of Orca's Jira connection, asked for the first time they are needed. */
 const jiraSites = atom<JiraSitesResult | 'loading' | null>(null)
-/** Task keys with a Start under way. */
+/** Task keys with a Start under way: asked by this panel, or reported by the worker. */
 const starting = atom<Record<string, true>>({})
+/** Task keys whose `task.start` hasn't answered yet. */
+const requested = new Set<string>()
+/** The end of each Start that arrived before its `task.start` answer. */
+const endedEarly = new Map<string, StartEnded>()
 /** The error of each task's last Start, or of opening its worktree. */
 const taskErrors = atom<Record<string, string>>({})
 
@@ -206,6 +213,7 @@ async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
   }
   if (read(shownSettings)?.provider === 'jira-orca') void loadJiraSites()
   if (reason !== 'poll') lastPolledProjectId = undefined
+  showStarting(answer.kind === 'ready' ? answer.starting : [])
   set(list, answer)
   set(loading, false)
 }
@@ -267,25 +275,62 @@ function setTaskError(key: string, message: string | null): void {
   })
 }
 
+/** Shows the spinner on the tasks the worker reports under way, and on those whose `task.start`
+ *  hasn't answered yet. */
+function showStarting(reported: string[]): void {
+  set(starting, Object.fromEntries([...reported, ...requested].map((key): [string, true] => [key, true])))
+}
+
 async function startTask(task: Task): Promise<void> {
   const projectId = readyProjectId()
   if (!projectId || read(starting)[task.key]) return
+  requested.add(task.key)
   update(starting, (keys): Record<string, true> => ({ ...keys, [task.key]: true as const }))
   setTaskError(task.key, null)
-  let error: string | null = null
+  let answer: StartResult
   try {
     await flushSettings()
-    const answer = await plugin.request('task.start', { projectId, task }, { timeoutMs: START_TIMEOUT_MS })
-    if (!answer.ok) error = answer.message
+    answer = await plugin.request('task.start', { projectId, task }, { timeoutMs: START_TIMEOUT_MS })
   } catch (thrown) {
-    error = `Kickoff's worker didn't answer (${errorCode(thrown)}). Reload the tasks to see whether ${task.key} started.`
+    answer = { ok: false, message: `Kickoff's worker didn't answer (${errorCode(thrown)}). Reload the tasks to see whether ${task.key} started.` }
   }
-  // Whatever the answer, Orca's worktrees say whether the task started: a Start that timed out
-  // may have finished.
+  requested.delete(task.key)
+  const early = endedEarly.get(task.key)
+  endedEarly.delete(task.key)
+  if (answer.ok && answer.underWay) {
+    // The worker posts `start.ended` when the create ends.
+    if (early) await endStart(early)
+    return
+  }
+  await finishStart(projectId, task.key, answer.ok ? null : answer.message)
+}
+
+/** Asks the worker which Starts are under way, while a spinner shows for one this panel isn't
+ *  asking about: a worker that restarted knows none, and posts no end. */
+async function checkStarts(): Promise<void> {
+  const projectId = readyProjectId()
+  if (!projectId || !Object.keys(read(starting)).some((key) => !requested.has(key))) return
+  const answer = await plugin.request('starts.load', { projectId })
+  if (readyProjectId() === projectId) showStarting(answer.starting)
+}
+
+/** A Start's create ended in the worker. */
+function onStartEnded(end: StartEnded): void {
+  if (requested.has(end.taskKey)) endedEarly.set(end.taskKey, end)
+  else void endStart(end)
+}
+
+async function endStart(end: StartEnded): Promise<void> {
+  if (readyProjectId() !== end.projectId) return
+  await finishStart(end.projectId, end.taskKey, end.ok ? null : end.message)
+}
+
+/** Clears a Start's spinner once Orca's worktrees are read again, and shows its error unless the
+ *  task now has a worktree: a Start that timed out may have finished. */
+async function finishStart(projectId: string, key: string, error: string | null): Promise<void> {
   const worktrees = await refreshWorktrees(projectId)
-  if (worktrees?.[task.key]) error = null
-  update(starting, ({ [task.key]: _, ...rest }) => rest)
-  if (readyProjectId() === projectId) setTaskError(task.key, error)
+  update(starting, ({ [key]: _, ...rest }) => rest)
+  if (readyProjectId() === projectId) setTaskError(key, worktrees?.[key] ? null : error)
 }
 
 async function openWorktree(key: string, worktreeId: string): Promise<void> {
@@ -318,6 +363,7 @@ export function setup(ctx: PanelContext): void {
   }
   // Orca sends the current context to each new subscriber; load now only if it hasn't yet.
   ctx.subscriptions.push(on('workspace.changed', reload))
+  ctx.subscriptions.push(plugin.on('start.ended', onStartEnded))
   ctx.subscriptions.push({ dispose: () => void flushSettings() })
 
   // Orca sends no workspace.changed between two worktrees with the same branch and name, such
@@ -336,6 +382,7 @@ export function setup(ctx: PanelContext): void {
       const before = lastPolledProjectId === undefined ? listedProjectId() : lastPolledProjectId
       lastPolledProjectId = answer.projectId
       if (before !== undefined && answer.projectId !== before) void load('poll')
+      else await checkStarts()
     } catch {
       // The worker didn't answer: the next poll asks again.
     } finally {
@@ -551,6 +598,7 @@ function TaskCard({ task, worktrees }: { task: Task; worktrees: Record<string, T
   // Every GitHub task is open, so its status says nothing.
   const status = task.tracker !== 'github' ? task.status : null
   const worktree = worktrees?.[task.key] ?? null
+  const isStarting = worktree === null && read(starting)[task.key] === true
   const error = read(taskErrors)[task.key]
   return (
     <Box border radius="md" padding="sm" direction="column" gap="xs">
@@ -558,7 +606,7 @@ function TaskCard({ task, worktrees }: { task: Task; worktrees: Record<string, T
         <Text>
           <Link href={task.url}>{task.key}</Link> {task.title}
         </Text>
-        {worktree ? null : read(starting)[task.key] ? (
+        {worktree ? null : isStarting ? (
           <Spinner label={`Starting ${task.key}`} labelHidden />
         ) : (
           <Button key={`start:${task.key}`} size="sm" icon="play" disabled={worktrees === null} onPress={() => void startTask(task)}>
@@ -581,6 +629,11 @@ function TaskCard({ task, worktrees }: { task: Task; worktrees: Record<string, T
             {worktree.agent ? `Agent: ${worktree.agent}` : 'No agent running'}
           </Text>
         </Row>
+      ) : null}
+      {isStarting ? (
+        <Text size="sm" muted>
+          Creating the worktree can take a minute.
+        </Text>
       ) : null}
       {error ? (
         <Text size="sm" tone="danger">
