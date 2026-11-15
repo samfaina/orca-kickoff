@@ -1,5 +1,5 @@
-// The few Node.js APIs the worker uses, declared here because Kickoff has no dependencies (and so
-// no @types/node). Only for type checking: Orca's worker runs on Node and provides the real ones.
+// The few Node.js APIs the worker and the tests use, declared here because Kickoff has no
+// dependencies (and so no @types/node). Only for type checking: Orca provides the real ones.
 declare module 'node:child_process' {
   type ExecFileError = Error & { code?: string | number; killed?: boolean; signal?: string | null }
   export function execFile(
@@ -29,6 +29,9 @@ declare module 'node:fs/promises' {
 declare module 'node:url' {
   export function fileURLToPath(url: string): string
 }
+
+/** Tests yield an event-loop turn with it, the turn Orca's test runtime draws the panel on. */
+declare function setImmediate(callback: () => void): unknown
 
 declare const process: {
   readonly platform: string
