@@ -1,6 +1,6 @@
 import { assert, hostError, mockHost, mount, test, type MockHost, type MockRequests, type TestPanel, type TestQuery } from 'orca/testing'
 import type { JsonValue } from 'orca'
-import type { Task, TaskList } from './protocol'
+import type { Task, TaskList, TaskWorktree } from './protocol'
 import * as panel from './panel'
 import { DEFAULT_TEMPLATE } from './template'
 
@@ -60,6 +60,16 @@ async function drawn(view: TestPanel, query: TestQuery, eachTurn: () => void = (
     await turn()
   }
   assert.fail(`the panel never drew ${JSON.stringify(query)}`)
+}
+
+/** Yields event-loop turns until `condition` holds, while an act waits for a held request, and
+ *  fails if it never does. */
+async function until(condition: () => boolean, what: string): Promise<void> {
+  for (let turns = 0; turns < 100; turns++) {
+    if (condition()) return
+    await turn()
+  }
+  assert.fail(`never ${what}`)
 }
 
 test("lists the project's open issues with their key, title and labels", async () => {
@@ -917,6 +927,226 @@ test('no delayed worktrees.load runs after the panel is deactivated', async () =
     assert.equal(pending(), 0)
     await fire(view)
     assert.equal(reads(), 1)
+  })
+})
+
+/** How long the panel waits after a workspace is created or removed before it reads the worktrees. */
+const WORKSPACE_REFRESH_MS = 300
+
+const removed = { workspaceId: 'r1::/src/web-42', kind: 'worktree' as const, path: '/src/web-42' }
+const created = { ...removed, branch: 'someone/issue-42-add-dark-mode' }
+
+test('a removed worktree reads the worktrees again once, and its card shows Start again', async () => {
+  await withTimeouts(WORKSPACE_REFRESH_MS, async ({ fire, pending }) => {
+    const reads: unknown[] = []
+    const { view } = await showWith({
+      'tasks.load': ready([task('#42'), task('#7')], { worktrees: { '#42': started } }),
+      'worktrees.load': (input) => (reads.push(input), { kind: 'ready', worktrees: {} })
+    })
+    assert.ok(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }))
+    await view.emit('workspace.removed', removed)
+    assert.equal(pending(), 1)
+    await fire(view)
+    assert.deepEqual(reads, [{ projectId: 'github:acme/web' }])
+    assert.equal(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }), null)
+    assert.ok(view.find({ testId: 'start:#42' }))
+    assert.ok(view.find({ testId: 'start:#7' }))
+    await view.unmount()
+  })
+})
+
+test('workspaces created and removed within the pause read the worktrees once', async () => {
+  await withTimeouts(WORKSPACE_REFRESH_MS, async ({ fire, pending }) => {
+    let reads = 0
+    const { view } = await showWith({
+      'tasks.load': ready([task('#42')]),
+      'worktrees.load': () => (reads++, { kind: 'ready', worktrees: {} })
+    })
+    await view.emit('workspace.created', created)
+    await view.emit('workspace.removed', removed)
+    await view.emit('workspace.created', { ...created, kind: 'folder' })
+    await view.emit('workspace.removed', { ...removed, workspaceId: 'r1::/src/web-7' })
+    assert.equal(pending(), 1)
+    await fire(view)
+    assert.equal(reads, 1)
+    await view.unmount()
+  })
+})
+
+test('a workspace event reads no worktrees while no project is listed, nor after the panel closes', async () => {
+  await withTimeouts(WORKSPACE_REFRESH_MS, async ({ fire, pending }) => {
+    let reads = 0
+    const worktreesLoad = () => (reads++, { kind: 'ready' as const, worktrees: {} })
+    const none = await showWith({ 'tasks.load': { kind: 'no-project' }, 'worktrees.load': worktreesLoad })
+    await none.view.emit('workspace.removed', removed)
+    await fire(none.view)
+    await none.view.unmount()
+
+    const closed = await showWith({ 'tasks.load': ready([task('#42')]), 'worktrees.load': worktreesLoad })
+    await closed.view.emit('workspace.removed', removed)
+    await closed.view.unmount()
+    assert.equal(pending(), 0)
+    assert.equal(reads, 0)
+  })
+})
+
+test("a workspace event during a Start under way reads the worktrees but leaves that card's spinner", async () => {
+  await withTimeouts(WORKSPACE_REFRESH_MS, async ({ fire }) => {
+    let reads = 0
+    const other = { worktreeId: 'r1::/src/web-7', name: 'issue-7-task-7', agent: null }
+    const { view } = await showWith({
+      'tasks.load': ready([task('#42'), task('#7')]),
+      'task.start': { ok: true, underWay: true },
+      // Orca lists the Start's new worktree before the create ends.
+      'worktrees.load': () => (reads++, { kind: 'ready', worktrees: { '#42': { ...started, agent: null }, '#7': other } })
+    })
+    await view.press({ testId: 'start:#42' })
+    await view.emit('workspace.created', created)
+    await fire(view)
+    assert.equal(reads, 1)
+    assert.ok(view.find({ type: 'Link', text: 'issue-7-task-7' }))
+    assert.ok(view.find({ type: 'Spinner', label: 'Starting #42' }))
+    assert.ok(view.find({ type: 'Text', text: CAN_TAKE_A_MINUTE }))
+    assert.equal(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }), null)
+
+    await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', agent: 'claude', ok: true })
+    assert.equal(view.find({ type: 'Spinner', label: 'Starting #42' }), null)
+    assert.ok(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }))
+    assert.ok(view.find({ type: 'Text', text: 'Agent starting…' }))
+    await view.unmount()
+  })
+})
+
+test("a workspace event before a Start's task.start answers reads the worktrees but leaves that card's spinner", async () => {
+  await withTimeouts(WORKSPACE_REFRESH_MS, async ({ fire, pending }) => {
+    const start = held()
+    let reads = 0
+    const { view } = await showWith({
+      'tasks.load': ready([task('#42')]),
+      'task.start': async () => {
+        await start.released
+        return { ok: true, underWay: true }
+      },
+      'worktrees.load': () => (reads++, { kind: 'ready', worktrees: { '#42': { ...started, agent: null } } })
+    })
+    const pressed = view.press({ testId: 'start:#42' })
+    await drawn(view, { type: 'Spinner', label: 'Starting #42' })
+    // Every act waits for the held task.start, so the event and the pause run without awaiting.
+    const emitted = view.emit('workspace.created', created)
+    await until(() => pending() === 1, 'waited to read the worktrees')
+    const fired = fire(view)
+    await until(() => reads === 1, 'read the worktrees')
+    start.release()
+    await Promise.all([pressed, emitted, fired])
+    assert.ok(view.find({ type: 'Spinner', label: 'Starting #42' }))
+    assert.equal(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }), null)
+    await view.unmount()
+  })
+})
+
+test("a Start's error stays on its card after a workspace event reads the worktrees", async () => {
+  await withTimeouts(WORKSPACE_REFRESH_MS, async ({ fire }) => {
+    let reads = 0
+    const { view } = await showWith({
+      'tasks.load': ready([task('#42')]),
+      'task.start': { ok: false, message: "Couldn't read Orca's default agent — pick one in the panel." },
+      'worktrees.load': () => (reads++, { kind: 'ready', worktrees: {} })
+    })
+    await view.press({ testId: 'start:#42' })
+    await view.emit('workspace.removed', removed)
+    await fire(view)
+    assert.equal(reads, 2)
+    assert.ok(view.find({ type: 'Text', text: "Couldn't read Orca's default agent — pick one in the panel." }))
+    assert.ok(view.find({ testId: 'start:#42' }))
+    await view.unmount()
+  })
+})
+
+test("a workspace event's read that answers after a Start's own read doesn't undo its worktree", async () => {
+  await withTimeouts(WORKSPACE_REFRESH_MS, async ({ fire }) => {
+    const first = held()
+    let reads = 0
+    const { view } = await showWith({
+      'tasks.load': ready([task('#42')]),
+      'task.start': { ok: true, underWay: true },
+      'worktrees.load': async () => {
+        // The event's read, asked before Orca listed the new worktree, answers last.
+        const mine = ++reads
+        if (mine === 1) await first.released
+        const worktrees: Record<string, TaskWorktree> = mine === 1 ? {} : { '#42': { ...started, agent: null } }
+        return { kind: 'ready', worktrees }
+      }
+    })
+    await view.press({ testId: 'start:#42' })
+    await view.emit('workspace.created', created)
+    const fired = fire(view)
+    await until(() => reads === 1, "read the worktrees for the event")
+    const ended = view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', agent: null, ok: true })
+    await until(() => reads === 2, "read the worktrees for the Start's end")
+    for (let turns = 0; turns < 5; turns++) await turn()
+    first.release()
+    await Promise.all([fired, ended])
+    assert.ok(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }))
+    assert.equal(view.find({ testId: 'start:#42' }), null)
+    await view.unmount()
+  })
+})
+
+test("a workspace event's read while a Start reads its own end shows the new worktree", async () => {
+  await withTimeouts(WORKSPACE_REFRESH_MS, async ({ fire, pending }) => {
+    const first = held()
+    let reads = 0
+    const { view } = await showWith({
+      'tasks.load': ready([task('#42')]),
+      'task.start': { ok: true, underWay: true },
+      'worktrees.load': async () => {
+        // The Start's own read answers after the event's.
+        if (++reads === 1) await first.released
+        return { kind: 'ready', worktrees: { '#42': { ...started, agent: null } } }
+      }
+    })
+    await view.press({ testId: 'start:#42' })
+    const ended = view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', agent: null, ok: true })
+    await until(() => reads === 1, "read the worktrees for the Start's end")
+    const emitted = view.emit('workspace.created', created)
+    await until(() => pending() === 1, 'waited to read the worktrees')
+    const fired = fire(view)
+    await until(() => reads === 2, 'read the worktrees for the event')
+    for (let turns = 0; turns < 5; turns++) await turn()
+    first.release()
+    await Promise.all([ended, emitted, fired])
+    assert.ok(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }))
+    assert.equal(view.find({ testId: 'start:#42' }), null)
+    await view.unmount()
+  })
+})
+
+test('a workspace event during a reload reads the worktrees once the reload ends', async () => {
+  await withTimeouts(WORKSPACE_REFRESH_MS, async ({ fire, pending }) => {
+    const reload = held()
+    let loads = 0
+    let reads = 0
+    const { view } = await showWith({
+      'tasks.load': async () => {
+        if (++loads === 2) await reload.released
+        return ready([task('#42')], { worktrees: { '#42': started } })
+      },
+      'worktrees.load': () => (reads++, { kind: 'ready', worktrees: {} })
+    })
+    const pressed = view.press({ type: 'IconButton', label: 'Reload tasks' })
+    await until(() => loads === 2, 'reloaded')
+    const emitted = view.emit('workspace.removed', removed)
+    await until(() => pending() === 1, 'waited to read the worktrees')
+    const fired = fire(view)
+    for (let turns = 0; turns < 5; turns++) await turn()
+    assert.equal(reads, 0)
+    assert.equal(pending(), 1)
+    reload.release()
+    await Promise.all([pressed, emitted, fired])
+    await fire(view)
+    assert.equal(reads, 1)
+    assert.ok(view.find({ testId: 'start:#42' }))
+    await view.unmount()
   })
 })
 
