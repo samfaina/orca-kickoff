@@ -65,6 +65,8 @@ const POLL_MS = 3_000
 /** Orca detects the agent of a new worktree a few seconds after its create ends, so the panel
  *  reads the worktrees once more after this pause. */
 const AGENT_CHECK_MS = 5_000
+/** A burst of workspaces created or removed reads the worktrees once, this long after the last. */
+const WORKSPACE_REFRESH_MS = 300
 
 const AGENT_OPTIONS = [
   { value: 'orca-default', label: 'Orca default' },
@@ -273,18 +275,33 @@ function readyProjectId(): string | null {
 }
 
 /** Reads the task worktrees again and puts them in the list, keeping its loaded pages. Answers
- *  them, or null when they couldn't be read or the project changed meanwhile. */
-async function refreshWorktrees(projectId: string): Promise<Record<string, TaskWorktree> | null> {
+ *  them, or null when they couldn't be read or the project changed meanwhile.
+ *
+ *  `startsStay` keeps the cards of the Starts still running as they are, with their spinner: such
+ *  a Start reads the worktrees itself when it ends. */
+async function refreshWorktrees(projectId: string, startsStay = false): Promise<Record<string, TaskWorktree> | null> {
   try {
     const answer = await plugin.request('worktrees.load', { projectId })
     const current = read(list)
     if (answer.kind !== 'ready' || current?.kind !== 'ready' || current.project.id !== projectId) return null
-    agentsReported(projectId, answer.worktrees)
-    set(list, { ...current, worktrees: answer.worktrees, worktreesError: null })
-    return answer.worktrees
+    const worktrees = startsStay ? withStartsStaying(answer.worktrees, current.worktrees) : answer.worktrees
+    agentsReported(projectId, worktrees)
+    set(list, { ...current, worktrees, worktreesError: null })
+    return worktrees
   } catch {
     return null
   }
+}
+
+/** The `fresh` worktrees, with those of the Starts still running as `shown` has them. */
+function withStartsStaying(fresh: Record<string, TaskWorktree>, shown: Record<string, TaskWorktree> | null): Record<string, TaskWorktree> {
+  const worktrees = { ...fresh }
+  for (const key of Object.keys(read(starting))) {
+    const before = shown?.[key]
+    if (before) worktrees[key] = before
+    else delete worktrees[key]
+  }
+  return worktrees
 }
 
 function setTaskError(key: string, message: string | null): void {
@@ -435,6 +452,20 @@ export function setup(ctx: PanelContext): void {
   }
   // Orca sends the current context to each new subscriber; load now only if it hasn't yet.
   ctx.subscriptions.push(on('workspace.changed', reload))
+  // A worktree deleted outside the active one sends no workspace.changed, so the panel reads the
+  // task worktrees again when a workspace is created or removed.
+  let workspaceTimer: ReturnType<typeof setTimeout> | null = null
+  const workspacesChanged = () => {
+    if (workspaceTimer !== null) clearTimeout(workspaceTimer)
+    workspaceTimer = setTimeout(() => {
+      workspaceTimer = null
+      const projectId = readyProjectId()
+      if (projectId) void refreshWorktrees(projectId, true)
+    }, WORKSPACE_REFRESH_MS)
+  }
+  ctx.subscriptions.push(on('workspace.created', workspacesChanged))
+  ctx.subscriptions.push(on('workspace.removed', workspacesChanged))
+  ctx.subscriptions.push({ dispose: () => workspaceTimer !== null && clearTimeout(workspaceTimer) })
   ctx.subscriptions.push(plugin.on('start.ended', onStartEnded))
   ctx.subscriptions.push({ dispose: () => void flushSettings() })
   ctx.subscriptions.push({ dispose: cancelAgentChecks })
