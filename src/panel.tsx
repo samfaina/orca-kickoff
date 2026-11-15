@@ -105,6 +105,10 @@ const moreError = atom<string | null>(null)
 /** Rises with each load, so an answer that arrives after a newer request is dropped. */
 let generation = 0
 
+/** The active project id of the last poll, or undefined when the next poll measures against the
+ *  list instead: before the first poll, and after every load the poll didn't ask for. */
+let lastPolledProjectId: string | null | undefined
+
 /** Settings changes not saved yet, for one project. */
 let pending: { projectId: string; changes: ProjectChanges } | null = null
 let saveTimer: ReturnType<typeof setTimeout> | null = null
@@ -177,7 +181,9 @@ async function loadJiraSites(): Promise<void> {
   }
 }
 
-async function load(): Promise<void> {
+/** Lists the active project's tasks. `poll` says the poll asked for it, so the poll's last answer
+ *  stays the measure for the next one. */
+async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
   const mine = ++generation
   set(loading, true)
   set(loadingMore, false)
@@ -199,6 +205,7 @@ async function load(): Promise<void> {
     if (mine !== generation) return
   }
   if (read(shownSettings)?.provider === 'jira-orca') void loadJiraSites()
+  if (reason !== 'poll') lastPolledProjectId = undefined
   set(list, answer)
   set(loading, false)
 }
@@ -314,20 +321,21 @@ export function setup(ctx: PanelContext): void {
   ctx.subscriptions.push({ dispose: () => void flushSettings() })
 
   // Orca sends no workspace.changed between two worktrees with the same branch and name, such
-  // as two `main` worktrees of different projects, so the panel also asks while it is visible.
-  // A change is measured against the last answer, so a project the list can't show doesn't
-  // reload it on every poll; the first answer is measured against the list.
-  let polled: string | null | undefined
+  // as two `main` worktrees of different projects, so the panel also asks while it is visible,
+  // and not while a load is under way. An answer is measured against the last one, so a project
+  // the list can't show reloads it once, not on every poll; after any other load it is measured
+  // against the list.
+  lastPolledProjectId = undefined
   let polling = false
   const poll = async () => {
-    if (polling || !read(ctx.visible)) return
+    if (polling || read(loading) || !read(ctx.visible)) return
     polling = true
     try {
       const answer = await plugin.request('project.active', {})
       if (!('projectId' in answer)) return
-      const before = polled === undefined ? listedProjectId() : polled
-      polled = answer.projectId
-      if (before !== undefined && answer.projectId !== before) reload()
+      const before = lastPolledProjectId === undefined ? listedProjectId() : lastPolledProjectId
+      lastPolledProjectId = answer.projectId
+      if (before !== undefined && answer.projectId !== before) void load('poll')
     } catch {
       // The worker didn't answer: the next poll asks again.
     } finally {

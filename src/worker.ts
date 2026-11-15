@@ -66,13 +66,14 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
   /** When the last Start of a task timed out, by project and task. */
   const timedOutAt = new Map<string, number>()
 
+  async function readWorktreeState(): Promise<Omit<OrcaState, 'projects'>> {
+    const [worktrees, statuses] = await Promise.all([run('orca', WORKTREE_LIST_ARGS), run('orca', WORKTREE_PS_ARGS)])
+    return { worktrees: parseWorktrees(worktrees), statuses: parseWorktreePs(statuses) }
+  }
+
   async function readOrca(): Promise<OrcaState> {
-    const [projects, worktrees, statuses] = await Promise.all([
-      run('orca', PROJECT_LIST_ARGS),
-      run('orca', WORKTREE_LIST_ARGS),
-      run('orca', WORKTREE_PS_ARGS)
-    ])
-    return { projects: parseProjects(projects), worktrees: parseWorktrees(worktrees), statuses: parseWorktreePs(statuses) }
+    const [projects, state] = await Promise.all([run('orca', PROJECT_LIST_ARGS), readWorktreeState()])
+    return { projects: parseProjects(projects), ...state }
   }
 
   async function readProjectSettings(projectId: string): Promise<ProjectSettings> {
@@ -186,8 +187,8 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
    *  tell it, since the panel asks every few seconds. */
   async function activeProjectId(): Promise<ActiveProjectResult> {
     try {
-      const [worktrees, statuses] = await Promise.all([run('orca', WORKTREE_LIST_ARGS), run('orca', WORKTREE_PS_ARGS)])
-      return { projectId: findActiveProjectId(parseWorktrees(worktrees), parseWorktreePs(statuses)) }
+      const { worktrees, statuses } = await readWorktreeState()
+      return { projectId: findActiveProjectId(worktrees, statuses) }
     } catch (error) {
       return { kind: 'error', message: messageOf(error) }
     }
