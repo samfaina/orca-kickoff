@@ -15,7 +15,8 @@ Update this file when a fact is confirmed or disproved. All example data is inve
 - `orca plugin types <dir>` writes the plugin API types to `<dir>/.orca/types/` (and a `.orca/.gitignore`) without contacting the app. `orca plugin create` and `orca plugin dev load|watch` also write them **[Verified]**.
 - `orca skills get orca-plugin-authoring` prints the official authoring guide for the installed Orca version, with references for manifest, host API, events, components, testing, recipes and CLI **[Verified]**.
 - `tsconfig.json` is `{ "extends": "./.orca/types/tsconfig.json", "include": ["src"] }`. `.orca/` is git-ignored **[Verified]**.
-- Orca loads `.ts`, `.tsx`, `.mts` and `.jsx` as they are, without type checking (`npx tsc -p .` for that). There is no build step and no `package.json`. A panel may only import `orca`, `orca/*` and relative paths **[Verified]**.
+- Orca loads `.ts`, `.tsx`, `.mts` and `.jsx` as they are, without type checking. There is no build step and no `package.json`. A panel may only import `orca`, `orca/*` and relative paths **[Verified]**.
+- Type check with `npx -y -p typescript@5.6.3 tsc -p .`, after `orca plugin types .`: a fresh clone has no `.orca/`, so `tsconfig.json` has nothing to extend **[Verified]** with TypeScript 5.6.3.
 
 ### Manifest
 
