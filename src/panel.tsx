@@ -110,8 +110,9 @@ const endedEarly = new Map<string, StartEnded>()
 let startClock = 0
 /** When each task's `task.start` answered that it is under way, on `startClock`. */
 const underWaySince = new Map<string, number>()
-/** Task keys whose Start passed an agent that Orca doesn't report running yet. */
-const agentStarting = atom<Record<string, true>>({})
+/** Task keys whose Start passed an agent that Orca doesn't report running yet, mapped to the
+ *  project of that Start. */
+const agentStarting = atom<Record<string, string>>({})
 /** The pending read of the worktrees for each task in `agentStarting`. */
 const agentChecks = new Map<string, ReturnType<typeof setTimeout>>()
 /** The error of each task's last Start, or of opening its worktree. */
@@ -230,6 +231,7 @@ async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
   // Only a ready list reports the Starts under way.
   if (answer.kind === 'ready') showStarting(answer.starting, askedAt)
   else showStarting([], 0)
+  if (answer.kind === 'ready' && answer.worktrees) agentsReported(answer.project.id, answer.worktrees)
   set(list, answer)
   set(loading, false)
 }
@@ -277,6 +279,7 @@ async function refreshWorktrees(projectId: string): Promise<Record<string, TaskW
     const answer = await plugin.request('worktrees.load', { projectId })
     const current = read(list)
     if (answer.kind !== 'ready' || current?.kind !== 'ready' || current.project.id !== projectId) return null
+    agentsReported(projectId, answer.worktrees)
     set(list, { ...current, worktrees: answer.worktrees, worktreesError: null })
     return answer.worktrees
   } catch {
@@ -322,7 +325,8 @@ async function startTask(task: Task): Promise<void> {
     else underWaySince.set(task.key, ++startClock)
     return
   }
-  await finishStart(projectId, task.key, answer.ok ? null : answer.message)
+  // The task already had its worktree: this Start launched no agent.
+  await finishStart(projectId, task.key, answer.ok ? null : answer.message, null)
 }
 
 /** Asks the worker which Starts are under way, while a spinner shows for one this panel isn't
@@ -349,7 +353,7 @@ async function endStart(end: StartEnded): Promise<void> {
 /** Clears a Start's spinner once Orca's worktrees are read again, and shows its error unless the
  *  task now has a worktree: a Start that timed out may have finished. When the Start passed an
  *  agent that Orca doesn't report yet, the card says it is starting until one more read. */
-async function finishStart(projectId: string, key: string, error: string | null, agent: string | null = null): Promise<void> {
+async function finishStart(projectId: string, key: string, error: string | null, agent: string | null): Promise<void> {
   const worktrees = await refreshWorktrees(projectId)
   underWaySince.delete(key)
   update(starting, ({ [key]: _, ...rest }) => rest)
@@ -362,7 +366,7 @@ async function finishStart(projectId: string, key: string, error: string | null,
 /** Shows the task's agent as starting, and reads the worktrees again after a pause; from then on
  *  the card shows what Orca reports. */
 function checkAgentLater(projectId: string, key: string): void {
-  update(agentStarting, (keys): Record<string, true> => ({ ...keys, [key]: true as const }))
+  update(agentStarting, (keys) => ({ ...keys, [key]: projectId }))
   const earlier = agentChecks.get(key)
   if (earlier !== undefined) clearTimeout(earlier)
   agentChecks.set(
@@ -372,6 +376,15 @@ function checkAgentLater(projectId: string, key: string): void {
       void refreshWorktrees(projectId).finally(() => update(agentStarting, ({ [key]: _, ...rest }) => rest))
     }, AGENT_CHECK_MS)
   )
+}
+
+/** Stops showing as starting the agents of the project's tasks whose worktree Orca now reports
+ *  running one. */
+function agentsReported(projectId: string, worktrees: Record<string, TaskWorktree>): void {
+  const shown = read(agentStarting)
+  const reported = Object.keys(shown).filter((key) => shown[key] === projectId && worktrees[key]?.agent)
+  if (reported.length === 0) return
+  set(agentStarting, Object.fromEntries(Object.entries(shown).filter(([key]) => !reported.includes(key))))
 }
 
 /** Cancels the pending reads of `checkAgentLater`, when the panel closes. */
@@ -420,6 +433,7 @@ export function setup(ctx: PanelContext): void {
   // the list can't show reloads it once, not on every poll; after any other load it is measured
   // against the list.
   lastPolledProjectId = undefined
+  set(agentStarting, {})
   let polling = false
   const poll = async () => {
     if (polling || read(loading) || !read(ctx.visible)) return
@@ -608,7 +622,7 @@ function Body({ list }: { list: TaskList }) {
           {list.tasks.length === 0 ? (
             <EmptyState title="No open tasks" icon="check" />
           ) : (
-            list.tasks.map((task) => <TaskCard key={task.key} task={task} worktrees={list.worktrees} />)
+            list.tasks.map((task) => <TaskCard key={task.key} task={task} projectId={list.project.id} worktrees={list.worktrees} />)
           )}
           {list.nextCursor !== null ? <LoadMore /> : null}
           {list.truncated ? (
@@ -642,7 +656,13 @@ function LoadMore() {
   )
 }
 
-function TaskCard({ task, worktrees }: { task: Task; worktrees: Record<string, TaskWorktree> | null }) {
+/** What the card says about its worktree's agent. */
+function agentLine(worktree: TaskWorktree, agentStarting: boolean): string {
+  if (worktree.agent) return `Agent: ${worktree.agent}`
+  return agentStarting ? 'Agent starting…' : 'No agent running'
+}
+
+function TaskCard({ task, projectId, worktrees }: { task: Task; projectId: string; worktrees: Record<string, TaskWorktree> | null }) {
   // Every GitHub task is open, so its status says nothing.
   const status = task.tracker !== 'github' ? task.status : null
   const worktree = worktrees?.[task.key] ?? null
@@ -674,7 +694,7 @@ function TaskCard({ task, worktrees }: { task: Task; worktrees: Record<string, T
         <Row gap="xs" align="center" wrap>
           <Link onPress={() => void openWorktree(task.key, worktree.worktreeId)}>{worktree.name}</Link>
           <Text size="sm" muted>
-            {worktree.agent ? `Agent: ${worktree.agent}` : read(agentStarting)[task.key] ? 'Agent starting…' : 'No agent running'}
+            {agentLine(worktree, read(agentStarting)[task.key] === projectId)}
           </Text>
         </Row>
       ) : null}

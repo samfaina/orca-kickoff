@@ -741,6 +741,47 @@ test('one delayed worktrees.load runs after a Start, and then the card shows wha
   })
 })
 
+test('once a reload reports the agent, the card shows what Orca reports from then on', async () => {
+  await withTimeouts(AGENT_CHECK_MS, async () => {
+    let loads = 0
+    let agent: string | null = null
+    const { view } = await showWith({
+      'tasks.load': () => ready([task('#42')], { worktrees: ++loads === 1 ? {} : { '#42': { ...started, agent } } }),
+      'task.start': { ok: true, underWay: true },
+      'worktrees.load': { kind: 'ready', worktrees: { '#42': { ...started, agent: null } } }
+    })
+    await view.press({ testId: 'start:#42' })
+    await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', agent: 'claude', ok: true })
+    agent = 'claude'
+    await view.press({ type: 'IconButton', label: 'Reload tasks' })
+    assert.ok(view.find({ type: 'Text', text: 'Agent: claude' }))
+    // The agent exits before the delayed load.
+    agent = null
+    await view.press({ type: 'IconButton', label: 'Reload tasks' })
+    assert.ok(view.find({ type: 'Text', text: 'No agent running' }))
+    await view.unmount()
+  })
+})
+
+test("a Start's agent shows as starting only in its own project", async () => {
+  await withTimeouts(AGENT_CHECK_MS, async () => {
+    let project = web
+    const { view } = await showWith({
+      'tasks.load': () => ready([task('#42')], { project, worktrees: project === web ? {} : { '#42': { ...started, agent: null } } }),
+      'task.start': { ok: true, underWay: true },
+      'worktrees.load': { kind: 'ready', worktrees: { '#42': { ...started, agent: null } } }
+    })
+    await view.press({ testId: 'start:#42' })
+    await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', agent: 'claude', ok: true })
+    assert.ok(view.find({ type: 'Text', text: 'Agent starting…' }))
+    project = api
+    await view.emit('workspace.changed', { context: { branch: 'main', displayName: 'api', terminals: [] } })
+    assert.ok(view.find({ type: 'Heading', text: 'api' }))
+    assert.ok(view.find({ type: 'Text', text: 'No agent running' }))
+    await view.unmount()
+  })
+})
+
 test('no delayed worktrees.load runs after the panel is deactivated', async () => {
   await withTimeouts(AGENT_CHECK_MS, async ({ fire, pending }) => {
     const { view, reads } = await startedWithoutAgentYet()
