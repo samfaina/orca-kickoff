@@ -290,7 +290,7 @@ Behaviour:
   - It needs a host with `WORKTREE_LINKED_ITEMS_DELTA`, otherwise `incompatible_runtime`.
 - Orca accepts Jira keys matching `/^[A-Za-z][A-Za-z0-9_]*-\d+$/` **[Verified]**.
 
-Timing, measured on Windows with Orca 1.4.257 on a small repository **[Verified]**: `worktree create` takes about 25 s without an agent and about 30 s with `--agent` and `--prompt`; `--setup skip` does not make it faster. A larger repository or setup hooks can take over a minute, so Kickoff gives it 10 minutes.
+Timing, measured by the maintainer on Windows with Orca 1.4.257 on a small repository (issue #14) **[Verified]**: `worktree create` takes about 25 s without an agent and about 30 s with `--agent` and `--prompt`; `--setup skip` does not make it faster. That a larger repository or setup hooks take over a minute **[Assumed]**; Kickoff gives the create 10 minutes.
 
 ### `orca worktree activate --worktree id:<id> --json`
 
