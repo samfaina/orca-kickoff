@@ -1,6 +1,6 @@
 import { assert, hostError, mockHost, mount, test, type MockHost, type MockRequests, type TestPanel, type TestQuery } from 'orca/testing'
 import type { JsonValue } from 'orca'
-import type { Task, TaskList } from './protocol'
+import type { Task, TaskList, TaskWorktree } from './protocol'
 import * as panel from './panel'
 import { DEFAULT_TEMPLATE } from './template'
 
@@ -60,6 +60,16 @@ async function drawn(view: TestPanel, query: TestQuery, eachTurn: () => void = (
     await turn()
   }
   assert.fail(`the panel never drew ${JSON.stringify(query)}`)
+}
+
+/** Yields event-loop turns until `condition` holds, while an act waits for a held request, and
+ *  fails if it never does. */
+async function until(condition: () => boolean, what: string): Promise<void> {
+  for (let turns = 0; turns < 100; turns++) {
+    if (condition()) return
+    await turn()
+  }
+  assert.fail(`never ${what}`)
 }
 
 test("lists the project's open issues with their key, title and labels", async () => {
@@ -1023,10 +1033,9 @@ test("a workspace event before a Start's task.start answers reads the worktrees 
     await drawn(view, { type: 'Spinner', label: 'Starting #42' })
     // Every act waits for the held task.start, so the event and the pause run without awaiting.
     const emitted = view.emit('workspace.created', created)
-    for (let turns = 0; turns < 100 && pending() === 0; turns++) await turn()
+    await until(() => pending() === 1, 'waited to read the worktrees')
     const fired = fire(view)
-    for (let turns = 0; turns < 100 && reads === 0; turns++) await turn()
-    assert.equal(reads, 1)
+    await until(() => reads === 1, 'read the worktrees')
     start.release()
     await Promise.all([pressed, emitted, fired])
     assert.ok(view.find({ type: 'Spinner', label: 'Starting #42' }))
@@ -1048,6 +1057,94 @@ test("a Start's error stays on its card after a workspace event reads the worktr
     await fire(view)
     assert.equal(reads, 2)
     assert.ok(view.find({ type: 'Text', text: "Couldn't read Orca's default agent — pick one in the panel." }))
+    assert.ok(view.find({ testId: 'start:#42' }))
+    await view.unmount()
+  })
+})
+
+test("a workspace event's read that answers after a Start's own read doesn't undo its worktree", async () => {
+  await withTimeouts(WORKSPACE_REFRESH_MS, async ({ fire }) => {
+    const first = held()
+    let reads = 0
+    const { view } = await showWith({
+      'tasks.load': ready([task('#42')]),
+      'task.start': { ok: true, underWay: true },
+      'worktrees.load': async () => {
+        // The event's read, asked before Orca listed the new worktree, answers last.
+        const mine = ++reads
+        if (mine === 1) await first.released
+        const worktrees: Record<string, TaskWorktree> = mine === 1 ? {} : { '#42': { ...started, agent: null } }
+        return { kind: 'ready', worktrees }
+      }
+    })
+    await view.press({ testId: 'start:#42' })
+    await view.emit('workspace.created', created)
+    const fired = fire(view)
+    await until(() => reads === 1, "read the worktrees for the event")
+    const ended = view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', agent: null, ok: true })
+    await until(() => reads === 2, "read the worktrees for the Start's end")
+    for (let turns = 0; turns < 5; turns++) await turn()
+    first.release()
+    await Promise.all([fired, ended])
+    assert.ok(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }))
+    assert.equal(view.find({ testId: 'start:#42' }), null)
+    await view.unmount()
+  })
+})
+
+test("a workspace event's read while a Start reads its own end shows the new worktree", async () => {
+  await withTimeouts(WORKSPACE_REFRESH_MS, async ({ fire, pending }) => {
+    const first = held()
+    let reads = 0
+    const { view } = await showWith({
+      'tasks.load': ready([task('#42')]),
+      'task.start': { ok: true, underWay: true },
+      'worktrees.load': async () => {
+        // The Start's own read answers after the event's.
+        if (++reads === 1) await first.released
+        return { kind: 'ready', worktrees: { '#42': { ...started, agent: null } } }
+      }
+    })
+    await view.press({ testId: 'start:#42' })
+    const ended = view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', agent: null, ok: true })
+    await until(() => reads === 1, "read the worktrees for the Start's end")
+    const emitted = view.emit('workspace.created', created)
+    await until(() => pending() === 1, 'waited to read the worktrees')
+    const fired = fire(view)
+    await until(() => reads === 2, 'read the worktrees for the event')
+    for (let turns = 0; turns < 5; turns++) await turn()
+    first.release()
+    await Promise.all([ended, emitted, fired])
+    assert.ok(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }))
+    assert.equal(view.find({ testId: 'start:#42' }), null)
+    await view.unmount()
+  })
+})
+
+test('a workspace event during a reload reads the worktrees once the reload ends', async () => {
+  await withTimeouts(WORKSPACE_REFRESH_MS, async ({ fire, pending }) => {
+    const reload = held()
+    let loads = 0
+    let reads = 0
+    const { view } = await showWith({
+      'tasks.load': async () => {
+        if (++loads === 2) await reload.released
+        return ready([task('#42')], { worktrees: { '#42': started } })
+      },
+      'worktrees.load': () => (reads++, { kind: 'ready', worktrees: {} })
+    })
+    const pressed = view.press({ type: 'IconButton', label: 'Reload tasks' })
+    await until(() => loads === 2, 'reloaded')
+    const emitted = view.emit('workspace.removed', removed)
+    await until(() => pending() === 1, 'waited to read the worktrees')
+    const fired = fire(view)
+    for (let turns = 0; turns < 5; turns++) await turn()
+    assert.equal(reads, 0)
+    assert.equal(pending(), 1)
+    reload.release()
+    await Promise.all([pressed, emitted, fired])
+    await fire(view)
+    assert.equal(reads, 1)
     assert.ok(view.find({ testId: 'start:#42' }))
     await view.unmount()
   })
