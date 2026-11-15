@@ -2,7 +2,7 @@ import { assert, mockHost, mountWorker, test } from 'orca/testing'
 import type { JsonValue } from 'orca'
 import { AGENT_UNREADABLE, type DefaultAgent } from './agent'
 import { CliError, cliFailureMessage, type RunCli } from './cli'
-import type { Task } from './protocol'
+import type { StartEnded, Task } from './protocol'
 import { activateWith } from './worker'
 
 const wrap = (result: unknown) => JSON.stringify({ id: 'req-1', ok: true, result, _meta: { runtimeId: 'rt-1' } })
@@ -475,12 +475,12 @@ test("a Start of an already started task doesn't run worktree create", async () 
   assert.deepEqual(worker.posts, [])
 })
 
-/** The end posted for the Start of #42 in web, once there is one. */
-async function endOf42(worker: { posts: readonly { event: string; payload?: unknown }[] }, count = 1) {
+/** The `count`th Start end the worker posted, once it has. */
+async function nthEnd(worker: { posts: readonly { event: string; payload?: unknown }[] }, count = 1): Promise<StartEnded> {
   await until(() => worker.posts.length >= count)
   const post = worker.posts[count - 1]
   assert.equal(post?.event, 'start.ended')
-  return post.payload as { projectId: string; taskKey: string; ok: boolean; message?: string }
+  return post.payload as StartEnded
 }
 
 test('a timed-out create posts a failed end, and the same task waits five minutes before creating again', async () => {
@@ -488,11 +488,11 @@ test('a timed-out create posts a failed end, and the same task waits five minute
   const timeout = new CliError("orca didn't answer in time.", true)
   const { worker, calls, answer } = await start({ ...ORCA_OK, 'orca worktree create': timeout }, { now: () => clock })
   assert.deepEqual(await worker.request('task.start', startWeb42), { ok: true, underWay: true })
-  const ended = await endOf42(worker)
-  assert.equal(ended.ok, false)
+  const ended = await nthEnd(worker)
   assert.equal(ended.taskKey, '#42')
   assert.equal(ended.projectId, 'github:acme/web')
-  assert.match(ended.message ?? '', /may still be creating/)
+  assert.ok(!ended.ok)
+  assert.match(ended.message, /may still be creating/)
 
   answer({ ...ORCA_OK, 'orca worktree create': CREATED })
   clock += 4 * 60_000
@@ -504,14 +504,14 @@ test('a timed-out create posts a failed end, and the same task waits five minute
   clock += 61_000
   assert.deepEqual(await worker.request('task.start', startWeb42), { ok: true, underWay: true })
   assert.equal(creates(calls).length, 2)
-  assert.deepEqual(await endOf42(worker, 2), { projectId: 'github:acme/web', taskKey: '#42', ok: true })
+  assert.deepEqual(await nthEnd(worker, 2), { projectId: 'github:acme/web', taskKey: '#42', ok: true })
 })
 
 test('a worktree Orca finished after a timeout counts as started', async () => {
   const timeout = new CliError("orca didn't answer in time.", true)
   const { worker, calls, answer } = await start({ ...ORCA_OK, 'orca worktree create': timeout })
   await worker.request('task.start', startWeb42)
-  await endOf42(worker)
+  await nthEnd(worker)
   answer({ ...ORCA_OK, 'orca worktree list': worktreesWith(started42) })
   assert.deepEqual(await worker.request('task.start', startWeb42), { ok: true, underWay: false })
   assert.equal(creates(calls).length, 1)
@@ -520,7 +520,7 @@ test('a worktree Orca finished after a timeout counts as started', async () => {
 test("a failed create posts a failed end with Orca's real message", async () => {
   const { worker } = await start({ ...ORCA_OK, 'orca worktree create': new CliError('orca failed: Pick a different worktree name') })
   assert.deepEqual(await worker.request('task.start', startWeb42), { ok: true, underWay: true })
-  assert.deepEqual(await endOf42(worker), {
+  assert.deepEqual(await nthEnd(worker), {
     projectId: 'github:acme/web',
     taskKey: '#42',
     ok: false,

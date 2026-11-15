@@ -102,6 +102,11 @@ const starting = atom<Record<string, true>>({})
 const requested = new Set<string>()
 /** The end of each Start that arrived before its `task.start` answer. */
 const endedEarly = new Map<string, StartEnded>()
+/** Rises with each report asked for and each Start under way, so a report the worker made before
+ *  a Start went under way can't end it. */
+let startClock = 0
+/** When each task's `task.start` answered that it is under way, on `startClock`. */
+const underWaySince = new Map<string, number>()
 /** The error of each task's last Start, or of opening its worktree. */
 const taskErrors = atom<Record<string, string>>({})
 
@@ -196,8 +201,10 @@ async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
   set(loadingMore, false)
   set(moreError, null)
   let answer: TaskList
+  let askedAt = 0
   try {
     await flushSettings()
+    askedAt = ++startClock
     answer = await plugin.request('tasks.load', {}, { timeoutMs: LOAD_TIMEOUT_MS })
   } catch (error) {
     answer = { kind: 'error', project: null, message: `Kickoff's worker didn't answer (${errorCode(error)}). Reload to try again.` }
@@ -213,7 +220,9 @@ async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
   }
   if (read(shownSettings)?.provider === 'jira-orca') void loadJiraSites()
   if (reason !== 'poll') lastPolledProjectId = undefined
-  showStarting(answer.kind === 'ready' ? answer.starting : [])
+  // Only a ready list reports the Starts under way.
+  if (answer.kind === 'ready') showStarting(answer.starting, askedAt)
+  else showStarting([], 0)
   set(list, answer)
   set(loading, false)
 }
@@ -275,10 +284,13 @@ function setTaskError(key: string, message: string | null): void {
   })
 }
 
-/** Shows the spinner on the tasks the worker reports under way, and on those whose `task.start`
- *  hasn't answered yet. */
-function showStarting(reported: string[]): void {
-  set(starting, Object.fromEntries([...reported, ...requested].map((key): [string, true] => [key, true])))
+/** Shows the spinner on the tasks the worker reports under way in a report asked for at
+ *  `askedAt`, on those whose `task.start` hasn't answered yet, and on those that went under way
+ *  after the report was asked for. */
+function showStarting(reported: string[], askedAt: number): void {
+  for (const [key, since] of underWaySince) if (since < askedAt) underWaySince.delete(key)
+  const keys = [...reported, ...requested, ...underWaySince.keys()]
+  set(starting, Object.fromEntries(keys.map((key): [string, true] => [key, true])))
 }
 
 async function startTask(task: Task): Promise<void> {
@@ -300,6 +312,7 @@ async function startTask(task: Task): Promise<void> {
   if (answer.ok && answer.underWay) {
     // The worker posts `start.ended` when the create ends.
     if (early) await endStart(early)
+    else underWaySince.set(task.key, ++startClock)
     return
   }
   await finishStart(projectId, task.key, answer.ok ? null : answer.message)
@@ -310,8 +323,9 @@ async function startTask(task: Task): Promise<void> {
 async function checkStarts(): Promise<void> {
   const projectId = readyProjectId()
   if (!projectId || !Object.keys(read(starting)).some((key) => !requested.has(key))) return
+  const askedAt = ++startClock
   const answer = await plugin.request('starts.load', { projectId })
-  if (readyProjectId() === projectId) showStarting(answer.starting)
+  if (readyProjectId() === projectId) showStarting(answer.starting, askedAt)
 }
 
 /** A Start's create ended in the worker. */
@@ -329,6 +343,7 @@ async function endStart(end: StartEnded): Promise<void> {
  *  task now has a worktree: a Start that timed out may have finished. */
 async function finishStart(projectId: string, key: string, error: string | null): Promise<void> {
   const worktrees = await refreshWorktrees(projectId)
+  underWaySince.delete(key)
   update(starting, ({ [key]: _, ...rest }) => rest)
   if (readyProjectId() === projectId) setTaskError(key, worktrees?.[key] ? null : error)
 }

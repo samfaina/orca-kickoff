@@ -205,7 +205,7 @@ export type ActionResult = { ok: true } | { ok: false; message: string }
 export type StartResult = { ok: true; underWay: boolean } | { ok: false; message: string }
 
 /** Posted when the `worktree create` of a Start under way ends. A timeout is a failure. */
-export type StartEnded = { projectId: string; taskKey: string } & ({ ok: true } | { ok: false; message: string })
+export type StartEnded = { projectId: string; taskKey: string } & ActionResult
 
 declare module 'orca' {
   interface PluginRequests {

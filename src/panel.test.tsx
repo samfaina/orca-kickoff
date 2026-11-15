@@ -503,6 +503,30 @@ test('a panel opened while the worker reports a Start under way shows its spinne
   await view.unmount()
 })
 
+test('a list asked for before a Start went under way, and answered after, keeps its spinner', async () => {
+  let loads = 0
+  let startAnswered: () => void = () => {}
+  const answered = new Promise<void>((resolve) => (startAnswered = resolve))
+  const { view } = await showWith({
+    'tasks.load': async () => {
+      if (++loads === 1) return ready([task('#42')])
+      // The worker read its Starts before this one was under way.
+      await answered
+      await wait(0)
+      return ready([task('#42')], { starting: [] })
+    },
+    'task.start': () => {
+      startAnswered()
+      return { ok: true, underWay: true }
+    }
+  })
+  await Promise.all([view.press({ type: 'IconButton', label: 'Reload tasks' }), view.press({ testId: 'start:#42' })])
+  assert.equal(loads, 2)
+  assert.ok(view.find({ type: 'Spinner', label: 'Starting #42' }))
+  assert.ok(view.find({ type: 'Text', text: CAN_TAKE_A_MINUTE }))
+  await view.unmount()
+})
+
 test("a Start's successful end clears the spinner and shows the worktree", async () => {
   let worktrees = {}
   const { view } = await showWith({

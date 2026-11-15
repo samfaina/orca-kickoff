@@ -33,6 +33,7 @@ import {
   type JiraSitesResult,
   type ProjectRef,
   type ProjectSettings,
+  type StartEnded,
   type StartResult,
   type Task,
   type TaskList,
@@ -142,19 +143,19 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
     return [...creating.values()].filter((start) => start.projectId === projectId).map((start) => start.taskKey)
   }
 
-  /** Runs the quick checks and answers with their failure, or launches the create and answers
-   *  that it is under way without waiting for it. */
+  /** Runs the quick checks and answers with their failure, or starts the create and answers that
+   *  it is under way without waiting for it. */
   function startTask(projectId: string, task: Task): Promise<StartResult> {
     const id = `${projectId}\n${task.key}`
     if (creating.has(id)) return Promise.resolve({ ok: true, underWay: true })
     const running = checking.get(id)
     if (running) return running
-    const checked = checkAndLaunch(id, projectId, task).finally(() => checking.delete(id))
+    const checked = checkAndCreate(id, projectId, task).finally(() => checking.delete(id))
     checking.set(id, checked)
     return checked
   }
 
-  async function checkAndLaunch(id: string, projectId: string, task: Task): Promise<StartResult> {
+  async function checkAndCreate(id: string, projectId: string, task: Task): Promise<StartResult> {
     try {
       const [projectsOut, worktreesOut] = await Promise.all([run('orca', PROJECT_LIST_ARGS), run('orca', WORKTREE_LIST_ARGS)])
       const project = parseProjects(projectsOut).find((candidate) => candidate.id === projectId)
@@ -179,9 +180,10 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
       if (!prompt.ok) return prompt
       const args = worktreeCreateArgs({ projectId, name, task, agent: agent.agent, prompt: prompt.prompt })
       creating.set(id, { projectId, taskKey: task.key })
-      void createWorktree(id, task.key, args).then((end) => {
+      void createWorktree(id, task.key, args).then((result) => {
         creating.delete(id)
-        orca.panels.post('start.ended', { projectId, taskKey: task.key, ...end })
+        const end: StartEnded = { projectId, taskKey: task.key, ...result }
+        orca.panels.post('start.ended', end)
       })
       return { ok: true, underWay: true }
     } catch (error) {
@@ -190,7 +192,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
   }
 
   /** Runs `worktree create` and says how it ended. A timeout sets the five-minute guard. */
-  async function createWorktree(id: string, taskKey: string, args: string[]): Promise<{ ok: true } | { ok: false; message: string }> {
+  async function createWorktree(id: string, taskKey: string, args: string[]): Promise<ActionResult> {
     try {
       checkOrcaAnswer(await run('orca', args, { timeoutMs: WORKTREE_CREATE_TIMEOUT_MS }))
       timedOutAt.delete(id)
