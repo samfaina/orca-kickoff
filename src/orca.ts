@@ -85,15 +85,20 @@ function runningAgent(agents: unknown): string | null {
   return main ? (main.agentType as string) : null
 }
 
+/** The project id of the active worktree, or null when no worktree is active. */
+export function findActiveProjectId(worktrees: OrcaWorktree[], statuses: OrcaWorktreeStatus[]): string | null {
+  const active = statuses.find((row) => row.isActive)
+  return (active && worktrees.find((candidate) => candidate.id === active.worktreeId)?.projectId) ?? null
+}
+
 /** The project of the active worktree, or null when no worktree is active. */
 export function findActiveProject(
   projects: ProjectRef[],
   worktrees: OrcaWorktree[],
   statuses: OrcaWorktreeStatus[]
 ): ProjectRef | null {
-  const active = statuses.find((row) => row.isActive)
-  const worktree = active && worktrees.find((candidate) => candidate.id === active.worktreeId)
-  return (worktree && projects.find((project) => project.id === worktree.projectId)) ?? null
+  const id = findActiveProjectId(worktrees, statuses)
+  return projects.find((project) => project.id === id) ?? null
 }
 
 /** Task keys mapped to the project's task worktrees: its non-archived worktrees linked to a task

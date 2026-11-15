@@ -57,6 +57,8 @@ const LOAD_TIMEOUT_MS = 90_000
 const START_TIMEOUT_MS = 120_000
 /** Start options save themselves after this pause. */
 const SAVE_DELAY_MS = 600
+/** How often the panel asks for the active project while it is visible. */
+const POLL_MS = 3_000
 
 const AGENT_OPTIONS = [
   { value: 'orca-default', label: 'Orca default' },
@@ -102,6 +104,10 @@ const moreError = atom<string | null>(null)
 
 /** Rises with each load, so an answer that arrives after a newer request is dropped. */
 let generation = 0
+
+/** The active project id of the last poll, or undefined when the next poll measures against the
+ *  list instead: before the first poll, and after every load the poll didn't ask for. */
+let lastPolledProjectId: string | null | undefined
 
 /** Settings changes not saved yet, for one project. */
 let pending: { projectId: string; changes: ProjectChanges } | null = null
@@ -175,7 +181,9 @@ async function loadJiraSites(): Promise<void> {
   }
 }
 
-async function load(): Promise<void> {
+/** Lists the active project's tasks. `poll` says the poll asked for it, so the poll's last answer
+ *  stays the measure for the next one. */
+async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
   const mine = ++generation
   set(loading, true)
   set(loadingMore, false)
@@ -197,6 +205,7 @@ async function load(): Promise<void> {
     if (mine !== generation) return
   }
   if (read(shownSettings)?.provider === 'jira-orca') void loadJiraSites()
+  if (reason !== 'poll') lastPolledProjectId = undefined
   set(list, answer)
   set(loading, false)
 }
@@ -293,6 +302,14 @@ function errorCode(error: unknown): string {
   return isRecord(error) && typeof error.code === 'string' ? error.code : 'unknown error'
 }
 
+/** The listed project's id, null when no project is selected, or undefined when the list says
+ *  neither. */
+function listedProjectId(): string | null | undefined {
+  const current = read(list)
+  if (current?.kind === 'no-project') return null
+  return current && 'project' in current && current.project ? current.project.id : undefined
+}
+
 export function setup(ctx: PanelContext): void {
   let started = false
   const reload = () => {
@@ -302,6 +319,31 @@ export function setup(ctx: PanelContext): void {
   // Orca sends the current context to each new subscriber; load now only if it hasn't yet.
   ctx.subscriptions.push(on('workspace.changed', reload))
   ctx.subscriptions.push({ dispose: () => void flushSettings() })
+
+  // Orca sends no workspace.changed between two worktrees with the same branch and name, such
+  // as two `main` worktrees of different projects, so the panel also asks while it is visible,
+  // and not while a load is under way. An answer is measured against the last one, so a project
+  // the list can't show reloads it once, not on every poll; after any other load it is measured
+  // against the list.
+  lastPolledProjectId = undefined
+  let polling = false
+  const poll = async () => {
+    if (polling || read(loading) || !read(ctx.visible)) return
+    polling = true
+    try {
+      const answer = await plugin.request('project.active', {})
+      if (!('projectId' in answer)) return
+      const before = lastPolledProjectId === undefined ? listedProjectId() : lastPolledProjectId
+      lastPolledProjectId = answer.projectId
+      if (before !== undefined && answer.projectId !== before) void load('poll')
+    } catch {
+      // The worker didn't answer: the next poll asks again.
+    } finally {
+      polling = false
+    }
+  }
+  const timer = setInterval(() => void poll(), POLL_MS)
+  ctx.subscriptions.push({ dispose: () => clearInterval(timer) })
   if (!started) reload()
 }
 

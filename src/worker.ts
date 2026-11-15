@@ -8,6 +8,7 @@ import { worktreeName } from './naming'
 import {
   checkOrcaAnswer,
   findActiveProject,
+  findActiveProjectId,
   findTaskWorktrees,
   parseProjects,
   parseWorktreePs,
@@ -28,6 +29,7 @@ import {
   SETTINGS_KEY,
   trackerOf,
   type ActionResult,
+  type ActiveProjectResult,
   type JiraSitesResult,
   type ProjectRef,
   type ProjectSettings,
@@ -38,8 +40,6 @@ import {
 import { taskLister } from './providers'
 import { JIRA_CONNECTION_ARGS, parseJiraSites } from './providers/jira-orca'
 import { buildPrompt } from './template'
-
-const NOT_READY = 'Kickoff is not ready yet.'
 
 /** After a timed-out `worktree create`, Orca may still finish it; a Start of the same task waits
  *  this long, so it doesn't make a second worktree. */
@@ -66,13 +66,14 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
   /** When the last Start of a task timed out, by project and task. */
   const timedOutAt = new Map<string, number>()
 
+  async function readWorktreeState(): Promise<Omit<OrcaState, 'projects'>> {
+    const [worktrees, statuses] = await Promise.all([run('orca', WORKTREE_LIST_ARGS), run('orca', WORKTREE_PS_ARGS)])
+    return { worktrees: parseWorktrees(worktrees), statuses: parseWorktreePs(statuses) }
+  }
+
   async function readOrca(): Promise<OrcaState> {
-    const [projects, worktrees, statuses] = await Promise.all([
-      run('orca', PROJECT_LIST_ARGS),
-      run('orca', WORKTREE_LIST_ARGS),
-      run('orca', WORKTREE_PS_ARGS)
-    ])
-    return { projects: parseProjects(projects), worktrees: parseWorktrees(worktrees), statuses: parseWorktreePs(statuses) }
+    const [projects, state] = await Promise.all([run('orca', PROJECT_LIST_ARGS), readWorktreeState()])
+    return { projects: parseProjects(projects), ...state }
   }
 
   async function readProjectSettings(projectId: string): Promise<ProjectSettings> {
@@ -182,6 +183,17 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
     }
   }
 
+  /** The active worktree's project id, for the panel to poll: only the two Orca queries that
+   *  tell it, since the panel asks every few seconds. */
+  async function activeProjectId(): Promise<ActiveProjectResult> {
+    try {
+      const { worktrees, statuses } = await readWorktreeState()
+      return { projectId: findActiveProjectId(worktrees, statuses) }
+    } catch (error) {
+      return { kind: 'error', message: messageOf(error) }
+    }
+  }
+
   async function jiraSites(): Promise<JiraSitesResult> {
     try {
       return { kind: 'ready', sites: parseJiraSites(await run('orca', JIRA_CONNECTION_ARGS)) }
@@ -201,7 +213,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
 
   orca.panels.handle('tasks.load', ({ cursor }) => loadTasks(cursor))
   orca.panels.handle('worktrees.load', ({ projectId }) => loadWorktrees(projectId))
-  orca.panels.handle('project.active', () => ({ kind: 'error' as const, message: NOT_READY }))
+  orca.panels.handle('project.active', () => activeProjectId())
   orca.panels.handle('jira.sites', () => jiraSites())
   orca.panels.handle('task.start', ({ projectId, task }) => startTask(projectId, task))
   orca.panels.handle('worktree.open', ({ worktreeId }) => openWorktree(worktreeId))

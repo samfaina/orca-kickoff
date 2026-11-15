@@ -104,6 +104,26 @@ test('a JSON error on stdout gives its message and never the feedback URL', () =
   assert.equal(message, "twg failed: Error in the JQL query: the field 'sprnt' does not exist.")
 })
 
+test("a JSON error's summary follows its message, so twg logged out says how to log in", () => {
+  // twg 1.4.4 without a login: exit 77, this on stdout and a readable block on stderr.
+  const stdout = JSON.stringify({
+    ok: false,
+    error: {
+      code: 'AUTH_REQUIRED',
+      kind: 'twg',
+      mode: 'oauth',
+      statusCode: 401,
+      message: 'authentication required. No valid credentials found.',
+      summary: "You're not signed in. Run `twg login --force` to authenticate with your Atlassian account.",
+      remediation: { command: 'twg login --force', env: ['TWG_TOKEN', 'TWG_USER'] }
+    }
+  })
+  assert.equal(
+    cliFailureMessage('twg', { kind: 'failed', exitCode: 77, stdout, stderr: 'Error: authentication required. No valid credentials found.' }),
+    "twg failed: authentication required. No valid credentials found. You're not signed in. Run `twg login --force` to authenticate with your Atlassian account."
+  )
+})
+
 test("without a JSON error, twg's readable stderr block gives its error line, without the feedback URL", () => {
   const stderr = [
     "Error: Error in the JQL query: the field 'sprnt' does not exist.",

@@ -133,7 +133,7 @@ So Kickoff runs every tool from the home folder and puts back `APPDATA` and `LOC
 
 - `workspace.changed` delivers `{ context: { branch: string; displayName: string; terminals: { id; title? }[] } | null }`, with no workspace or project id. Each new subscriber first gets the current context **[Verified]**.
 - `mount()` from `orca/testing` does not emit it on its own; tests emit it **[Verified]**.
-- Orca does not emit `workspace.changed` when switching between two workspaces with the same branch, name and terminals, for example two `main` worktrees of different projects. The original plugin polls the active worktree every 2 s while the panel is visible **[Original]**.
+- Orca does not emit `workspace.changed` when switching between two workspaces with the same branch, name and terminals, for example two `main` worktrees of different projects. The original plugin polls the active worktree every 2 s while the panel is visible **[Original]**. That this is why a panel must poll, and that polling the active worktree's project covers it, has not been checked inside Orca **[Assumed]**.
 - Other events: `workspace.created` and `workspace.removed` (`{ workspaceId, kind, path, branch? }`), `agent.status.changed` (`agent:read`), and `theme` in the panel. A panel subscribes with `on(...)` without `contributes.events`, but needs `workspace:read` **[Verified]**.
 
 ### Panel
@@ -184,6 +184,7 @@ Icons seen: `rocket`, `play`, `refresh`, `branch`, `close`, `check`.
   - `TestPanel` has `find`, `findAll`, `press`, `type`, `toggle`, `select`, `emit`, `post`, `errors`, `refusals`, `persisted` and more.
   - `TestWorker` has `request`, `emit`, `hooks.fire`, `logs`, `posts` and `deactivate`.
 - On Windows, `orca plugin test` and `orca plugin check` fail when the plugin folder is on a different drive from Orca's install (for example the plugin on `I:` and Orca under `C:\Users\...`). Every test file fails with `orca-testing.mjs: cannot import "./orca-runtime.mjs": no such file in the plugin`, and `check` reports the same error as a panel issue while still exiting 0. The scaffolded `worker-panel` template fails the same way on `I:` and passes on `C:`. A directory junction on `C:` does not help, because Orca resolves the real path. Workaround: copy `orca-plugin.json`, `tsconfig.json`, `src/` and `.orca/` to a folder on Orca's drive and run the commands there. `orca plugin validate` is not affected **[Verified]** with Orca 1.4.255.
+- A panel mounted with `mount` uses the test's own timer globals: a test that replaces `globalThis.setInterval` and `clearInterval` before `mount` receives the panel's intervals and can fire them by hand. `setVisible(false)` makes `read(ctx.visible)` false, and `unmount()` disposes `ctx.subscriptions` **[Verified]**. `orca/testing` has no fake clock **[Verified]** (its generated types).
 - `mount` and every act (`press`, `emit`, `settled`, ...) wait for the panel's pending `plugin.request` calls. A request that never resolves leaves the test pending until Node cancels it ("Promise resolution is still pending but the event loop has already resolved"). To see a loading state, mount the component alone (`mount(panel.default)`, which skips `setup`), or look from inside a request handler after a timer tick **[Verified]**.
 - `orca plugin check` runs the real worker on this machine, so the rendered panel uses the real `orca` and `gh` and shows real data. Its output is not safe to paste anywhere public **[Verified]**.
 - A trusted worker can `import { execFile } from 'node:child_process'`. With no `@types/node`, `src/node.d.ts` declares the few Node APIs used, for `tsc` only **[Verified]**.
@@ -340,6 +341,7 @@ No CLI command or plugin API exposes it; `orca settings` and `orca config` are u
   - Invalid JQL: exit 1, `{ ok: false, error: { code: 'runtime_error', message: 'Error 400: <message in the instance language>' } }` on stdout, empty stderr.
   - Unknown site: `invalid_argument`, "No matching connected Jira site...".
   - Empty JQL: rejected with `invalid_argument`.
+  - Without a Jira connection, Orca's code answers "Not connected to Jira." when creating or editing a task **[Verified]** (read in `app.asar`). What `orca jira search` answers then has not been seen **[Assumed]**.
 - `orca jira list --filter assigned` uses `assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC` **[Verified]**.
 
 ## Executable paths
@@ -432,9 +434,10 @@ Errors **[Verified]**:
 | Invalid JQL | 1 | `{ ok: false, error: { code: 'TWG_TOOL_EXECUTION_FAILED', message, statusCode, downstreamError, retry, feedback: { url } } }` | Readable block starting `Error: <message>` |
 | Unknown site or profile | 1 | `{ ok: false, error: { code: 'TWG_COMMAND_FAILED' \| 'AUTH_PROFILE_MISSING', message } }` | empty |
 | Bad arguments | 1 | empty | `error: ...` |
+| Not logged in | 77 | `{ ok: false, error: { code: 'AUTH_REQUIRED', kind, mode, statusCode: 401, message: 'authentication required. No valid credentials found.', summary: "You're not signed in. Run `twg login --force` to authenticate with your Atlassian account.", remediation: { command, env } } }` | Readable block starting `Error: <message>`, then the summary |
 
 - The message is in the Jira instance's language.
-- Take the message from `error.message` on stdout, and fall back to stderr.
+- Take the message from `error.message` on stdout, followed by `error.summary` when present (it says how to fix it, as with `twg login`), and fall back to stderr.
 - `error.feedback.url` and the stderr block contain the user's email address: never show or log them.
 - Coverage: the docs describe Jira Cloud only.
 
