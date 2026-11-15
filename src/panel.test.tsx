@@ -38,11 +38,12 @@ async function show(answer: TaskList | ((input: { cursor?: string }) => TaskList
   return mount(panel, { host })
 }
 
-/** An answer the test holds back until it calls `release`, to look at the panel meanwhile. */
+/** What a request handler awaits so its answer waits until the test calls `release`, and the
+ *  test can look at the panel meanwhile. */
 function held() {
   let release = () => {}
-  const answer = new Promise<void>((resolve) => (release = resolve))
-  return { answer, release: () => release() }
+  const released = new Promise<void>((resolve) => (release = resolve))
+  return { released, release }
 }
 
 /** One turn of the event loop, not a span of time: the promise callbacks already queued, such as
@@ -97,18 +98,15 @@ test('keeps the list and shows a spinner while it reloads', async () => {
   const reload = held()
   let calls = 0
   const view = await show(async () => {
-    if (++calls === 2) await reload.answer
+    if (++calls === 2) await reload.released
     return ready([task(`#${calls}`)])
   })
   const pressed = view.press({ type: 'IconButton', label: 'Reload tasks' })
   await drawn(view, { type: 'Spinner', label: 'Reloading tasks' })
-  const whileReloading = {
-    list: view.find({ type: 'Link', text: '#1' }) !== null,
-    spinner: view.find({ type: 'Spinner', label: 'Reloading tasks' }) !== null
-  }
+  const listWhileReloading = view.find({ type: 'Link', text: '#1' })
   reload.release()
   await pressed
-  assert.deepEqual(whileReloading, { list: true, spinner: true })
+  assert.ok(listWhileReloading)
   assert.equal(view.find({ type: 'Spinner', label: 'Reloading tasks' }), null)
   assert.ok(view.find({ type: 'Link', text: '#2' }))
   await view.unmount()
@@ -192,7 +190,7 @@ test('a response that arrives after a newer request is dropped', async () => {
     if (calls === 2) {
       // The workspace changes while this answer is still on its way: it arrives after the newer one.
       void view.emit('workspace.changed', { context: { branch: 'main', displayName: 'api', terminals: [] } })
-      await newer.answer
+      await newer.released
       await turn()
       return ready([task('#20')])
     }
@@ -481,7 +479,7 @@ test('a spinner shows on the card while it starts', async () => {
   const { view } = await showWith({
     'tasks.load': ready([task('#42')]),
     'task.start': async () => {
-      await start.answer
+      await start.released
       return { ok: true, underWay: false }
     },
     'worktrees.load': { kind: 'ready', worktrees: { '#42': started } }
@@ -537,7 +535,7 @@ test('a list asked for before a Start went under way, and answered after, keeps 
       if (++loads === 1) return ready([task('#42')])
       // The worker read its Starts before this one was under way. The list arrives after the
       // panel has handled the Start's answer.
-      await start.answer
+      await start.released
       await turn()
       return ready([task('#42')], { starting: [] })
     },
@@ -881,7 +879,7 @@ test('a page that arrives after a reload is dropped', async () => {
         }
         // The person reloads while this page is on its way: it arrives after the reloaded list.
         void view?.press({ type: 'IconButton', label: 'Reload tasks' })
-        await reloaded.answer
+        await reloaded.released
         await turn()
         return twgReady([twgTask('WEB-99')])
       }
