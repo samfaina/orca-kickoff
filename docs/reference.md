@@ -127,7 +127,17 @@ So Kickoff runs every tool from the home folder and puts back `APPDATA` and `LOC
 - Documented contract **[Verified]**: an error thrown in a handler whose `code` is a host error code (`invalid_params`, `conflict`, ...) reaches the panel with that code; any other becomes `action_failed`. The panel can also see `unknown_method`, `timeout` and `unavailable`.
 - Whether the thrown `message` reaches the panel unchanged: **[Assumed]**. The worker side serialises `{ code, message }`, but the main-process routing could not be read.
 - So Kickoff returns expected failures as data and never relies on thrown messages.
-- `plugin.request` times out after 30 000 ms by default, and accepts at most 120 000 **[Verified]**.
+- `plugin.request` times out after 30 000 ms by default, and accepts at most 120 000 **[Verified]**. A `worktree create` can take longer, so `task.start` answers once its quick checks pass and the create goes on in the worker, which posts `start.ended` when it ends.
+
+### Posts from worker to panel
+
+- `orca.panels.post(event, payload, { panel? })` sends to every open panel of the plugin, or to one (`panel` from a request's context). It is fire and forget, returns `void`, and allows at most 256 KiB per post and 200 posts per 10 s **[Verified]** (generated types and Orca's authoring guide).
+- A panel hears posts with `plugin.on(event, handler)`, imported from `orca` with `plugin`, which returns a `Disposable` to push to `ctx.subscriptions` **[Verified]** (generated types).
+- Event names and payloads are typed by declaring them in `PluginPanelEvents`, next to `PluginRequests` **[Verified]**.
+- In tests, `TestWorker.posts` lists what the worker posted, in order, and `TestPanel.post(event, payload)` delivers a post to the panel's `plugin.on` handlers **[Verified]**.
+- A post made while no panel is open reaches no one: Orca's guide says it goes to open panels, and nothing says it is queued **[Assumed]**; not observed inside Orca. So a panel that opens later asks the worker (`tasks.load` and `starts.load` report the Starts under way) instead of waiting for a post.
+- Whether the worker reply to a request and a post sent right after it reach the panel in that order **[Assumed]**: not checked. The panel keeps a post that arrives before its `task.start` answer.
+- Orca's guide says an idle worker stops, and starts again on its next command, event or panel request **[Verified]**. Whether a worker that has answered every request but still runs a child process (a `worktree create`) counts as idle is not known **[Assumed]**. A restarted worker has lost its Starts under way: it reports none, so the panel's poll clears their spinners.
 
 ### Events
 
@@ -279,6 +289,8 @@ Behaviour:
   - It cannot be combined with `--issue`, `--pr`, `--linear-issue` or `--gitlab-*`.
   - It needs a host with `WORKTREE_LINKED_ITEMS_DELTA`, otherwise `incompatible_runtime`.
 - Orca accepts Jira keys matching `/^[A-Za-z][A-Za-z0-9_]*-\d+$/` **[Verified]**.
+
+Timing, measured by the maintainer on Windows with Orca 1.4.257 on a small repository (issue #14) **[Verified]**: `worktree create` takes about 25 s without an agent and about 30 s with `--agent` and `--prompt`; `--setup skip` does not make it faster. That a larger repository or setup hooks take over a minute **[Assumed]**; Kickoff gives the create 10 minutes.
 
 ### `orca worktree activate --worktree id:<id> --json`
 
