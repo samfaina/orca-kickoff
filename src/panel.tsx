@@ -352,21 +352,32 @@ async function endStart(end: StartEnded): Promise<void> {
 
 /** Clears a Start's spinner once Orca's worktrees are read again, and shows its error unless the
  *  task now has a worktree: a Start that timed out may have finished. When the Start passed an
- *  agent that Orca doesn't report yet, the card says it is starting until one more read. */
+ *  agent, the card says it is starting from before that read, so it never shows the new worktree
+ *  without one, until Orca reports the agent or one more read. */
 async function finishStart(projectId: string, key: string, error: string | null, agent: string | null): Promise<void> {
+  if (agent !== null) update(agentStarting, (keys) => ({ ...keys, [key]: projectId }))
   const worktrees = await refreshWorktrees(projectId)
   underWaySince.delete(key)
   update(starting, ({ [key]: _, ...rest }) => rest)
+  const worktree = readyProjectId() === projectId ? worktrees?.[key] : undefined
+  if (!worktree) stopAgentStarting(projectId, key)
   if (readyProjectId() !== projectId) return
-  const worktree = worktrees?.[key]
   setTaskError(key, worktree ? null : error)
-  if (agent !== null && worktree && worktree.agent === null) checkAgentLater(projectId, key)
+  if (read(agentStarting)[key] === projectId) checkAgentLater(projectId, key)
 }
 
-/** Shows the task's agent as starting, and reads the worktrees again after a pause; from then on
+/** Stops showing the task's agent as starting in the project. */
+function stopAgentStarting(projectId: string, key: string): void {
+  update(agentStarting, (keys) => {
+    if (keys[key] !== projectId) return keys
+    const { [key]: _, ...rest } = keys
+    return rest
+  })
+}
+
+/** Reads the worktrees again after a pause for a task whose agent shows as starting; from then on
  *  the card shows what Orca reports. */
 function checkAgentLater(projectId: string, key: string): void {
-  update(agentStarting, (keys) => ({ ...keys, [key]: projectId }))
   const earlier = agentChecks.get(key)
   if (earlier !== undefined) clearTimeout(earlier)
   agentChecks.set(

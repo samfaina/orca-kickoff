@@ -695,6 +695,86 @@ test('after a Start with an agent, the card says the agent is starting until Orc
   })
 })
 
+/** Waits until the panel draws an element that matches `query` while another act is held on a
+ *  request. A held act draws nothing new until its request answers, as Orca would, so each try
+ *  asks for a draw with `rerender`. Answers the pending rerenders, to await once released. */
+async function drawnWhileHeld(view: TestPanel, query: TestQuery): Promise<Promise<void>[]> {
+  const rerenders: Promise<void>[] = []
+  for (let turns = 0; turns < 50; turns++) {
+    rerenders.push(view.rerender())
+    await turn()
+    await turn()
+    if (view.find(query)) return rerenders
+  }
+  assert.fail(`the panel never drew ${JSON.stringify(query)}`)
+}
+
+test('after a Start with an agent, no card says no agent is running before it says the agent is starting', async () => {
+  await withTimeouts(AGENT_CHECK_MS, async ({ pending }) => {
+    const refresh = held()
+    let created = false
+    const { view } = await showWith({
+      'tasks.load': () => ready([task('#42')], { worktrees: created ? { '#42': { ...started, agent: null } } : {} }),
+      'task.start': { ok: true, underWay: true },
+      'worktrees.load': async () => {
+        await refresh.released
+        return { kind: 'ready', worktrees: { '#42': { ...started, agent: null } } }
+      }
+    })
+    await view.press({ testId: 'start:#42' })
+    // Orca hasn't detected the new agent yet when the create ends, and it switches to the new
+    // worktree while the Start reads the worktrees again, so the list loads again meanwhile.
+    created = true
+    const ended = view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', agent: 'claude', ok: true })
+    const switched = view.emit('workspace.changed', { context: { branch: 'issue-42-add-dark-mode', displayName: 'web', terminals: [] } })
+    const rerenders = await drawnWhileHeld(view, { type: 'Link', text: 'issue-42-add-dark-mode' })
+    const flashed = view.find({ type: 'Text', text: 'No agent running' })
+    const startingWhileRead = view.find({ type: 'Text', text: 'Agent starting…' })
+    refresh.release()
+    await Promise.all([ended, switched, ...rerenders])
+    assert.equal(flashed, null)
+    assert.ok(startingWhileRead)
+    assert.ok(view.find({ type: 'Text', text: 'Agent starting…' }))
+    assert.equal(pending(), 1)
+    await view.unmount()
+  })
+})
+
+test('after a Start with an agent that Orca already reports, the card shows it and reads the worktrees no more', async () => {
+  await withTimeouts(AGENT_CHECK_MS, async ({ pending }) => {
+    let worktrees = {}
+    const { view } = await showWith({
+      'tasks.load': ready([task('#42')]),
+      'task.start': { ok: true, underWay: true },
+      'worktrees.load': () => ({ kind: 'ready', worktrees })
+    })
+    await view.press({ testId: 'start:#42' })
+    worktrees = { '#42': started }
+    await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', agent: 'claude', ok: true })
+    assert.ok(view.find({ type: 'Text', text: 'Agent: claude' }))
+    assert.equal(view.find({ type: 'Text', text: 'Agent starting…' }), null)
+    assert.equal(pending(), 0)
+    await view.unmount()
+  })
+})
+
+test('after a Start with an agent that left no worktree, the card shows its error and no agent starting', async () => {
+  await withTimeouts(AGENT_CHECK_MS, async ({ pending }) => {
+    const { view } = await showWith({
+      'tasks.load': ready([task('#42')]),
+      'task.start': { ok: true, underWay: true },
+      'worktrees.load': { kind: 'ready', worktrees: {} }
+    })
+    await view.press({ testId: 'start:#42' })
+    await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', agent: 'claude', ok: false, message: 'Orca could not create the worktree.' })
+    assert.ok(view.find({ type: 'Text', text: 'Orca could not create the worktree.' }))
+    assert.ok(view.find({ testId: 'start:#42' }))
+    assert.equal(view.find({ type: 'Text', text: 'Agent starting…' }), null)
+    assert.equal(pending(), 0)
+    await view.unmount()
+  })
+})
+
 test('after a Start with "No agent", the card says no agent is running straight away', async () => {
   await withTimeouts(AGENT_CHECK_MS, async ({ pending }) => {
     let worktrees = {}
