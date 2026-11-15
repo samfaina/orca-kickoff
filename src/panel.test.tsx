@@ -1,4 +1,4 @@
-import { assert, hostError, mockHost, mount, test, type MockHost, type MockRequests, type TestPanel } from 'orca/testing'
+import { assert, hostError, mockHost, mount, test, type MockHost, type MockRequests, type TestPanel, type TestQuery } from 'orca/testing'
 import type { JsonValue } from 'orca'
 import type { Task, TaskList } from './protocol'
 import * as panel from './panel'
@@ -38,6 +38,29 @@ async function show(answer: TaskList | ((input: { cursor?: string }) => TaskList
   return mount(panel, { host })
 }
 
+/** What a request handler awaits so its answer waits until the test calls `release`, and the
+ *  test can look at the panel meanwhile. */
+function held() {
+  let release = () => {}
+  const released = new Promise<void>((resolve) => (release = resolve))
+  return { released, release }
+}
+
+/** One turn of the event loop, not a span of time: the promise callbacks already queued, such as
+ *  the panel handling an answer, run before it ends. */
+const turn = () => new Promise<void>((resolve) => setImmediate(resolve))
+
+/** Waits until the panel draws an element that matches `query`, for a state drawn while a request
+ *  is held, when `settled()` would wait for that request. Orca's test runtime draws on its own
+ *  event-loop turn, so this yields turns, and fails if the element never appears. */
+async function drawn(view: TestPanel, query: TestQuery): Promise<void> {
+  for (let turns = 0; turns < 100; turns++) {
+    if (view.find(query)) return
+    await turn()
+  }
+  assert.fail(`the panel never drew ${JSON.stringify(query)}`)
+}
+
 test("lists the project's open issues with their key, title and labels", async () => {
   const view = await show(ready([task('#42', { title: 'Add dark mode', labels: ['ui', 'good first issue'] }), task('#7')]))
   const link = view.find({ type: 'Link', text: '#42' })
@@ -72,21 +95,20 @@ test('shows a spinner until the first list arrives', async () => {
 })
 
 test('keeps the list and shows a spinner while it reloads', async () => {
+  const reload = held()
   let calls = 0
-  let whileReloading: { list: boolean; spinner: boolean } | null = null
-  const view: TestPanel = await show(async () => {
-    if (++calls === 2) {
-      await new Promise((resolve) => setTimeout(resolve, 0))
-      whileReloading = {
-        list: view.find({ type: 'Link', text: '#1' }) !== null,
-        spinner: view.find({ type: 'Spinner', label: 'Reloading tasks' }) !== null
-      }
-    }
+  const view = await show(async () => {
+    if (++calls === 2) await reload.released
     return ready([task(`#${calls}`)])
   })
-  await view.press({ type: 'IconButton', label: 'Reload tasks' })
-  assert.deepEqual(whileReloading, { list: true, spinner: true })
+  const pressed = view.press({ type: 'IconButton', label: 'Reload tasks' })
+  await drawn(view, { type: 'Spinner', label: 'Reloading tasks' })
+  const listWhileReloading = view.find({ type: 'Link', text: '#1' })
+  reload.release()
+  await pressed
+  assert.ok(listWhileReloading)
   assert.equal(view.find({ type: 'Spinner', label: 'Reloading tasks' }), null)
+  assert.ok(view.find({ type: 'Link', text: '#2' }))
   await view.unmount()
 })
 
@@ -161,15 +183,18 @@ test('reloads when the workspace changes, and on Reload', async () => {
 })
 
 test('a response that arrives after a newer request is dropped', async () => {
+  const newer = held()
   let calls = 0
   const view: TestPanel = await show(async () => {
     calls++
     if (calls === 2) {
-      // The workspace changes while this answer is still on its way.
+      // The workspace changes while this answer is still on its way: it arrives after the newer one.
       void view.emit('workspace.changed', { context: { branch: 'main', displayName: 'api', terminals: [] } })
-      await new Promise((resolve) => setTimeout(resolve, 10))
+      await newer.released
+      await turn()
       return ready([task('#20')])
     }
+    if (calls === 3) newer.release()
     return ready([task(`#${calls}`)])
   })
   await view.press({ type: 'IconButton', label: 'Reload tasks' })
@@ -450,22 +475,21 @@ test('a started task opens its worktree in Orca from the link', async () => {
 })
 
 test('a spinner shows on the card while it starts', async () => {
-  let during: { spinner: boolean; button: boolean } | null = null
-  let view: TestPanel | null = null
-  ;({ view } = await showWith({
+  const start = held()
+  const { view } = await showWith({
     'tasks.load': ready([task('#42')]),
     'task.start': async () => {
-      await wait(0)
-      during = {
-        spinner: view?.find({ type: 'Spinner', label: 'Starting #42' }) != null,
-        button: view?.find({ testId: 'start:#42' }) != null
-      }
+      await start.released
       return { ok: true, underWay: false }
     },
     'worktrees.load': { kind: 'ready', worktrees: { '#42': started } }
-  }))
-  await view.press({ testId: 'start:#42' })
-  assert.deepEqual(during, { spinner: true, button: false })
+  })
+  const pressed = view.press({ testId: 'start:#42' })
+  await drawn(view, { type: 'Spinner', label: 'Starting #42' })
+  const buttonWhileStarting = view.find({ testId: 'start:#42' })
+  start.release()
+  await pressed
+  assert.equal(buttonWhileStarting, null)
   assert.equal(view.find({ type: 'Spinner', label: 'Starting #42' }), null)
   await view.unmount()
 })
@@ -504,19 +528,19 @@ test('a panel opened while the worker reports a Start under way shows its spinne
 })
 
 test('a list asked for before a Start went under way, and answered after, keeps its spinner', async () => {
+  const start = held()
   let loads = 0
-  let startAnswered: () => void = () => {}
-  const answered = new Promise<void>((resolve) => (startAnswered = resolve))
   const { view } = await showWith({
     'tasks.load': async () => {
       if (++loads === 1) return ready([task('#42')])
-      // The worker read its Starts before this one was under way.
-      await answered
-      await wait(0)
+      // The worker read its Starts before this one was under way. The list arrives after the
+      // panel has handled the Start's answer.
+      await start.released
+      await turn()
       return ready([task('#42')], { starting: [] })
     },
     'task.start': () => {
-      startAnswered()
+      start.release()
       return { ok: true, underWay: true }
     }
   })
@@ -843,15 +867,20 @@ test('a "Load more" failure keeps the loaded tasks and says why', async () => {
 })
 
 test('a page that arrives after a reload is dropped', async () => {
+  const reloaded = held()
   let reloads = 0
   let view: TestPanel | null = null
   ;({ view } = await showWith(
     {
       'tasks.load': async ({ cursor }) => {
-        if (!cursor) return twgReady([twgTask(`WEB-${++reloads * 10}`)], { nextCursor: 'cursor-2' })
-        // The person reloads while this page is on its way.
+        if (!cursor) {
+          if (++reloads === 2) reloaded.release()
+          return twgReady([twgTask(`WEB-${reloads * 10}`)], { nextCursor: 'cursor-2' })
+        }
+        // The person reloads while this page is on its way: it arrives after the reloaded list.
         void view?.press({ type: 'IconButton', label: 'Reload tasks' })
-        await wait(10)
+        await reloaded.released
+        await turn()
         return twgReady([twgTask('WEB-99')])
       }
     },
