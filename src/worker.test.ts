@@ -421,7 +421,14 @@ test('Start answers that it is under way before a slow worktree create ends, the
 
   create.finish(CREATED)
   await until(() => worker.posts.length > 0)
-  assert.deepEqual(worker.posts, [{ event: 'start.ended', payload: { projectId: 'github:acme/web', taskKey: '#42', ok: true } }])
+  assert.deepEqual(worker.posts, [{ event: 'start.ended', payload: { projectId: 'github:acme/web', taskKey: '#42', agent: 'claude', ok: true } }])
+})
+
+test('the end of a Start with no agent says that no agent was passed', async () => {
+  const storage = { settings: { version: 1, projects: { 'github:acme/web': { providers: {}, agent: 'none' } } } }
+  const { worker } = await start({ ...ORCA_OK, 'orca worktree create': CREATED }, { storage })
+  await worker.request('task.start', startWeb42)
+  assert.deepEqual(await nthEnd(worker), { projectId: 'github:acme/web', taskKey: '#42', agent: null, ok: true })
 })
 
 test("the task list and starts.load report the project's Starts under way until each create ends", async () => {
@@ -504,7 +511,7 @@ test('a timed-out create posts a failed end, and the same task waits five minute
   clock += 61_000
   assert.deepEqual(await worker.request('task.start', startWeb42), { ok: true, underWay: true })
   assert.equal(creates(calls).length, 2)
-  assert.deepEqual(await nthEnd(worker, 2), { projectId: 'github:acme/web', taskKey: '#42', ok: true })
+  assert.deepEqual(await nthEnd(worker, 2), { projectId: 'github:acme/web', taskKey: '#42', agent: 'claude', ok: true })
 })
 
 test('a worktree Orca finished after a timeout counts as started', async () => {
@@ -523,6 +530,7 @@ test("a failed create posts a failed end with Orca's real message", async () => 
   assert.deepEqual(await nthEnd(worker), {
     projectId: 'github:acme/web',
     taskKey: '#42',
+    agent: 'claude',
     ok: false,
     message: 'orca failed: Pick a different worktree name'
   })

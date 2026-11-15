@@ -182,7 +182,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
       creating.set(id, { projectId, taskKey: task.key })
       void createWorktree(id, task.key, args).then((result) => {
         creating.delete(id)
-        const end: StartEnded = { projectId, taskKey: task.key, ...result }
+        const end: StartEnded = { projectId, taskKey: task.key, agent: agent.agent, ...result }
         orca.panels.post('start.ended', end)
       })
       return { ok: true, underWay: true }

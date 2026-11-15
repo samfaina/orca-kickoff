@@ -521,7 +521,7 @@ test('a panel opened while the worker reports a Start under way shows its spinne
   assert.ok(view.find({ testId: 'start:#7' }))
 
   worktrees = { '#42': started }
-  await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', ok: true })
+  await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', agent: 'claude', ok: true })
   assert.ok(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }))
   assert.equal(view.find({ type: 'Spinner', label: 'Starting #42' }), null)
   await view.unmount()
@@ -560,7 +560,7 @@ test("a Start's successful end clears the spinner and shows the worktree", async
   })
   await view.press({ testId: 'start:#42' })
   worktrees = { '#42': started }
-  await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', ok: true })
+  await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', agent: 'claude', ok: true })
   assert.equal(view.find({ type: 'Spinner', label: 'Starting #42' }), null)
   assert.equal(view.find({ type: 'Text', text: CAN_TAKE_A_MINUTE }), null)
   assert.ok(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }))
@@ -575,7 +575,7 @@ test("a Start's failed end clears the spinner and shows its message, unless the 
     'worktrees.load': () => ({ kind: 'ready', worktrees })
   })
   await view.press({ testId: 'start:#42' })
-  await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', ok: false, message: 'orca failed: Pick a different worktree name' })
+  await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', agent: null, ok: false, message: 'orca failed: Pick a different worktree name' })
   assert.equal(view.find({ type: 'Spinner', label: 'Starting #42' }), null)
   assert.ok(view.find({ type: 'Text', text: 'orca failed: Pick a different worktree name' }))
   assert.ok(view.find({ testId: 'start:#42' }))
@@ -583,7 +583,7 @@ test("a Start's failed end clears the spinner and shows its message, unless the 
   // A timed-out create that Orca finished anyway.
   await view.press({ testId: 'start:#7' })
   worktrees = { '#7': { worktreeId: 'r1::/src/web-7', name: 'issue-7-task-7', agent: null } }
-  await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#7', ok: false, message: "Orca didn't finish creating the worktree for #7 in time" })
+  await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#7', agent: null, ok: false, message: "Orca didn't finish creating the worktree for #7 in time" })
   assert.ok(view.find({ type: 'Link', text: 'issue-7-task-7' }))
   assert.equal(view.find({ type: 'Text', text: /didn't finish/ }), null)
   await view.unmount()
@@ -630,6 +630,126 @@ test("a failure reading Orca's worktrees still lists the tasks, with Start disab
   assert.equal(view.find({ testId: 'start:#7' })?.disabled, true)
   assert.ok(view.find({ type: 'Text', text: /Orca is not running/ }))
   await view.unmount()
+})
+
+/** Stands in for `setTimeout` while `body` runs, for the timers of `ms` only, so a test fires them
+ *  by hand: `fire()` runs every one still pending and waits for the panel to settle. Other timers,
+ *  such as the settings save, run as usual. */
+async function withTimeouts(
+  ms: number,
+  body: (timers: { fire: (view: TestPanel) => Promise<void>; pending: () => number }) => Promise<void>
+) {
+  const realSet = globalThis.setTimeout
+  const realClear = globalThis.clearTimeout
+  const held = new Map<number, () => void>()
+  let next = 1
+  globalThis.setTimeout = ((run: () => void, delay?: number, ...args: unknown[]) => {
+    if (delay !== ms) return realSet(run, delay, ...args)
+    held.set(next, run)
+    return next++
+  }) as unknown as typeof setTimeout
+  globalThis.clearTimeout = ((id: unknown) => {
+    if (typeof id === 'number' && held.delete(id)) return
+    realClear(id as ReturnType<typeof setTimeout>)
+  }) as unknown as typeof clearTimeout
+  try {
+    await body({
+      fire: async (view) => {
+        const runs = [...held.values()]
+        held.clear()
+        for (const run of runs) run()
+        await view.settled()
+      },
+      pending: () => held.size
+    })
+  } finally {
+    globalThis.setTimeout = realSet
+    globalThis.clearTimeout = realClear
+  }
+}
+
+/** How long after a Start's end the panel reads the worktrees again for its agent. */
+const AGENT_CHECK_MS = 5_000
+
+test('after a Start with an agent, the card says the agent is starting until Orca reports it', async () => {
+  await withTimeouts(AGENT_CHECK_MS, async ({ fire }) => {
+    let worktrees = {}
+    const { view } = await showWith({
+      'tasks.load': ready([task('#42')]),
+      'task.start': { ok: true, underWay: true },
+      'worktrees.load': () => ({ kind: 'ready', worktrees })
+    })
+    await view.press({ testId: 'start:#42' })
+    // Orca hasn't detected the new agent yet when the create ends.
+    worktrees = { '#42': { ...started, agent: null } }
+    await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', agent: 'claude', ok: true })
+    assert.ok(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }))
+    assert.ok(view.find({ type: 'Text', text: 'Agent starting…' }))
+    assert.equal(view.find({ type: 'Text', text: 'No agent running' }), null)
+
+    worktrees = { '#42': started }
+    await fire(view)
+    assert.ok(view.find({ type: 'Text', text: 'Agent: claude' }))
+    assert.equal(view.find({ type: 'Text', text: 'Agent starting…' }), null)
+    await view.unmount()
+  })
+})
+
+test('after a Start with "No agent", the card says no agent is running straight away', async () => {
+  await withTimeouts(AGENT_CHECK_MS, async ({ pending }) => {
+    let worktrees = {}
+    const { view } = await showWith({
+      'tasks.load': ready([task('#42')]),
+      'task.start': { ok: true, underWay: true },
+      'worktrees.load': () => ({ kind: 'ready', worktrees })
+    })
+    await view.press({ testId: 'start:#42' })
+    worktrees = { '#42': { ...started, agent: null } }
+    await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', agent: null, ok: true })
+    assert.ok(view.find({ type: 'Text', text: 'No agent running' }))
+    assert.equal(view.find({ type: 'Text', text: 'Agent starting…' }), null)
+    assert.equal(pending(), 0)
+    await view.unmount()
+  })
+})
+
+/** The panel after a Start whose agent Orca doesn't report yet, and how often it read the worktrees. */
+async function startedWithoutAgentYet() {
+  let reads = 0
+  const { view } = await showWith({
+    'tasks.load': ready([task('#42')]),
+    'task.start': { ok: true, underWay: true },
+    'worktrees.load': () => (reads++, { kind: 'ready', worktrees: { '#42': { ...started, agent: null } } })
+  })
+  await view.press({ testId: 'start:#42' })
+  await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', agent: 'claude', ok: true })
+  return { view, reads: () => reads }
+}
+
+test('one delayed worktrees.load runs after a Start, and then the card shows what Orca reports', async () => {
+  await withTimeouts(AGENT_CHECK_MS, async ({ fire, pending }) => {
+    const { view, reads } = await startedWithoutAgentYet()
+    assert.equal(reads(), 1)
+    assert.equal(pending(), 1)
+    await fire(view)
+    assert.equal(reads(), 2)
+    assert.equal(pending(), 0)
+    // Orca still reports no agent.
+    assert.ok(view.find({ type: 'Text', text: 'No agent running' }))
+    assert.equal(view.find({ type: 'Text', text: 'Agent starting…' }), null)
+    await view.unmount()
+  })
+})
+
+test('no delayed worktrees.load runs after the panel is deactivated', async () => {
+  await withTimeouts(AGENT_CHECK_MS, async ({ fire, pending }) => {
+    const { view, reads } = await startedWithoutAgentYet()
+    assert.equal(pending(), 1)
+    await view.unmount()
+    assert.equal(pending(), 0)
+    await fire(view)
+    assert.equal(reads(), 1)
+  })
 })
 
 const notes = { id: 'repo:r1', name: 'notes', repo: null }
