@@ -180,6 +180,101 @@ test('a response that arrives after a newer request is dropped', async () => {
   await view.unmount()
 })
 
+/** Stands in for `setInterval` while `body` runs, so a test fires the panel's timers by hand:
+ *  `tick()` runs every live interval once and waits for the panel to settle. */
+async function withIntervals(body: (timers: { tick: (view: TestPanel) => Promise<void>; live: () => number[] }) => Promise<void>) {
+  const realSet = globalThis.setInterval
+  const realClear = globalThis.clearInterval
+  const live = new Map<number, { run: () => void; ms: number }>()
+  let next = 1
+  globalThis.setInterval = ((run: () => void, ms: number) => {
+    live.set(next, { run, ms })
+    return next++
+  }) as unknown as typeof setInterval
+  globalThis.clearInterval = ((id: number) => void live.delete(id)) as unknown as typeof clearInterval
+  try {
+    await body({
+      tick: async (view) => {
+        for (const timer of [...live.values()]) timer.run()
+        await view.settled()
+      },
+      live: () => [...live.values()].map((timer) => timer.ms)
+    })
+  } finally {
+    globalThis.setInterval = realSet
+    globalThis.clearInterval = realClear
+  }
+}
+
+const api = { id: 'github:acme/api', name: 'api', repo: 'acme/api' }
+
+test('while visible, the panel polls the active project every 3 s and reloads when it changes', async () => {
+  await withIntervals(async ({ tick, live }) => {
+    let active = web
+    let loads = 0
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read'],
+      requests: {
+        'tasks.load': () => (loads++, ready([task('#1')], { project: active })),
+        'project.active': () => ({ projectId: active.id })
+      }
+    })
+    const view = await mount(panel, { host })
+    assert.deepEqual(live(), [3000])
+    await tick(view)
+    assert.equal(loads, 1)
+
+    // Two `main` worktrees of different projects: Orca sends no workspace.changed.
+    active = api
+    await tick(view)
+    assert.equal(loads, 2)
+    assert.ok(view.find({ type: 'Heading', text: 'api' }))
+    await tick(view)
+    assert.equal(loads, 2)
+    await view.unmount()
+  })
+})
+
+test('polling stops while the panel is hidden, and when it closes', async () => {
+  await withIntervals(async ({ tick, live }) => {
+    let polls = 0
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read'],
+      requests: { 'tasks.load': ready([task('#1')]), 'project.active': () => (polls++, { projectId: web.id }) }
+    })
+    const view = await mount(panel, { host })
+    await view.setVisible(false)
+    await tick(view)
+    assert.equal(polls, 0)
+
+    await view.setVisible(true)
+    await tick(view)
+    assert.equal(polls, 1)
+
+    await view.unmount()
+    assert.deepEqual(live(), [])
+  })
+})
+
+test("a failed poll keeps the list as it is", async () => {
+  await withIntervals(async ({ tick }) => {
+    let loads = 0
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read'],
+      requests: {
+        'tasks.load': () => (loads++, ready([task('#1')])),
+        'project.active': { kind: 'error', message: 'orca failed: Orca is not running.' }
+      }
+    })
+    const view = await mount(panel, { host })
+    await tick(view)
+    assert.equal(loads, 1)
+    assert.ok(view.find({ type: 'Link', text: '#1' }))
+    assert.equal(view.find({ type: 'Callout' }), null)
+    await view.unmount()
+  })
+})
+
 /** The panel with these worker answers and stored values, and its host. */
 async function showWith(requests: MockRequests, storage: Record<string, JsonValue> = {}) {
   const host = mockHost({ capabilities: ['storage:own', 'workspace:read'], requests, storage })

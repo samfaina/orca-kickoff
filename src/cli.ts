@@ -164,11 +164,15 @@ export function cliFailureMessage(tool: Tool, failure: CliFailure): string {
   return `${tool} failed with exit code ${failure.exitCode ?? 'unknown'}.`
 }
 
-/** `error.message` of a `{ ok: false, error }` answer on stdout, as `orca` and `twg` print. */
+/** `error.message` of a `{ ok: false, error }` answer on stdout, as `orca` and `twg` print, followed
+ *  by `error.summary` when there is one: twg puts how to fix it there, such as `twg login`. */
 export function jsonErrorMessage(stdout: string): string | null {
   const parsed = parseJson(stdout)
   if (!isRecord(parsed) || parsed.ok !== false || !isRecord(parsed.error)) return null
-  return text(parsed.error.message).trim() || null
+  const message = text(parsed.error.message).trim()
+  if (!message) return null
+  const summary = text(parsed.error.summary).trim()
+  return summary && summary !== message ? `${message} ${summary}` : message
 }
 
 /** For a tool that answered with output of a shape Kickoff doesn't know. */
