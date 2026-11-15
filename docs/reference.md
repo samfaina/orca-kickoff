@@ -135,9 +135,12 @@ So Kickoff runs every tool from the home folder and puts back `APPDATA` and `LOC
 - A panel hears posts with `plugin.on(event, handler)`, imported from `orca` with `plugin`, which returns a `Disposable` to push to `ctx.subscriptions` **[Verified]** (generated types).
 - Event names and payloads are typed by declaring them in `PluginPanelEvents`, next to `PluginRequests` **[Verified]**.
 - In tests, `TestWorker.posts` lists what the worker posted, in order, and `TestPanel.post(event, payload)` delivers a post to the panel's `plugin.on` handlers **[Verified]**.
+- An open panel gets `start.ended` and shows the new worktree without a reload **[Verified]** inside Orca 1.4.259.
+- A plugin panel's tab has no close button: the person can only switch to another tab or hide the whole right sidebar **[Verified]** (seen by the maintainer). A panel hidden during a Start and shown again after the create ended shows the worktree, with no spinner **[Verified]**, seen by the maintainer inside Orca 1.4.259. Whether Orca keeps a hidden panel mounted, and so whether the post reached it or it read the list again, is not known.
 - A post made while no panel is open reaches no one: Orca's guide says it goes to open panels, and nothing says it is queued **[Assumed]**; not observed inside Orca. So a panel that opens later asks the worker (`tasks.load` and `starts.load` report the Starts under way) instead of waiting for a post.
 - Whether the worker reply to a request and a post sent right after it reach the panel in that order **[Assumed]**: not checked. The panel keeps a post that arrives before its `task.start` answer.
-- Orca's guide says an idle worker stops, and starts again on its next command, event or panel request **[Verified]**. Whether a worker that has answered every request but still runs a child process (a `worktree create`) counts as idle is not known **[Assumed]**. A restarted worker has lost its Starts under way: it reports none, so the panel's poll clears their spinners.
+- Orca's guide says an idle worker stops, and starts again on its next command, event or panel request **[Verified]**. Whether a worker that has answered every request but still runs a child process (a `worktree create`) counts as idle is not known **[Assumed]**.
+- A worker restarted during a Start (`orca plugin restart`) has lost its Starts under way: `starts.load` reports none, so the panel's poll clears their spinners. Orca still finishes the worktree, agent included **[Verified]** inside Orca 1.4.259, restarting the worker 1 s into the create.
 
 ### Events
 
@@ -290,7 +293,7 @@ Behaviour:
   - It needs a host with `WORKTREE_LINKED_ITEMS_DELTA`, otherwise `incompatible_runtime`.
 - Orca accepts Jira keys matching `/^[A-Za-z][A-Za-z0-9_]*-\d+$/` **[Verified]**.
 
-Timing, measured by the maintainer on Windows with Orca 1.4.257 on a small repository (issue #14) **[Verified]**: `worktree create` takes about 25 s without an agent and about 30 s with `--agent` and `--prompt`; `--setup skip` does not make it faster. That a larger repository or setup hooks take over a minute **[Assumed]**; Kickoff gives the create 10 minutes.
+Timing, measured by the maintainer on Windows with Orca 1.4.257 on a small repository (issue #14) **[Verified]**: `worktree create` takes about 25 s without an agent and about 30 s with `--agent` and `--prompt`; `--setup skip` does not make it faster. Through Kickoff's Start on Orca 1.4.259, `task.start` answered in about 3 s and the create ended 19 to 28 s later **[Verified]**. That a larger repository or setup hooks take over a minute **[Assumed]**; Kickoff gives the create 10 minutes.
 
 ### `orca worktree activate --worktree id:<id> --json`
 
