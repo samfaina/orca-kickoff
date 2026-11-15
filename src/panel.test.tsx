@@ -235,6 +235,48 @@ test('while visible, the panel polls the active project every 3 s and reloads wh
   })
 })
 
+test('after a reload for workspace.changed, the next poll measures against the new list', async () => {
+  await withIntervals(async ({ tick }) => {
+    let active = web
+    let loads = 0
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read'],
+      requests: {
+        'tasks.load': () => (loads++, ready([task('#1')], { project: active })),
+        'project.active': () => ({ projectId: active.id })
+      }
+    })
+    const view = await mount(panel, { host })
+    await tick(view)
+    active = api
+    await view.emit('workspace.changed', { context: { branch: 'main', displayName: 'api', terminals: [] } })
+    assert.equal(loads, 2)
+    await tick(view)
+    assert.equal(loads, 2)
+    await view.unmount()
+  })
+})
+
+test('an active project the list never shows reloads it once, not on every poll', async () => {
+  await withIntervals(async ({ tick }) => {
+    let loads = 0
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read'],
+      requests: {
+        // Orca's active worktree belongs to a project its project list doesn't have.
+        'tasks.load': () => (loads++, { kind: 'no-project' }),
+        'project.active': { projectId: 'repo:gone' }
+      }
+    })
+    const view = await mount(panel, { host })
+    await tick(view)
+    await tick(view)
+    await tick(view)
+    assert.equal(loads, 2)
+    await view.unmount()
+  })
+})
+
 test('polling stops while the panel is hidden, and when it closes', async () => {
   await withIntervals(async ({ tick, live }) => {
     let polls = 0
@@ -430,11 +472,14 @@ test('a Start whose request timed out counts as done when the task now has a wor
   await view.unmount()
 })
 
-test("Start is disabled while Orca's worktrees couldn't be read", async () => {
+test("a failure reading Orca's worktrees still lists the tasks, with Start disabled", async () => {
   const { view } = await showWith({
-    'tasks.load': ready([task('#42')], { worktrees: null, worktreesError: 'orca failed: Orca is not running.' })
+    'tasks.load': ready([task('#42', { title: 'Add dark mode' }), task('#7')], { worktrees: null, worktreesError: 'orca failed: Orca is not running.' })
   })
+  assert.ok(view.find({ type: 'Link', text: '#42' }))
+  assert.ok(view.find({ type: 'Text', text: /Add dark mode/ }))
   assert.equal(view.find({ testId: 'start:#42' })?.disabled, true)
+  assert.equal(view.find({ testId: 'start:#7' })?.disabled, true)
   assert.ok(view.find({ type: 'Text', text: /Orca is not running/ }))
   await view.unmount()
 })
