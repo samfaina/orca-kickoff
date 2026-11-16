@@ -1,3 +1,9 @@
+// PROTOTYPE (issue #46), throwaway, on the prototype/panel-ui branch, never merged. Two switches at
+// the top of the panel pick a Project settings layout (S-A sections, S-B tabs, S-C separate view)
+// and a task list layout (L-A compact cards, L-B grouped by state, L-C table with an action bar,
+// L-D roomy cards with one row per part, L-E the same with an icon-only Start).
+// The data, the loads and Start are the real ones; only the drawing changes per variant.
+//
 // Kickoff's side panel: the active project's tracker, its open tasks, its Start options, and Start. No build
 // step: Orca strips the types and compiles the JSX when the panel loads. The worker does the work;
 // the panel asks it and draws the answers.
@@ -6,6 +12,7 @@ import {
   Box,
   Button,
   Callout,
+  CodeView,
   Collapsible,
   EmptyState,
   Heading,
@@ -14,8 +21,12 @@ import {
   Link,
   Row,
   Select,
+  Separator,
   Spinner,
   Stack,
+  Tab,
+  Table,
+  Tabs,
   Text,
   Textarea,
   atom,
@@ -26,6 +37,7 @@ import {
   storage,
   update,
   type JsonValue,
+  type OrcaNode,
   type PanelContext
 } from 'orca'
 import { isRecord } from './json'
@@ -130,9 +142,36 @@ const list = atom<TaskList | null>(null)
 const loading = atom(false)
 /** The tracker settings and Start options of the listed project, as the person sees them. */
 const shownSettings = atom<ShownSettings | null>(null)
-const optionsOpen = atom('startOptionsOpen', true, { persist: 'plugin' })
-/** Whether the person left the Tracker section open; it is always open while no list is loaded. */
-const trackerOpen = atom('trackerOpen', false, { persist: 'plugin' })
+/** PROTOTYPE: the two variant switches. */
+type SettingsVariant = 'S-A' | 'S-B' | 'S-C'
+type ListVariant = 'L-A' | 'L-B' | 'L-C' | 'L-D' | 'L-E'
+const SETTINGS_VARIANTS = [
+  { value: 'S-A', label: 'S-A · sections' },
+  { value: 'S-B', label: 'S-B · tabs' },
+  { value: 'S-C', label: 'S-C · separate view' }
+]
+const LIST_VARIANTS = [
+  { value: 'L-A', label: 'L-A · compact cards' },
+  { value: 'L-B', label: 'L-B · grouped by state' },
+  { value: 'L-C', label: 'L-C · table' },
+  { value: 'L-D', label: 'L-D · roomy cards' },
+  { value: 'L-E', label: 'L-E · roomy, icon Start' }
+]
+const settingsVariant = atom<SettingsVariant>('protoSettingsVariant', 'S-A', { persist: 'plugin' })
+const listVariant = atom<ListVariant>('protoListVariant', 'L-A', { persist: 'plugin' })
+
+/** Whether the person left Project settings open (S-A, S-B); it is always open while the project
+ *  has no tracker or the load failed. */
+const settingsOpen = atom('projectSettingsOpen', false, { persist: 'plugin' })
+/** The tab shown in S-B. */
+const settingsTab = atom('projectSettingsTab', 'tracker', { persist: 'plugin' })
+/** S-C: the settings view replaces the panel view. null follows the list: shown while the project
+ *  has no tracker or the load failed. Persisted only so a scenario can shoot it. */
+const settingsView = atom<boolean | null>('protoSettingsView', null, { persist: 'plugin' })
+/** The search over the loaded tasks. Kept in memory, cleared when the active project changes. */
+const search = atom('')
+/** L-C: the selected row's task key. */
+const selectedTask = atom<string | null>(null)
 /** The sites of Orca's Jira connection, asked for the first time they are needed. */
 const jiraSites = atom<JiraSitesResult | 'loading' | null>(null)
 /** Task keys with a Start under way: asked by this panel, or reported by the worker. */
@@ -350,7 +389,7 @@ function chooseProviderFor(value: string): void {
   const current = read(shownSettings)
   const provider = PROVIDER_OPTIONS.find((option) => option.value === value)?.value
   if (!current || !provider) return
-  set(trackerOpen, true)
+  set(settingsOpen, true)
   const chosen = chooseProvider({ providers: current.providers }, provider)
   changeSettings({ provider, providers: { [provider]: chosen.providers[provider] } })
   void load()
@@ -415,6 +454,13 @@ async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
   else showStarting([], 0)
   if (answer.kind === 'ready' && answer.worktrees) agentsReported(answer.project.id, answer.worktrees)
   worktreesShownAt = worktreesAskedAt
+  // A change of active project clears the search and the selected row.
+  const before = listedProjectId()
+  if (answeredProjectId !== undefined && before !== undefined && answeredProjectId !== before) {
+    set(search, '')
+    set(selectedTask, null)
+    set(settingsView, null)
+  }
   set(list, answer)
   set(loading, false)
 }
@@ -728,41 +774,214 @@ export function setup(ctx: PanelContext): void {
 
 export default function Panel() {
   const current = read(list)
-  const busy = read(loading)
   const project = current && 'project' in current ? current.project : null
   const draft = read(templateDraft)
   const shown = read(shownSettings)
   if (draft && shown?.projectId === draft.projectId) {
-    return <TemplateDetail draft={draft} templates={shown.templates} projectName={project?.name ?? ''} />
+    return (
+      <Stack gap="sm">
+        <PrototypeBar />
+        <TemplateDetail draft={draft} templates={shown.templates} projectName={project?.name ?? ''} />
+      </Stack>
+    )
+  }
+  const variant = read(settingsVariant)
+  const attention = needsAttention(current)
+  if (variant === 'S-C' && project && shown && (read(settingsView) ?? attention)) {
+    return (
+      <Stack gap="sm">
+        <PrototypeBar />
+        <SettingsView projectName={project.name} />
+      </Stack>
+    )
   }
   return (
-    <Stack gap="sm">
-      <Row justify="between" align="center">
-        <Heading level={3}>{project ? project.name : 'Kickoff'}</Heading>
-        <Row gap="xs" align="center">
-          {busy && current ? <Spinner label="Reloading tasks" labelHidden /> : null}
-          <IconButton icon="refresh" label="Reload tasks" tooltip="Reload tasks" size="sm" variant="ghost" onPress={() => void load()} />
-        </Row>
-      </Row>
-      {project ? <TrackerSection listed={current?.kind === 'ready'} /> : null}
-      {project ? <StartOptionsSection /> : null}
+    <ScrollFrame>
+      <PrototypeBar />
+      <Header projectName={project?.name ?? null} gear={variant === 'S-C' && project !== null && shown !== null} />
+      {project && variant !== 'S-C' ? <SettingsCollapsible tabs={variant === 'S-B'} attention={attention} /> : null}
       {current ? <Body list={current} /> : <Spinner label="Loading tasks" />}
+    </ScrollFrame>
+  )
+}
+
+/** PROTOTYPE: the frame that should let only the list scroll. Whether `height: '100%'` reaches the
+ *  panel's height is what issue #46 asks to find out. */
+function ScrollFrame({ children }: { children?: OrcaNode }) {
+  return read(scrollMode) === 'list-max-only' ? (
+    <Stack gap="sm">{children}</Stack>
+  ) : (
+    <Box direction="column" gap="sm" height="100%">
+      {children}
+    </Box>
+  )
+}
+
+/** PROTOTYPE: how the list's scroll area is sized, to find out what fills the panel. The third
+ *  switch, only for this experiment. `frame`: the panel's frame has `height: '100%'` and the list
+ *  `grow` with `maxHeight: '100%'`. `list-max-only`: no frame height, the list `maxHeight: '100%'`.
+ *  `list-height`: frame `height: '100%'`, the list `height: '100%'`. */
+type ScrollMode = 'frame' | 'list-max-only' | 'list-height'
+const SCROLL_MODES = [
+  { value: 'frame', label: 'frame 100% + list max 100%' },
+  { value: 'list-max-only', label: 'list max 100% only' },
+  { value: 'list-height', label: 'frame 100% + list height 100%' }
+]
+const scrollMode = atom<ScrollMode>('protoScrollMode', 'frame', { persist: 'plugin' })
+
+/** The list's scroll area in the current `scrollMode`. */
+function ScrollArea({ children }: { children?: OrcaNode }) {
+  const mode = read(scrollMode)
+  if (mode === 'list-height') {
+    return (
+      <Box direction="column" gap="xs" height="100%" scroll="y">
+        {children}
+      </Box>
+    )
+  }
+  return (
+    <Box direction="column" gap="xs" grow={mode === 'frame'} minHeight={0} maxHeight="100%" scroll="y">
+      {children}
+    </Box>
+  )
+}
+
+/** Whether Project settings opens by itself: the project has no tracker, or the load failed. */
+const needsAttention = (current: TaskList | null) => current?.kind === 'needs-config' || current?.kind === 'error'
+
+/** PROTOTYPE: the two variant switches. */
+function PrototypeBar() {
+  return (
+    <Box border="warning" radius="sm" padding="xs" columns={2} gap="xs">
+      <Select
+        label="PROTOTYPE · settings"
+        value={read(settingsVariant)}
+        options={SETTINGS_VARIANTS}
+        onChange={(value) => set(settingsVariant, value as SettingsVariant)}
+      />
+      <Select label="PROTOTYPE · list" value={read(listVariant)} options={LIST_VARIANTS} onChange={(value) => set(listVariant, value as ListVariant)} />
+      <Select label="PROTOTYPE · scroll" value={read(scrollMode)} options={SCROLL_MODES} onChange={(value) => set(scrollMode, value as ScrollMode)} />
+    </Box>
+  )
+}
+
+function Header({ projectName, gear }: { projectName: string | null; gear: boolean }) {
+  const busy = read(loading)
+  return (
+    <Box direction="row" justify="between" align="center" gap="xs">
+      <Box direction="row" align="center" gap="xs" grow minWidth={0}>
+        {projectName ? (
+          <>
+            <Text muted>Kickoff ·</Text>
+            <Heading level={2}>{projectName}</Heading>
+          </>
+        ) : (
+          <Heading level={2}>Kickoff</Heading>
+        )}
+      </Box>
+      <Row gap="xs" align="center">
+        {busy && read(list) ? <Spinner label="Reloading tasks" labelHidden /> : null}
+        <IconButton icon="refresh" label="Reload tasks" tooltip="Reload tasks" size="sm" variant="ghost" onPress={() => void load()} />
+        {gear ? (
+          <IconButton icon="settings" label="Project settings" tooltip="Project settings" size="sm" variant="ghost" onPress={() => set(settingsView, true)} />
+        ) : null}
+      </Row>
+    </Box>
+  )
+}
+
+/** One line that says what the closed Project settings hold. */
+function settingsSummary(shown: ShownSettings): string {
+  const tracker = PROVIDER_OPTIONS.find((option) => option.value === shown.provider)?.label ?? 'No tracker'
+  const agent = AGENT_OPTIONS.find((option) => option.value === shown.agent)?.label ?? shown.agent
+  const template = shown.templates.find((candidate) => candidate.id === shown.defaultTemplateId)?.name ?? ''
+  return `${tracker} · ${agent} · ${template}`
+}
+
+/** S-A (sections) and S-B (tabs). */
+function SettingsCollapsible({ tabs, attention }: { tabs: boolean; attention: boolean }) {
+  const shown = read(shownSettings)
+  if (!shown) return null
+  return (
+    <Collapsible
+      title="Project settings"
+      description={settingsSummary(shown)}
+      open={attention || read(settingsOpen)}
+      onChange={(open) => set(settingsOpen, open)}
+    >
+      {tabs ? (
+        <Tabs label="Project settings" value={read(settingsTab)} onChange={(value) => set(settingsTab, value)}>
+          <Tab value="tracker" label="Tracker">
+            <TrackerFields paired={false} titled={false} />
+          </Tab>
+          <Tab value="start" label="Start">
+            <StartFields paired={false} />
+          </Tab>
+        </Tabs>
+      ) : (
+        <Stack gap="sm">
+          <Text size="sm" weight="semibold">
+            Tracker
+          </Text>
+          <TrackerFields paired />
+          <Separator />
+          <Text size="sm" weight="semibold">
+            Start
+          </Text>
+          <StartFields paired />
+        </Stack>
+      )}
+    </Collapsible>
+  )
+}
+
+/** S-C: the settings replace the panel view. */
+function SettingsView({ projectName }: { projectName: string }) {
+  return (
+    <Stack gap="sm">
+      <Box direction="row" justify="between" align="center" gap="xs">
+        <Box direction="row" align="center" gap="xs" grow minWidth={0}>
+          <Text muted>{`${projectName} ·`}</Text>
+          <Heading level={3}>Project settings</Heading>
+        </Box>
+        <Button key="settings-done" size="sm" variant="ghost" icon="close" onPress={() => set(settingsView, false)}>
+          Done
+        </Button>
+      </Box>
+      <Text size="sm" weight="semibold">
+        Tracker
+      </Text>
+      <TrackerFields paired={false} />
+      <Separator />
+      <Text size="sm" weight="semibold">
+        Start
+      </Text>
+      <StartFields paired={false} />
     </Stack>
   )
 }
 
-function TrackerSection({ listed }: { listed: boolean }) {
+/** Two fields side by side, or one under the other. */
+function Pair({ paired, children }: { paired: boolean; children?: OrcaNode }) {
+  return paired ? (
+    <Box columns={2} gap="xs">
+      {children}
+    </Box>
+  ) : (
+    <Stack gap="sm">{children}</Stack>
+  )
+}
+
+function TrackerFields({ paired, titled = true }: { paired: boolean; titled?: boolean }) {
   const shown = read(shownSettings)
   if (!shown) return null
   const providerOptions = shown.provider === null ? [{ value: NO_TRACKER, label: 'Choose a tracker' }, ...PROVIDER_OPTIONS] : PROVIDER_OPTIONS
   return (
-    <Collapsible title="Tracker" open={!listed || read(trackerOpen)} onChange={(open) => set(trackerOpen, open)}>
-      <Stack gap="sm">
-        <Select label="Tracker" value={shown.provider ?? NO_TRACKER} options={providerOptions} onChange={chooseProviderFor} />
-        {shown.provider === 'jira-orca' ? <JiraOrcaSettings providers={shown.providers} /> : null}
-        {shown.provider === 'jira-twg' ? <JiraTwgSettings providers={shown.providers} /> : null}
-      </Stack>
-    </Collapsible>
+    <Stack gap="sm">
+      <Select label="Tracker" labelHidden={titled} value={shown.provider ?? NO_TRACKER} options={providerOptions} onChange={chooseProviderFor} />
+      {shown.provider === 'jira-orca' ? <JiraOrcaSettings providers={shown.providers} /> : null}
+      {shown.provider === 'jira-twg' ? <JiraTwgSettings providers={shown.providers} paired={paired} /> : null}
+    </Stack>
   )
 }
 
@@ -793,7 +1012,7 @@ function JiraOrcaSettings({ providers }: { providers: ProviderConfigs }) {
         </Text>
       ) : null}
       <Text size="sm" muted>
-        Kickoff reads Jira through the connection saved in Orca. Connect Jira in Orca's settings first if you haven't.
+        Reads Jira through the connection saved in Orca's settings.
       </Text>
     </Stack>
   )
@@ -812,54 +1031,69 @@ function JqlInput({ provider, jql }: { provider: JiraProviderId; jql: string }) 
   )
 }
 
-function JiraTwgSettings({ providers }: { providers: ProviderConfigs }) {
+function JiraTwgSettings({ providers, paired }: { providers: ProviderConfigs; paired: boolean }) {
   const config = providerConfig({ providers }, 'jira-twg')
   return (
     <Stack gap="sm">
       <JqlInput provider="jira-twg" jql={config.jql} />
-      <Input
-        label="Site"
-        value={config.site}
-        placeholder="twg's default site"
-        onChange={(site) => changeJiraConfig('jira-twg', { site })}
-        onSubmit={() => void load()}
-      />
-      <Input
-        label="Profile"
-        value={config.profile}
-        placeholder="twg's default profile"
-        onChange={(profile) => changeJiraConfig('jira-twg', { profile })}
-        onSubmit={() => void load()}
-      />
+      <Pair paired={paired}>
+        <Input
+          label="Site"
+          value={config.site}
+          placeholder="twg's default"
+          onChange={(site) => changeJiraConfig('jira-twg', { site })}
+          onSubmit={() => void load()}
+        />
+        <Input
+          label="Profile"
+          value={config.profile}
+          placeholder="twg's default"
+          onChange={(profile) => changeJiraConfig('jira-twg', { profile })}
+          onSubmit={() => void load()}
+        />
+      </Pair>
       <Text size="sm" muted>
-        Kickoff reads Jira through the Teamwork Graph CLI. Run `twg login` in a terminal first if you haven't. Leave Site and Profile empty to use twg's defaults.
+        Reads Jira through the twg CLI. Run `twg login` first if you haven't.
       </Text>
     </Stack>
   )
 }
 
-function StartOptionsSection() {
+function StartFields({ paired }: { paired: boolean }) {
   const shown = read(shownSettings)
   if (!shown) return null
   const agentOptions = AGENT_OPTIONS.some((option) => option.value === shown.agent)
     ? AGENT_OPTIONS
     : [...AGENT_OPTIONS, { value: shown.agent, label: shown.agent }]
+  const text = shown.templates.find((template) => template.id === shown.defaultTemplateId)?.text ?? ''
   return (
-    <Collapsible title="Start options" open={read(optionsOpen)} onChange={(open) => set(optionsOpen, open)}>
-      <Stack gap="sm">
+    <Stack gap="sm">
+      <Pair paired={paired}>
         <Select label="Agent" value={shown.agent} options={agentOptions} onChange={(agent) => changeSettings({ agent })} />
-        <Row gap="xs" align="end">
-          <Select
-            label="Default template"
-            value={shown.defaultTemplateId}
-            options={templateOptions(shown.templates)}
-            onChange={(defaultTemplateId) => changeSettings({ defaultTemplateId })}
-          />
-          <IconButton icon="edit" label="Edit template" tooltip="Edit template" variant="ghost" onPress={() => openTemplate(shown.defaultTemplateId)} />
-          <IconButton icon="add" label="New template" tooltip="New template" variant="ghost" onPress={() => openTemplate(null)} />
+        <Select
+          label="Default template"
+          value={shown.defaultTemplateId}
+          options={templateOptions(shown.templates)}
+          onChange={(defaultTemplateId) => changeSettings({ defaultTemplateId })}
+        />
+      </Pair>
+      <Box direction="row" justify="between" align="center" gap="xs">
+        <Text size="sm" muted>
+          Template text
+        </Text>
+        <Row gap="none" align="center">
+          <IconButton icon="edit" label="Edit template" tooltip="Edit template" size="sm" variant="ghost" onPress={() => openTemplate(shown.defaultTemplateId)} />
+          <IconButton icon="add" label="New template" tooltip="New template" size="sm" variant="ghost" onPress={() => openTemplate(null)} />
         </Row>
-      </Stack>
-    </Collapsible>
+      </Box>
+      {text === '' ? (
+        <Text size="sm" muted>
+          Empty: the prompt is the task URL.
+        </Text>
+      ) : (
+        <CodeView code={text} wrap maxHeight="sm" />
+      )}
+    </Stack>
   )
 }
 
@@ -871,7 +1105,7 @@ function Body({ list }: { list: TaskList }) {
       return (
         <EmptyState
           title="No tracker for this project"
-          description={`Choose a tracker above to list the tasks of ${list.project.name}.`}
+          description={`Choose a tracker in Project settings to list the tasks of ${list.project.name}.`}
           icon="settings"
         />
       )
@@ -882,51 +1116,103 @@ function Body({ list }: { list: TaskList }) {
         </Callout>
       )
     case 'ready':
-      return (
-        <Stack gap="sm">
-          {list.warning ? (
-            <Callout tone="warning" icon="warning">
-              <Text>{list.warning}</Text>
-            </Callout>
-          ) : null}
-          {list.worktrees === null ? (
-            <Callout tone="warning" icon="warning">
-              <Text>{`Couldn't read Orca's worktrees, so Start is off. ${list.worktreesError ?? ''}`.trim()}</Text>
-            </Callout>
-          ) : null}
-          {list.tasks.length === 0 ? (
-            <EmptyState title="No open tasks" icon="check" />
-          ) : (
-            list.tasks.map((task) => <TaskCard key={task.key} task={task} projectId={list.project.id} worktrees={list.worktrees} />)
-          )}
-          {list.nextCursor !== null ? <LoadMore /> : null}
-          {list.truncated ? (
-            <Text size="sm" muted>
-              {list.provider === 'github'
-                ? "Showing the first 100 of your repository's issues."
-                : 'Showing the first 100 tasks — narrow your JQL.'}
-            </Text>
-          ) : null}
-        </Stack>
-      )
+      return <ReadyList list={list} />
   }
 }
 
-function LoadMore() {
-  const error = read(moreError)
+type ReadyTaskList = Extract<TaskList, { kind: 'ready' }>
+
+/** Whether the task's key, title or a label holds the query, ignoring case. */
+function matchesSearch(task: Task, query: string): boolean {
+  const q = query.trim().toLowerCase()
+  if (q === '') return true
+  return [task.key, task.title, ...task.labels].some((text) => text.toLowerCase().includes(q))
+}
+
+function ReadyList({ list }: { list: ReadyTaskList }) {
+  const query = read(search)
+  const tasks = list.tasks.filter((task) => matchesSearch(task, query))
+  const variant = read(listVariant)
   return (
-    <Stack gap="xs">
+    <>
+      <Stack gap="xs">
+        <Input type="search" label="Search tasks" labelHidden value={query} placeholder="Search key, title or label" onChange={(value) => set(search, value)} />
+        {list.nextCursor !== null ? (
+          <Text size="sm" muted>
+            {`Filtering ${list.tasks.length} loaded tasks`}
+          </Text>
+        ) : null}
+      </Stack>
+      {list.warning ? (
+        <Callout tone="warning" icon="warning">
+          <Text>{list.warning}</Text>
+        </Callout>
+      ) : null}
+      {list.worktrees === null ? (
+        <Callout tone="warning" icon="warning">
+          <Text>{`Couldn't read Orca's worktrees, so Start is off. ${list.worktreesError ?? ''}`.trim()}</Text>
+        </Callout>
+      ) : null}
+      {variant === 'L-C' ? <TaskTable list={list} tasks={tasks} /> : <ScrollList list={list} tasks={tasks} variant={variant} />}
+    </>
+  )
+}
+
+/** L-A, L-B, L-D and L-E: the list scrolls inside a `Box`. */
+function ScrollList({ list, tasks, variant }: { list: ReadyTaskList; tasks: Task[]; variant: ListVariant }) {
+  const query = read(search)
+  return (
+    <ScrollArea>
+      {list.tasks.length === 0 ? (
+        <EmptyState title="No open tasks" icon="check" />
+      ) : variant === 'L-B' ? (
+        <Grouped list={list} tasks={tasks} />
+      ) : tasks.length === 0 ? (
+        <NoMatch query={query} />
+      ) : (
+        tasks.map((task) =>
+          variant === 'L-D' || variant === 'L-E' ? (
+            <RoomyCard key={task.key} task={task} projectId={list.project.id} worktrees={list.worktrees} iconStart={variant === 'L-E'} />
+          ) : (
+            <CompactCard key={task.key} task={task} projectId={list.project.id} worktrees={list.worktrees} />
+          )
+        )
+      )}
+      {list.nextCursor !== null ? <LoadMore count={list.tasks.length} /> : null}
+      {list.truncated ? <Truncated list={list} /> : null}
+    </ScrollArea>
+  )
+}
+
+function NoMatch({ query }: { query: string }) {
+  return (
+    <Text size="sm" muted>
+      {`No loaded task matches "${query.trim()}".`}
+    </Text>
+  )
+}
+
+function Truncated({ list }: { list: ReadyTaskList }) {
+  return (
+    <Text size="sm" muted>
+      {list.provider === 'github' ? "Showing the first 100 of your repository's issues." : 'Showing the first 100 tasks — narrow your JQL.'}
+    </Text>
+  )
+}
+
+function LoadMore({ count }: { count: number }) {
+  const error = read(moreError)
+  const busy = read(loadingMore)
+  return (
+    <Stack gap="xs" align="stretch">
       {error ? (
         <Text size="sm" tone="danger">
           {`Couldn't load more tasks: ${error}`}
         </Text>
       ) : null}
-      <Row gap="xs" align="center">
-        <Button key="load-more" size="sm" variant="ghost" disabled={read(loadingMore)} onPress={() => void loadMore()}>
-          Load more
-        </Button>
-        {read(loadingMore) ? <Spinner label="Loading more tasks" labelHidden /> : null}
-      </Row>
+      <Button key="load-more" size="sm" variant="outline" disabled={busy} onPress={() => void loadMore()}>
+        {busy ? `Showing ${count} · Loading…` : `Showing ${count} · Load more`}
+      </Button>
     </Stack>
   )
 }
@@ -937,55 +1223,54 @@ function agentLine(worktree: TaskWorktree, agentStarting: boolean): string {
   return agentStarting ? 'Agent starting…' : 'No agent running'
 }
 
-function TaskCard({ task, projectId, worktrees }: { task: Task; projectId: string; worktrees: Record<string, TaskWorktree> | null }) {
-  // Every GitHub task is open, so its status says nothing.
+/** Status and labels on one line. Every GitHub task is open, so its status says nothing. */
+function taskMeta(task: Task): string {
   const status = task.tracker !== 'github' ? task.status : null
+  return [status, ...task.labels].filter((part): part is string => !!part).join(' · ')
+}
+
+/** What a card or the action bar needs to know about a task. */
+function taskState(task: Task, projectId: string, worktrees: Record<string, TaskWorktree> | null) {
   const worktree = worktrees?.[task.key] ?? null
-  const isStarting = worktree === null && read(starting)[task.key] === true
-  const error = read(taskErrors)[task.key]
   const shown = read(shownSettings)
-  const settings = shown?.projectId === projectId ? shown : null
+  return {
+    worktree,
+    isStarting: worktree === null && read(starting)[task.key] === true,
+    error: read(taskErrors)[task.key] as string | undefined,
+    agentStarting: read(agentStarting)[task.key] === projectId,
+    settings: shown?.projectId === projectId ? shown : null
+  }
+}
+
+/** The template `Select` of a card, with a width of its own; only with two or more templates. */
+function CardTemplate({ task, projectId, width = 128 }: { task: Task; projectId: string; width?: number | 'grow' }) {
+  const shown = read(shownSettings)
+  if (shown?.projectId !== projectId || shown.templates.length < 2) return null
+  const size = width === 'grow' ? { grow: true, minWidth: 0 } : { width, shrink: false }
   return (
-    <Box border radius="md" padding="sm" direction="column" gap="xs">
-      <Row justify="between" align="center" gap="xs">
-        <Text>
-          <Link href={task.url}>{task.key}</Link> {task.title}
-        </Text>
-        {worktree ? null : isStarting ? (
-          <Spinner label={`Starting ${task.key}`} labelHidden />
-        ) : (
-          <Row gap="xs" align="center">
-            {settings && settings.templates.length >= 2 ? (
-              <Select
-                label={`Template for ${task.key}`}
-                labelHidden
-                value={chosenTemplateId(settings, task.key)}
-                options={templateOptions(settings.templates)}
-                onChange={(id) => update(cardTemplates, (chosen) => ({ ...chosen, [cardKey(projectId, task.key)]: id }))}
-              />
-            ) : null}
-            <Button key={`start:${task.key}`} size="sm" icon="play" disabled={worktrees === null} onPress={() => void startTask(task)}>
-              Start
-            </Button>
-          </Row>
-        )}
-      </Row>
-      {status || task.labels.length > 0 ? (
-        <Row gap="xs" wrap>
-          {status ? <Badge tone="accent">{status}</Badge> : null}
-          {task.labels.map((label) => (
-            <Badge key={label}>{label}</Badge>
-          ))}
-        </Row>
-      ) : null}
-      {worktree ? (
-        <Row gap="xs" align="center" wrap>
-          <Link onPress={() => void openWorktree(task.key, worktree.worktreeId)}>{worktree.name}</Link>
-          <Text size="sm" muted>
-            {agentLine(worktree, read(agentStarting)[task.key] === projectId)}
-          </Text>
-        </Row>
-      ) : null}
+    <Box {...size}>
+      <Select
+        label={`Template for ${task.key}`}
+        labelHidden
+        value={chosenTemplateId(shown, task.key)}
+        options={templateOptions(shown.templates)}
+        onChange={(id) => update(cardTemplates, (chosen) => ({ ...chosen, [cardKey(projectId, task.key)]: id }))}
+      />
+    </Box>
+  )
+}
+
+function StartButton({ task, worktrees, size = 'sm' }: { task: Task; worktrees: Record<string, TaskWorktree> | null; size?: 'xs' | 'sm' }) {
+  return (
+    <Button key={`start:${task.key}`} size={size} icon="play" disabled={worktrees === null} onPress={() => void startTask(task)}>
+      Start
+    </Button>
+  )
+}
+
+function TaskNotes({ isStarting, error }: { isStarting: boolean; error: string | undefined }) {
+  return (
+    <>
       {isStarting ? (
         <Text size="sm" muted>
           Creating the worktree can take a minute.
@@ -996,6 +1281,311 @@ function TaskCard({ task, projectId, worktrees }: { task: Task; projectId: strin
           {error}
         </Text>
       ) : null}
+    </>
+  )
+}
+
+/** L-A: the truncated title on the first row; meta, template and Start on the second. */
+function CompactCard({ task, projectId, worktrees }: { task: Task; projectId: string; worktrees: Record<string, TaskWorktree> | null }) {
+  const { worktree, isStarting, error, agentStarting: agentIsStarting } = taskState(task, projectId, worktrees)
+  return (
+    <Box border radius="md" paddingX="sm" paddingY="xs" direction="column" gap="xs" shrink={false}>
+      <Text truncate>
+        <Link href={task.url}>{task.key}</Link> {task.title}
+      </Text>
+      <Box direction="row" align="center" gap="xs">
+        <Box grow minWidth={0}>
+          {worktree ? (
+            <Text size="sm" truncate>
+              <Link onPress={() => void openWorktree(task.key, worktree.worktreeId)}>{worktree.name}</Link>
+              {` · ${agentLine(worktree, agentIsStarting)}`}
+            </Text>
+          ) : (
+            <Text size="sm" muted truncate>
+              {taskMeta(task)}
+            </Text>
+          )}
+        </Box>
+        {worktree ? null : isStarting ? (
+          <Spinner label={`Starting ${task.key}`} labelHidden />
+        ) : (
+          <>
+            <CardTemplate task={task} projectId={projectId} />
+            <Box shrink={false}>
+              <StartButton task={task} worktrees={worktrees} />
+            </Box>
+          </>
+        )}
+      </Box>
+      <TaskNotes isStarting={isStarting} error={error} />
+    </Box>
+  )
+}
+
+/** L-D: one row per part. The key and the whole title; the worktree, or the status and labels as
+ *  badges; the agent, when the worktree has one; the template and Start, while there is no worktree.
+ *  L-E: Start is an icon-only button. */
+function RoomyCard({
+  task,
+  projectId,
+  worktrees,
+  iconStart
+}: {
+  task: Task
+  projectId: string
+  worktrees: Record<string, TaskWorktree> | null
+  iconStart: boolean
+}) {
+  const { worktree, isStarting, error, agentStarting: agentIsStarting } = taskState(task, projectId, worktrees)
+  const status = task.tracker !== 'github' ? task.status : null
+  const agent = worktree?.agent ? `Agent: ${worktree.agent}` : worktree && agentIsStarting ? 'Agent starting…' : null
+  return (
+    <Box border radius="md" padding="sm" direction="column" gap="sm" shrink={false}>
+      <Text>
+        <Link href={task.url}>{task.key}</Link> {task.title}
+      </Text>
+      {worktree ? (
+        <Text size="sm" truncate>
+          <Link onPress={() => void openWorktree(task.key, worktree.worktreeId)}>{worktree.name}</Link>
+        </Text>
+      ) : status || task.labels.length > 0 ? (
+        <Box direction="row" wrap gap="xs" align="center">
+          {status ? <Badge tone="accent">{status}</Badge> : null}
+          {task.labels.map((label) => (
+            <Badge key={label}>{label}</Badge>
+          ))}
+        </Box>
+      ) : null}
+      {agent ? (
+        <Text size="sm" muted>
+          {agent}
+        </Text>
+      ) : null}
+      {worktree ? null : isStarting ? (
+        <Spinner label={`Starting ${task.key}`} />
+      ) : (
+        <Box direction="row" align="center" justify="end" gap="xs">
+          <CardTemplate task={task} projectId={projectId} width="grow" />
+          <Box shrink={false}>
+            {iconStart ? (
+              <IconButton
+                key={`start:${task.key}`}
+                icon="play"
+                variant="outline"
+                label={`Start ${task.key}`}
+                tooltip="Start"
+                disabled={worktrees === null}
+                onPress={() => void startTask(task)}
+              />
+            ) : (
+              <StartButton task={task} worktrees={worktrees} />
+            )}
+          </Box>
+        </Box>
+      )}
+      <TaskNotes isStarting={isStarting} error={error} />
+    </Box>
+  )
+}
+
+/** L-B: "In progress" (task worktrees and Starts under way) above "To start". */
+function Grouped({ list, tasks }: { list: ReadyTaskList; tasks: Task[] }) {
+  const query = read(search)
+  const projectId = list.project.id
+  const isUnderWay = (task: Task) => !!list.worktrees?.[task.key] || read(starting)[task.key] === true
+  const inProgress = tasks.filter(isUnderWay)
+  const toStart = tasks.filter((task) => !isUnderWay(task))
+  // Task worktrees whose task isn't loaded yet still show, by key.
+  const loaded = new Set(list.tasks.map((task) => task.key))
+  const unloaded = Object.entries(list.worktrees ?? {}).filter(
+    ([key, worktree]) => !loaded.has(key) && matchesSearch({ key, title: worktree.name, labels: [] } as unknown as Task, query)
+  )
+  return (
+    <>
+      <GroupTitle title="In progress" count={inProgress.length + unloaded.length} />
+      {inProgress.length + unloaded.length === 0 ? (
+        <Text size="sm" muted>
+          {query.trim() === '' ? 'No task worktrees yet.' : 'None matches.'}
+        </Text>
+      ) : null}
+      {inProgress.map((task) => (
+        <InProgressRow key={task.key} task={task} projectId={projectId} worktrees={list.worktrees} />
+      ))}
+      {unloaded.map(([key, worktree]) => (
+        <Box key={key} border radius="md" paddingX="sm" paddingY="xs" direction="column" gap="xs" shrink={false}>
+          <Text truncate>{key}</Text>
+          <Text size="sm" truncate>
+            <Link onPress={() => void openWorktree(key, worktree.worktreeId)}>{worktree.name}</Link>
+            {` · ${agentLine(worktree, read(agentStarting)[key] === projectId)}`}
+          </Text>
+        </Box>
+      ))}
+      <Separator />
+      <GroupTitle title="To start" count={toStart.length} />
+      {toStart.length === 0 && query.trim() !== '' ? <NoMatch query={query} /> : null}
+      {toStart.map((task) => (
+        <ToStartRow key={task.key} task={task} projectId={projectId} worktrees={list.worktrees} />
+      ))}
+    </>
+  )
+}
+
+function GroupTitle({ title, count }: { title: string; count: number }) {
+  return (
+    <Text size="sm" weight="semibold">
+      {`${title} · ${count}`}
+    </Text>
+  )
+}
+
+function InProgressRow({ task, projectId, worktrees }: { task: Task; projectId: string; worktrees: Record<string, TaskWorktree> | null }) {
+  const { worktree, isStarting, error, agentStarting: agentIsStarting } = taskState(task, projectId, worktrees)
+  return (
+    <Box border="accent" radius="md" paddingX="sm" paddingY="xs" direction="column" gap="xs" shrink={false}>
+      <Box direction="row" align="center" gap="xs">
+        <Box grow minWidth={0}>
+          <Text truncate>
+            <Link href={task.url}>{task.key}</Link> {task.title}
+          </Text>
+        </Box>
+        {isStarting ? <Spinner label={`Starting ${task.key}`} labelHidden /> : null}
+        {worktree ? (
+          <Box shrink={false}>
+            <Button key={`open:${task.key}`} size="xs" variant="outline" onPress={() => void openWorktree(task.key, worktree.worktreeId)}>
+              Open
+            </Button>
+          </Box>
+        ) : null}
+      </Box>
+      {worktree ? (
+        <Text size="sm" muted truncate>
+          {`${worktree.name} · ${agentLine(worktree, agentIsStarting)}`}
+        </Text>
+      ) : null}
+      <TaskNotes isStarting={isStarting} error={error} />
+    </Box>
+  )
+}
+
+function ToStartRow({ task, projectId, worktrees }: { task: Task; projectId: string; worktrees: Record<string, TaskWorktree> | null }) {
+  const { error } = taskState(task, projectId, worktrees)
+  return (
+    <Box border radius="md" paddingX="sm" paddingY="xs" direction="column" gap="xs" shrink={false}>
+      <Box direction="row" align="center" gap="xs">
+        <Box grow minWidth={0} direction="column">
+          <Text truncate>
+            <Link href={task.url}>{task.key}</Link> {task.title}
+          </Text>
+          <Text size="xs" muted truncate>
+            {taskMeta(task)}
+          </Text>
+        </Box>
+        <Box shrink={false}>
+          <IconButton icon="play" label={`Start ${task.key}`} tooltip="Start" size="sm" variant="outline" disabled={worktrees === null} onPress={() => void startTask(task)} />
+        </Box>
+      </Box>
+      <CardTemplate task={task} projectId={projectId} width={160} />
+      <TaskNotes isStarting={false} error={error} />
+    </Box>
+  )
+}
+
+/** L-C: a table, and an action bar above it for the selected row. */
+function TaskTable({ list, tasks }: { list: ReadyTaskList; tasks: Task[] }) {
+  const selectedKey = read(selectedTask)
+  const selected = list.tasks.find((task) => task.key === selectedKey) ?? null
+  const startingKeys = read(starting)
+  const rows = tasks.map((task) => {
+    const worktree = list.worktrees?.[task.key]
+    return {
+      key: task.key,
+      cells: {
+        key: task.key,
+        title: task.title,
+        status: task.tracker !== 'github' ? task.status : null,
+        worktree: worktree ? worktree.name : startingKeys[task.key] ? 'Starting…' : null
+      }
+    }
+  })
+  return (
+    <>
+      <ActionBar task={selected} list={list} />
+      <Table
+        label="Tasks"
+        columns={[
+          { key: 'key', label: 'Key', width: 'sm' },
+          { key: 'title', label: 'Title', minWidth: 'sm' },
+          { key: 'status', label: 'Status', width: 'sm', hideBelow: 'sm' },
+          { key: 'worktree', label: 'Worktree', width: 'md', hideBelow: 'md' }
+        ]}
+        rows={rows}
+        selectionMode="single"
+        selected={selected ? [selected.key] : []}
+        onSelectionChange={({ keys }) => set(selectedTask, keys[0] ?? null)}
+        onRowAction={({ key }) => {
+          const task = list.tasks.find((candidate) => candidate.key === key)
+          if (!task) return
+          const worktree = list.worktrees?.[key]
+          if (worktree) void openWorktree(key, worktree.worktreeId)
+          else void startTask(task)
+        }}
+        hasMore={list.nextCursor !== null}
+        loading={read(loadingMore)}
+        onLoadMore={() => void loadMore()}
+        emptyText={list.tasks.length === 0 ? 'No open tasks' : `No loaded task matches "${read(search).trim()}".`}
+        maxHeight="lg"
+      />
+      {read(moreError) ? (
+        <Text size="sm" tone="danger">
+          {`Couldn't load more tasks: ${read(moreError)}`}
+        </Text>
+      ) : null}
+      {list.truncated ? <Truncated list={list} /> : null}
+    </>
+  )
+}
+
+function ActionBar({ task, list }: { task: Task | null; list: ReadyTaskList }) {
+  if (!task) {
+    return (
+      <Box border radius="md" paddingX="sm" paddingY="xs" background="muted">
+        <Text size="sm" muted>
+          Select a task to start it. Enter or a double click starts it too.
+        </Text>
+      </Box>
+    )
+  }
+  const projectId = list.project.id
+  const { worktree, isStarting, error, agentStarting: agentIsStarting } = taskState(task, projectId, list.worktrees)
+  return (
+    <Box border radius="md" paddingX="sm" paddingY="xs" background="muted" direction="column" gap="xs">
+      <Text truncate>
+        <Link href={task.url}>{task.key}</Link> {task.title}
+      </Text>
+      <Box direction="row" align="center" gap="xs">
+        <Box grow minWidth={0}>
+          <Text size="sm" muted truncate>
+            {worktree ? `${worktree.name} · ${agentLine(worktree, agentIsStarting)}` : taskMeta(task)}
+          </Text>
+        </Box>
+        {worktree ? (
+          <Box shrink={false}>
+            <Button key={`open:${task.key}`} size="sm" variant="outline" onPress={() => void openWorktree(task.key, worktree.worktreeId)}>
+              Open
+            </Button>
+          </Box>
+        ) : isStarting ? (
+          <Spinner label={`Starting ${task.key}`} labelHidden />
+        ) : (
+          <>
+            <CardTemplate task={task} projectId={projectId} />
+            <Box shrink={false}>
+              <StartButton task={task} worktrees={list.worktrees} />
+            </Box>
+          </>
+        )}
+      </Box>
+      <TaskNotes isStarting={isStarting} error={error} />
     </Box>
   )
 }
@@ -1004,7 +1594,7 @@ function TemplateDetail({ draft, templates, projectName }: { draft: TemplateDraf
   const nameProblem = templateNameProblem(templates, draft.name, draft.id)
   return (
     <Stack gap="sm">
-      <Heading level={3}>{projectName}</Heading>
+      <Heading level={2}>{projectName}</Heading>
       <Stack gap="xs">
         <Input label="Name" value={draft.name} invalid={nameProblem !== null} onChange={(name) => changeDraft(draft, { name })} />
         {nameProblem !== null ? (
