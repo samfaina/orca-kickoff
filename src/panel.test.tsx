@@ -128,9 +128,82 @@ test('says when no project is selected', async () => {
   await view.unmount()
 })
 
-test('a project without a provider shows the tracker settings, not an error', async () => {
+test('the header says "Kickoff ·" and the project\'s name, or only "Kickoff" without a project', async () => {
+  const listed = await show(ready([task('#42')]))
+  const kickoff = listed.find({ type: 'Text', text: 'Kickoff ·' })
+  assert.equal(kickoff?.props.muted, true)
+  assert.equal(listed.find({ type: 'Heading', text: 'web' })?.props.level, 2)
+  assert.equal(listed.find({ type: 'Heading', text: 'Kickoff' }), null)
+  const gear = listed.find({ type: 'IconButton', label: 'Project settings' })
+  assert.equal(gear?.props.icon, 'settings')
+  assert.equal(gear?.props.tooltip, 'Project settings')
+  assert.ok(listed.find({ type: 'IconButton', label: 'Reload tasks' }))
+  await listed.unmount()
+
+  const none = await show({ kind: 'no-project' })
+  assert.equal(none.find({ type: 'Heading', text: 'Kickoff' })?.props.level, 2)
+  assert.equal(none.find({ type: 'Text', text: 'Kickoff ·' }), null)
+  assert.equal(none.find({ type: 'IconButton', label: 'Project settings' }), null)
+  assert.ok(none.find({ type: 'IconButton', label: 'Reload tasks' }))
+  await none.unmount()
+})
+
+const gear = { type: 'IconButton', label: 'Project settings' }
+const done = { type: 'Button', text: 'Done' }
+const settingsTitle = { type: 'Heading', text: 'Project settings' }
+
+test('the gear opens Project settings in place of the list, and Done goes back to the list', async () => {
+  const view = await show(ready([task('#42')]))
+  assert.equal(view.find(settingsTitle), null)
+  await view.press(gear)
+  assert.equal(view.find(settingsTitle)?.props.level, 3)
+  assert.equal(view.find({ type: 'Text', text: 'web ·' })?.props.muted, true)
+  assert.equal(view.find({ type: 'Link', text: '#42' }), null)
+  assert.equal(view.find(gear), null)
+  assert.equal(view.find(done)?.props.icon, 'close')
+  assert.ok(view.find({ type: 'Text', text: 'Tracker' }))
+  assert.ok(view.find({ type: 'Text', text: 'Start' }))
+  assert.ok(view.find({ type: 'Separator' }))
+  assert.ok(view.find({ type: 'Select', label: 'Tracker' }))
+  assert.ok(view.find({ type: 'Select', label: 'Agent' }))
+
+  await view.press(done)
+  assert.equal(view.find(settingsTitle), null)
+  assert.ok(view.find({ type: 'Link', text: '#42' }))
+  assert.equal(view.find({ type: 'Select', label: 'Tracker' }), null)
+  assert.equal(view.find({ type: 'Select', label: 'Agent' }), null)
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.warnings, [])
+  await view.unmount()
+})
+
+test('Project settings opens by itself for a project without a tracker, and Done shows the empty state', async () => {
   const view = await show({ kind: 'needs-config', project: { id: 'repo:r1', name: 'notes', repo: null } })
-  assert.equal(view.find({ type: 'EmptyState' })?.label, 'No tracker for this project')
+  assert.ok(view.find(settingsTitle))
+  assert.ok(view.find({ type: 'Text', text: 'notes ·' }))
+  await view.press(done)
+  assert.equal(view.find(settingsTitle), null)
+  const empty = view.find({ type: 'EmptyState' })
+  assert.equal(empty?.label, 'No tracker for this project')
+  assert.equal(empty?.props.description, 'Choose a tracker in Project settings to list the tasks of notes.')
+  await view.unmount()
+})
+
+test('Project settings opens by itself when the load fails, and Done shows the error', async () => {
+  const view = await show({ kind: 'error', project: web, message: 'gh failed: not logged in.' })
+  assert.ok(view.find(settingsTitle))
+  assert.equal(view.find({ type: 'Callout' }), null)
+  await view.press(done)
+  assert.match(view.find({ type: 'Callout' })?.text ?? '', /not logged in/)
+  // A reload that fails again keeps the list the person went back to.
+  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  assert.equal(view.find(settingsTitle), null)
+  await view.unmount()
+})
+
+test('a project without a provider shows Project settings, not an error', async () => {
+  const view = await show({ kind: 'needs-config', project: { id: 'repo:r1', name: 'notes', repo: null } })
+  assert.ok(view.find(settingsTitle))
   assert.equal(view.find({ type: 'Callout' }), null)
   assert.equal(view.valueOf({ type: 'Select', label: 'Tracker' }), ':none')
   assert.deepEqual(optionLabels(view, 'Tracker'), ['Choose a tracker', 'GitHub', 'Jira (Orca connection)', 'Jira (twg)'])
@@ -146,6 +219,7 @@ test('says when there are no open tasks', async () => {
 test("shows the tool's real message when loading fails", async () => {
   const message = "Couldn't find the GitHub CLI (gh). Install it from https://cli.github.com, then run `gh auth login`."
   const view = await show({ kind: 'error', project: web, message })
+  await view.press(done)
   const callout = view.find({ type: 'Callout' })
   assert.ok(callout)
   assert.match(callout.text, /gh auth login/)
@@ -243,6 +317,35 @@ async function withIntervals(body: (timers: { tick: (view: TestPanel) => Promise
 }
 
 const api = { id: 'github:acme/api', name: 'api', repo: 'acme/api' }
+
+test('a change of active project goes back to the list, unless the new project needs Project settings', async () => {
+  const notes = { id: 'repo:r1', name: 'notes', repo: null }
+  let answer: TaskList = ready([task('#42')])
+  const view = await show(() => answer)
+  const changeTo = async (next: TaskList, displayName: string) => {
+    answer = next
+    await view.emit('workspace.changed', { context: { branch: 'main', displayName, terminals: [] } })
+  }
+
+  await view.press(gear)
+  // A reload of the same project keeps the view open.
+  await changeTo(ready([task('#43')]), 'web')
+  assert.ok(view.find(settingsTitle))
+
+  await changeTo(ready([task('#9')], { project: api }), 'api')
+  assert.equal(view.find(settingsTitle), null)
+  assert.ok(view.find({ type: 'Link', text: '#9' }))
+
+  await view.press(gear)
+  await changeTo({ kind: 'needs-config', project: notes }, 'notes')
+  assert.ok(view.find({ type: 'Text', text: 'notes ·' }))
+
+  // Done in a project that needs the settings, then another that needs them too: it opens again.
+  await view.press(done)
+  await changeTo({ kind: 'error', project: web, message: 'gh failed.' }, 'web')
+  assert.ok(view.find({ type: 'Text', text: 'web ·' }))
+  await view.unmount()
+})
 
 test('while visible, the panel polls the active project every 3 s and reloads when it changes', async () => {
   await withIntervals(async ({ tick, live }) => {
@@ -401,8 +504,9 @@ function optionLabels(view: TestPanel, label: string): string[] {
   return (options ?? []).map((option) => option.label)
 }
 
-test('Start options show the agent choice, the default template and the buttons to edit or add one', async () => {
+test('Project settings show the agent choice, the default template and the buttons to edit or add one', async () => {
   const { view } = await showWith({ 'tasks.load': ready([task('#42')]) })
+  await view.press(gear)
   assert.equal(view.valueOf({ type: 'Select', label: 'Agent' }), 'orca-default')
   assert.equal(view.valueOf({ type: 'Select', label: 'Default template' }), 'default')
   assert.deepEqual(optionLabels(view, 'Default template'), ['Default'])
@@ -422,8 +526,9 @@ const stored = (project: Record<string, JsonValue>) => ({ settings: { version: 1
 
 const twoTemplates = stored({ templates: [implement, triage], defaultTemplateId: 't-triage' })
 
-test("Start options show the project's stored agent and default template", async () => {
+test("Project settings show the project's stored agent and default template", async () => {
   const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, { settings: { ...twoTemplates.settings, projects: { 'github:acme/web': { ...twoTemplates.settings.projects['github:acme/web'], agent: 'none' } } } })
+  await view.press(gear)
   assert.equal(view.valueOf({ type: 'Select', label: 'Agent' }), 'none')
   assert.equal(view.valueOf({ type: 'Select', label: 'Default template' }), 't-triage')
   assert.deepEqual(optionLabels(view, 'Default template'), ['Implement', 'Triage'])
@@ -432,6 +537,7 @@ test("Start options show the project's stored agent and default template", async
 
 test('a project with a template stored before several templates shows it as "Default", unchanged', async () => {
   const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, stored({ template: 'Fix {{task_key}}' }))
+  await view.press(gear)
   assert.deepEqual(optionLabels(view, 'Default template'), ['Default'])
   await view.press({ type: 'IconButton', label: 'Edit template' })
   assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Default')
@@ -441,6 +547,7 @@ test('a project with a template stored before several templates shows it as "Def
 
 test('default template and agent changes save themselves after a pause', async () => {
   const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
+  await view.press(gear)
   await view.select({ type: 'Select', label: 'Default template' }, 't-impl')
   await view.select({ type: 'Select', label: 'Agent' }, 'codex')
   assert.equal((storedProject(host) as { defaultTemplateId: string }).defaultTemplateId, 't-triage')
@@ -462,7 +569,9 @@ test('a pending change is saved before a Start', async () => {
     },
     twoTemplates
   )
+  await view.press(gear)
   await view.select({ type: 'Select', label: 'Agent' }, 'none')
+  await view.press(done)
   await view.press({ testId: 'start:#42' })
   assert.deepEqual(seen, { providers: {}, templates: [implement, triage], defaultTemplateId: 't-triage', agent: 'none' })
   await view.unmount()
@@ -527,7 +636,9 @@ test('with one template, cards show no template Select', async () => {
 test('a change of default template shows in the cards without a choice of their own', async () => {
   const { view } = await showWith({ 'tasks.load': ready([task('#42'), task('#7')]) }, twoTemplates)
   await view.select(cardTemplate('#7'), 't-triage')
+  await view.press(gear)
   await view.select({ type: 'Select', label: 'Default template' }, 't-impl')
+  await view.press(done)
   assert.equal(view.valueOf(cardTemplate('#42')), 't-impl')
   assert.equal(view.valueOf(cardTemplate('#7')), 't-triage')
   await view.unmount()
@@ -548,8 +659,59 @@ const saveButton = { type: 'Button', text: 'Save' }
 /** How long Delete waits for its second click. */
 const CONFIRM_DELETE_MS = 4_000
 
-test('"New template" opens the detail with an empty name and the initial text; Save adds it at the end and goes back', async () => {
+test("Project settings shows the default template's text, read-only, or says that an empty one gives the task URL", async () => {
+  const empty = { id: 't-empty', name: 'Empty', text: '' }
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, stored({ templates: [implement, empty], defaultTemplateId: 't-impl' }))
+  await view.press(gear)
+  const code = view.find({ type: 'CodeView' })
+  assert.equal(code?.props.code, '/acme-skills:tdd {{task_url}}')
+  assert.equal(code?.props.wrap, true)
+  assert.equal(code?.props.maxHeight, 'sm')
+  assert.equal(view.find({ type: 'Text', text: 'Empty: the prompt is the task URL.' }), null)
+
+  await view.select({ type: 'Select', label: 'Default template' }, 't-empty')
+  assert.equal(view.find({ type: 'CodeView' }), null)
+  assert.ok(view.find({ type: 'Text', text: 'Empty: the prompt is the task URL.' }))
+  await view.unmount()
+})
+
+test('the template detail opened from Project settings goes back to it on Save, Cancel and Delete', async () => {
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
+  await view.press(gear)
+  const backInSettings = () => {
+    assert.equal(view.find({ type: 'Input', label: 'Name' }), null)
+    assert.ok(view.find(settingsTitle))
+    assert.equal(view.find({ type: 'Link', text: '#42' }), null)
+  }
+
+  await view.press({ type: 'IconButton', label: 'New template' })
+  await view.type({ type: 'Input', label: 'Name' }, 'Review')
+  await view.press(saveButton)
+  backInSettings()
+
+  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.press({ type: 'Button', text: 'Cancel' })
+  backInSettings()
+
+  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.press({ type: 'Button', text: 'Delete' })
+  await view.press({ type: 'Button', text: 'Confirm delete' })
+  backInSettings()
+  assert.deepEqual(optionLabels(view, 'Default template'), ['Implement', 'Review'])
+  await view.unmount()
+})
+
+test('the template detail opened from Project settings that opened by itself goes back to it', async () => {
+  const { view } = await showWith({ 'tasks.load': { kind: 'error', project: web, message: 'gh failed.' } }, twoTemplates)
+  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.press({ type: 'Button', text: 'Cancel' })
+  assert.ok(view.find(settingsTitle))
+  await view.unmount()
+})
+
+test('"New template" opens the detail with an empty name and the initial text; Save adds it at the end and goes back to Project settings', async () => {
   const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
+  await view.press(gear)
   await view.press({ type: 'IconButton', label: 'New template' })
   assert.ok(view.find({ type: 'Heading', text: 'web' }))
   assert.equal(view.find({ type: 'Link', text: '#42' }), null)
@@ -575,7 +737,7 @@ test('"New template" opens the detail with an empty name and the initial text; S
   assert.deepEqual({ ...templates[2], id: '' }, { id: '', name: 'Review', text: 'Review {{branch}}' })
   assert.ok(templates[2].id !== '' && templates[2].id !== implement.id && templates[2].id !== triage.id)
   assert.equal(defaultTemplateId, 't-triage')
-  assert.ok(view.find({ type: 'Link', text: '#42' }))
+  assert.ok(view.find(settingsTitle))
   assert.deepEqual(optionLabels(view, 'Default template'), ['Implement', 'Triage', 'Review'])
   assert.equal(view.valueOf({ type: 'Select', label: 'Default template' }), 't-triage')
   assert.deepEqual(view.errors, [])
@@ -585,6 +747,7 @@ test('"New template" opens the detail with an empty name and the initial text; S
 
 test('the pencil edits the template chosen as default, and Save stores it in its place', async () => {
   const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
+  await view.press(gear)
   await view.select({ type: 'Select', label: 'Default template' }, 't-impl')
   await view.press({ type: 'IconButton', label: 'Edit template' })
   assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Implement')
@@ -604,6 +767,7 @@ test('the pencil edits the template chosen as default, and Save stores it in its
 
 test('saving a template of a project that stored none stores it, without the earlier field', async () => {
   const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, stored({ template: 'Fix {{task_key}}', agent: 'codex' }))
+  await view.press(gear)
   await view.press({ type: 'IconButton', label: 'Edit template' })
   await view.type({ type: 'Input', label: 'Name' }, 'Implement', { replace: true })
   await view.press(saveButton)
@@ -616,12 +780,13 @@ test('saving a template of a project that stored none stores it, without the ear
   await view.unmount()
 })
 
-test('Cancel goes back without storing anything', async () => {
+test('Cancel goes back to Project settings without storing anything', async () => {
   const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
+  await view.press(gear)
   await view.press({ type: 'IconButton', label: 'Edit template' })
   await view.type({ type: 'Input', label: 'Name' }, 'Changed', { replace: true })
   await view.press({ type: 'Button', text: 'Cancel' })
-  assert.ok(view.find({ type: 'Link', text: '#42' }))
+  assert.ok(view.find(settingsTitle))
   assert.deepEqual(storedProject(host), twoTemplates.settings.projects['github:acme/web'])
   await view.press({ type: 'IconButton', label: 'Edit template' })
   assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Triage')
@@ -640,6 +805,7 @@ test('a failed write keeps the detail open with the error and the draft', async 
     }
   })
   const view = await mount(panel, { host })
+  await view.press(gear)
   await view.press({ type: 'IconButton', label: 'New template' })
   await view.type({ type: 'Input', label: 'Name' }, 'Review')
   await view.press(saveButton)
@@ -651,13 +817,14 @@ test('a failed write keeps the detail open with the error and the draft', async 
 
 test('Delete needs a second click, and deleting the default template makes the first remaining one the default', async () => {
   const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
+  await view.press(gear)
   await view.press({ type: 'IconButton', label: 'Edit template' })
   await view.press({ type: 'Button', text: 'Delete' })
   assert.ok(view.find({ type: 'Button', text: 'Confirm delete' }))
   assert.deepEqual(storedProject(host), twoTemplates.settings.projects['github:acme/web'])
   await view.press({ type: 'Button', text: 'Confirm delete' })
   assert.deepEqual(storedProject(host), { providers: {}, templates: [implement], defaultTemplateId: 't-impl' })
-  assert.ok(view.find({ type: 'Link', text: '#42' }))
+  assert.ok(view.find(settingsTitle))
   assert.deepEqual(optionLabels(view, 'Default template'), ['Implement'])
   assert.equal(view.valueOf({ type: 'Select', label: 'Default template' }), 't-impl')
   await view.unmount()
@@ -666,6 +833,7 @@ test('Delete needs a second click, and deleting the default template makes the f
 test('Delete turns back after a few seconds without the second click', async () => {
   await withTimeouts(CONFIRM_DELETE_MS, async ({ fire }) => {
     const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
+    await view.press(gear)
     await view.press({ type: 'IconButton', label: 'Edit template' })
     await view.press({ type: 'Button', text: 'Delete' })
     await fire(view)
@@ -679,6 +847,7 @@ test('Delete turns back after a few seconds without the second click', async () 
 
 test('Delete is disabled for the only template', async () => {
   const { view } = await showWith({ 'tasks.load': ready([task('#42')]) })
+  await view.press(gear)
   await view.press({ type: 'IconButton', label: 'Edit template' })
   assert.equal(view.find({ type: 'Button', text: 'Delete' })?.disabled, true)
   await view.unmount()
@@ -692,10 +861,12 @@ test("a card whose template is deleted falls back to the default template", asyn
     three
   )
   await view.select(cardTemplate('#42'), 't-triage')
+  await view.press(gear)
   await view.select({ type: 'Select', label: 'Default template' }, 't-triage')
   await view.press({ type: 'IconButton', label: 'Edit template' })
   await view.press({ type: 'Button', text: 'Delete' })
   await view.press({ type: 'Button', text: 'Confirm delete' })
+  await view.press(done)
   assert.equal(view.valueOf(cardTemplate('#42')), 't-impl')
   await view.press({ testId: 'start:#42' })
   assert.deepEqual(starts.map((start) => start.templateId), ['t-impl'])
@@ -708,6 +879,7 @@ test("a change of active project while the detail is open drops the draft and sh
     { 'tasks.load': () => ready([task(project === web ? '#42' : '#9')], { project }) },
     twoTemplates
   )
+  await view.press(gear)
   await view.press({ type: 'IconButton', label: 'New template' })
   await view.type({ type: 'Input', label: 'Name' }, 'Review')
   project = api
@@ -727,6 +899,7 @@ test("a change of active project while the detail is open drops the draft and sh
 
 test('a reload of the same project keeps the detail open with its draft', async () => {
   const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
+  await view.press(gear)
   await view.press({ type: 'IconButton', label: 'New template' })
   await view.type({ type: 'Input', label: 'Name' }, 'Review')
   await view.emit('workspace.changed', { context: { branch: 'main', displayName: 'web', terminals: [] } })
@@ -737,6 +910,7 @@ test('a reload of the same project keeps the detail open with its draft', async 
 test('closing the panel drops the draft', async () => {
   const host = mockHost({ capabilities: ['storage:own', 'workspace:read'], requests: { 'tasks.load': ready([task('#42')]) }, storage: twoTemplates })
   const first = await mount(panel, { host })
+  await first.press(gear)
   await first.press({ type: 'IconButton', label: 'New template' })
   await first.type({ type: 'Input', label: 'Name' }, 'Review')
   await first.unmount()
@@ -801,6 +975,7 @@ test('a pending Start option survives a failed template write, and the next Save
     }
   })
   const view = await mount(panel, { host })
+  await view.press(gear)
   await view.select({ type: 'Select', label: 'Agent' }, 'codex')
   await view.press({ type: 'IconButton', label: 'New template' })
   await view.type({ type: 'Input', label: 'Name' }, 'Review')
@@ -1496,21 +1671,22 @@ test('a workspace event during a reload reads the worktrees once the reload ends
 const notes = { id: 'repo:r1', name: 'notes', repo: null }
 const SITES = { kind: 'ready' as const, sites: [{ id: 'site-1', name: 'Example' }, { id: 'site-2', name: 'Other' }] }
 
-/** The Tracker section closes once a list is loaded, unless the person left it open. */
-const openTracker = (view: TestPanel) => view.toggle({ type: 'Collapsible', label: 'Tracker' })
-
-test('the Tracker section is open while no list is loaded, and keeps how the person left it after', async () => {
-  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) })
-  assert.equal(view.find({ type: 'Select', label: 'Tracker' }), null)
-  await openTracker(view)
-  assert.ok(view.find({ type: 'Select', label: 'Tracker' }))
-  assert.deepEqual(view.persisted.plugin.trackerOpen, true)
-  await view.unmount()
+test('whether Project settings is open is kept in memory only, and a panel opened again shows the list', async () => {
+  const host = mockHost({ capabilities: ['storage:own', 'workspace:read'], requests: { 'tasks.load': ready([task('#42')]) } })
+  const first = await mount(panel, { host })
+  await first.press(gear)
+  assert.deepEqual(first.persisted.plugin, {})
+  assert.deepEqual(first.persisted.workspace, {})
+  await first.unmount()
+  const second = await mount(panel, { host })
+  assert.equal(second.find(settingsTitle), null)
+  assert.ok(second.find({ type: 'Link', text: '#42' }))
+  await second.unmount()
 })
 
 test('a GitHub project shows GitHub as its tracker, without the "Choose a tracker" option', async () => {
   const { view } = await showWith({ 'tasks.load': ready([task('#42')]) })
-  await openTracker(view)
+  await view.press(gear)
   assert.equal(view.valueOf({ type: 'Select', label: 'Tracker' }), 'github')
   assert.deepEqual(optionLabels(view, 'Tracker'), ['GitHub', 'Jira (Orca connection)', 'Jira (twg)'])
   assert.equal(view.find({ type: 'Input', label: 'JQL' }), null)
@@ -1570,7 +1746,7 @@ test("the JQL and site save themselves, keeping the other providers' settings, a
     { 'tasks.load': () => (loads++, jiraReady()), 'jira.sites': SITES },
     jiraStored('project = WEB', 'site-1')
   )
-  await openTracker(view)
+  await view.press(gear)
   assert.equal(view.valueOf({ type: 'Input', label: 'JQL' }), 'project = WEB')
   assert.equal(view.valueOf({ type: 'Select', label: 'Site' }), 'site-1')
   await view.type({ type: 'Input', label: 'JQL' }, 'project = API', { replace: true })
@@ -1591,7 +1767,7 @@ test("a stored site that isn't connected any more stays selectable, and a site l
     { 'tasks.load': jiraReady(), 'jira.sites': { kind: 'error', message: 'orca failed: Orca is not running.' } },
     jiraStored('project = WEB', 'site-9')
   )
-  await openTracker(view)
+  await view.press(gear)
   assert.equal(view.valueOf({ type: 'Select', label: 'Site' }), 'site-9')
   assert.deepEqual(optionLabels(view, 'Site'), ['Default site', 'site-9'])
   assert.ok(view.find({ type: 'Text', text: /Orca is not running/ }))
@@ -1603,10 +1779,35 @@ test('a load failure keeps the provider settings visible', async () => {
     { 'tasks.load': { kind: 'error', project: web, message: 'orca failed: Error 400: JQL no válida.' }, 'jira.sites': SITES },
     jiraStored('project = ', '')
   )
-  assert.ok(view.find({ type: 'Callout', text: /JQL no válida/ }))
   assert.equal(view.valueOf({ type: 'Select', label: 'Tracker' }), 'jira-orca')
   assert.equal(view.valueOf({ type: 'Input', label: 'JQL' }), 'project = ')
+  await view.press(done)
+  assert.ok(view.find({ type: 'Callout', text: /JQL no válida/ }))
   await view.unmount()
+})
+
+test('Project settings that opened by itself stays open once a load from it, or from its template detail, lists the tasks', async () => {
+  let fixed = false
+  const { view } = await showWith(
+    { 'tasks.load': () => (fixed ? jiraReady([task('WEB-1', { tracker: 'jira' })]) : { kind: 'error', project: web, message: 'orca failed: Error 400.' }), 'jira.sites': SITES },
+    jiraStored('project = ', '')
+  )
+  await view.type({ type: 'Input', label: 'JQL' }, 'project = WEB', { replace: true })
+  fixed = true
+  await view.submit({ type: 'Input', label: 'JQL' })
+  assert.ok(view.find(settingsTitle))
+  await view.press(done)
+  assert.ok(view.find({ type: 'Link', text: 'WEB-1' }))
+  await view.unmount()
+
+  fixed = false
+  const second = await showWith({ 'tasks.load': () => (fixed ? jiraReady() : { kind: 'error', project: web, message: 'orca failed.' }), 'jira.sites': SITES })
+  await second.view.press({ type: 'IconButton', label: 'Edit template' })
+  fixed = true
+  await second.view.emit('workspace.changed', { context: { branch: 'main', displayName: 'web', terminals: [] } })
+  await second.view.press({ type: 'Button', text: 'Cancel' })
+  assert.ok(second.view.find(settingsTitle))
+  await second.view.unmount()
 })
 
 test('after a site list failure or no connected site, reloading the tasks asks for the sites again', async () => {
@@ -1616,13 +1817,18 @@ test('after a site list failure or no connected site, reloading the tasks asks f
     { 'tasks.load': jiraReady(), 'jira.sites': () => answers[Math.min(asked++, answers.length - 1)] },
     jiraStored('project = WEB', '')
   )
-  await openTracker(view)
+  const reloadAndOpen = async () => {
+    await view.press(done)
+    await view.press({ type: 'IconButton', label: 'Reload tasks' })
+    await view.press(gear)
+  }
+  await view.press(gear)
   assert.ok(view.find({ type: 'Text', text: /Orca is not running/ }))
-  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  await reloadAndOpen()
   assert.deepEqual(optionLabels(view, 'Site'), ['Default site'])
-  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  await reloadAndOpen()
   assert.deepEqual(optionLabels(view, 'Site'), ['Default site', 'Example', 'Other'])
-  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  await reloadAndOpen()
   assert.equal(asked, 3)
   await view.unmount()
 })
@@ -1648,7 +1854,7 @@ test('choosing Jira (twg) shows its stored JQL, Site and Profile fields, with th
     { 'tasks.load': () => (++loads === 1 ? ready([], { provider: 'jira-orca' }) : twgReady([])) },
     jiraStored('project = WEB', 'site-1')
   )
-  await openTracker(view)
+  await view.press(gear)
   await view.select({ type: 'Select', label: 'Tracker' }, 'jira-twg')
   assert.equal(loads, 2)
   assert.equal(view.valueOf({ type: 'Input', label: 'JQL' }), 'project = OLD')
@@ -1665,7 +1871,7 @@ test('choosing Jira (twg) shows its stored JQL, Site and Profile fields, with th
 test("the twg JQL, site and profile save themselves, keeping the other providers' settings, and Enter reloads", async () => {
   let loads = 0
   const { view, host } = await showWith({ 'tasks.load': () => (loads++, twgReady([])) }, twgStored({ jql: 'project = WEB', site: '', profile: '' }))
-  await openTracker(view)
+  await view.press(gear)
   await view.type({ type: 'Input', label: 'JQL' }, 'project = API', { replace: true })
   await view.type({ type: 'Input', label: 'Site' }, 'example')
   await view.type({ type: 'Input', label: 'Profile' }, 'work')

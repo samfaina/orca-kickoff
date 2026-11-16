@@ -1,4 +1,4 @@
-// Kickoff's side panel: the active project's tracker, its open tasks, its Start options, and Start. No build
+// Kickoff's side panel: the active project's open tasks and Start, and its Project settings. No build
 // step: Orca strips the types and compiles the JSX when the panel loads. The worker does the work;
 // the panel asks it and draws the answers.
 import {
@@ -6,7 +6,7 @@ import {
   Box,
   Button,
   Callout,
-  Collapsible,
+  CodeView,
   EmptyState,
   Heading,
   IconButton,
@@ -14,6 +14,7 @@ import {
   Link,
   Row,
   Select,
+  Separator,
   Spinner,
   Stack,
   Text,
@@ -69,7 +70,7 @@ const LOAD_TIMEOUT_MS = 90_000
 /** `task.start` answers after its quick checks, two Orca queries of at most 20 s each; the create
  *  goes on in the worker, which posts `start.ended` when it ends. */
 const START_TIMEOUT_MS = 60_000
-/** Start options save themselves after this pause. */
+/** Project settings save themselves after this pause. */
 const SAVE_DELAY_MS = 600
 /** How long Delete waits for its second click, as "Confirm delete". */
 const CONFIRM_DELETE_MS = 4_000
@@ -128,11 +129,8 @@ type TemplateDraft = {
 
 const list = atom<TaskList | null>(null)
 const loading = atom(false)
-/** The tracker settings and Start options of the listed project, as the person sees them. */
+/** The Project settings of the listed project, as the person sees them. */
 const shownSettings = atom<ShownSettings | null>(null)
-const optionsOpen = atom('startOptionsOpen', true, { persist: 'plugin' })
-/** Whether the person left the Tracker section open; it is always open while no list is loaded. */
-const trackerOpen = atom('trackerOpen', false, { persist: 'plugin' })
 /** The sites of Orca's Jira connection, asked for the first time they are needed. */
 const jiraSites = atom<JiraSitesResult | 'loading' | null>(null)
 /** Task keys with a Start under way: asked by this panel, or reported by the worker. */
@@ -179,6 +177,13 @@ function chosenTemplateId(shown: ShownSettings, taskKey: string): string {
 
 /** The project's templates as `Select` options. */
 const templateOptions = (templates: PromptTemplate[]) => templates.map((template) => ({ value: template.id, label: template.name }))
+
+/** Whether Project settings replaces the list: true or false as the person chose, or null to
+ *  follow `needsSettings`. Kept in memory, and back to null when the active project changes. */
+const settingsView = atom<boolean | null>(null)
+/** The active project `settingsView` belongs to, null without one, or undefined before the first
+ *  answer that says which. */
+let settingsViewFor: string | null | undefined
 
 /** The template detail's draft while it replaces the panel view, else null. */
 const templateDraft = atom<TemplateDraft | null>(null)
@@ -250,10 +255,12 @@ async function showSettings(project: ProjectRef): Promise<void> {
   })
 }
 
-/** Opens the template detail for one of the shown project's templates, or for a new one. */
+/** Opens the template detail for one of the shown project's templates, or for a new one. It opens
+ *  from Project settings, which stays open to come back to. */
 function openTemplate(id: string | null): void {
   const shown = read(shownSettings)
   if (!shown) return
+  set(settingsView, true)
   const template = id === null ? null : shown.templates.find((candidate) => candidate.id === id)
   if (id !== null && !template) return
   set(templateDraft, {
@@ -325,7 +332,7 @@ function cancelConfirmDelete(): void {
 }
 
 /** Writes a change to the draft project's templates, then shows them and goes back. A failed write
- *  keeps the detail open with its error and the draft. Pending Start options are saved first, so
+ *  keeps the detail open with its error and the draft. Pending Project settings are saved first, so
  *  the change applies to what the person sees. */
 async function writeTemplates(draft: TemplateDraft, change: (project: ProjectSettings) => TemplateChanges | null): Promise<void> {
   changeDraft(draft, { saving: true, error: null, confirmingDelete: false })
@@ -350,9 +357,15 @@ function chooseProviderFor(value: string): void {
   const current = read(shownSettings)
   const provider = PROVIDER_OPTIONS.find((option) => option.value === value)?.value
   if (!current || !provider) return
-  set(trackerOpen, true)
   const chosen = chooseProvider({ providers: current.providers }, provider)
   changeSettings({ provider, providers: { [provider]: chosen.providers[provider] } })
+  loadFromSettings()
+}
+
+/** Lists the tasks with the tracker settings shown. Project settings stays open, also when it
+ *  opened by itself and the tasks now load. */
+function loadFromSettings(): void {
+  set(settingsView, true)
   void load()
 }
 
@@ -400,6 +413,12 @@ async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
   const answeredProjectId = answer.kind === 'no-project' ? null : answer.project?.id
   const draft = read(templateDraft)
   if (draft && answeredProjectId !== undefined && answeredProjectId !== draft.projectId) closeTemplate()
+  // It also sends Project settings back to opening by itself. Only once a project was listed: the
+  // first answer leaves a view that opened by itself as it is.
+  if (answeredProjectId !== undefined) {
+    if (typeof settingsViewFor === 'string' && answeredProjectId !== settingsViewFor) set(settingsView, null)
+    settingsViewFor = answeredProjectId
+  }
   if ('project' in answer && answer.project) {
     try {
       await showSettings(answer.project)
@@ -702,6 +721,8 @@ export function setup(ctx: PanelContext): void {
   set(agentStarting, {})
   set(cardTemplates, {})
   set(templateDraft, null)
+  set(settingsView, null)
+  settingsViewFor = undefined
   // Closing the panel drops the template detail's draft.
   ctx.subscriptions.push({ dispose: closeTemplate })
   let polling = false
@@ -728,41 +749,87 @@ export function setup(ctx: PanelContext): void {
 
 export default function Panel() {
   const current = read(list)
-  const busy = read(loading)
   const project = current && 'project' in current ? current.project : null
   const draft = read(templateDraft)
   const shown = read(shownSettings)
   if (draft && shown?.projectId === draft.projectId) {
     return <TemplateDetail draft={draft} templates={shown.templates} projectName={project?.name ?? ''} />
   }
+  const settings = project !== null && shown?.projectId === project.id ? shown : null
+  if (project && settings && (read(settingsView) ?? needsSettings(current))) {
+    return <SettingsView projectName={project.name} shown={settings} />
+  }
   return (
     <Stack gap="sm">
-      <Row justify="between" align="center">
-        <Heading level={3}>{project ? project.name : 'Kickoff'}</Heading>
-        <Row gap="xs" align="center">
-          {busy && current ? <Spinner label="Reloading tasks" labelHidden /> : null}
-          <IconButton icon="refresh" label="Reload tasks" tooltip="Reload tasks" size="sm" variant="ghost" onPress={() => void load()} />
-        </Row>
-      </Row>
-      {project ? <TrackerSection listed={current?.kind === 'ready'} /> : null}
-      {project ? <StartOptionsSection /> : null}
+      <Header projectName={project?.name ?? null} gear={settings !== null} />
       {current ? <Body list={current} /> : <Spinner label="Loading tasks" />}
     </Stack>
   )
 }
 
-function TrackerSection({ listed }: { listed: boolean }) {
-  const shown = read(shownSettings)
-  if (!shown) return null
+/** Whether Project settings opens by itself: the project has no tracker, or its load failed. */
+const needsSettings = (current: TaskList | null) => current?.kind === 'needs-config' || current?.kind === 'error'
+
+/** The panel's title, since its tab shows only its icon, and its actions. `gear` shows the button
+ *  that opens Project settings. */
+function Header({ projectName, gear }: { projectName: string | null; gear: boolean }) {
+  return (
+    <Box direction="row" justify="between" align="center" gap="xs">
+      <Box direction="row" align="center" gap="xs" grow minWidth={0}>
+        {projectName !== null ? (
+          <>
+            <Text muted>Kickoff ·</Text>
+            <Heading level={2}>{projectName}</Heading>
+          </>
+        ) : (
+          <Heading level={2}>Kickoff</Heading>
+        )}
+      </Box>
+      <Row gap="xs" align="center">
+        {read(loading) && read(list) ? <Spinner label="Reloading tasks" labelHidden /> : null}
+        <IconButton icon="refresh" label="Reload tasks" tooltip="Reload tasks" size="sm" variant="ghost" onPress={() => void load()} />
+        {gear ? (
+          <IconButton icon="settings" label="Project settings" tooltip="Project settings" size="sm" variant="ghost" onPress={() => set(settingsView, true)} />
+        ) : null}
+      </Row>
+    </Box>
+  )
+}
+
+/** Project settings, in place of the panel view: the tracker, then what a Start uses. */
+function SettingsView({ projectName, shown }: { projectName: string; shown: ShownSettings }) {
+  return (
+    <Stack gap="sm">
+      <Box direction="row" justify="between" align="center" gap="xs">
+        <Box direction="row" align="center" gap="xs" grow minWidth={0}>
+          <Text muted>{`${projectName} ·`}</Text>
+          <Heading level={3}>Project settings</Heading>
+        </Box>
+        <Button key="settings-done" size="sm" variant="ghost" icon="close" onPress={() => set(settingsView, false)}>
+          Done
+        </Button>
+      </Box>
+      <Text size="sm" weight="semibold">
+        Tracker
+      </Text>
+      <TrackerFields shown={shown} />
+      <Separator />
+      <Text size="sm" weight="semibold">
+        Start
+      </Text>
+      <StartFields shown={shown} />
+    </Stack>
+  )
+}
+
+function TrackerFields({ shown }: { shown: ShownSettings }) {
   const providerOptions = shown.provider === null ? [{ value: NO_TRACKER, label: 'Choose a tracker' }, ...PROVIDER_OPTIONS] : PROVIDER_OPTIONS
   return (
-    <Collapsible title="Tracker" open={!listed || read(trackerOpen)} onChange={(open) => set(trackerOpen, open)}>
-      <Stack gap="sm">
-        <Select label="Tracker" value={shown.provider ?? NO_TRACKER} options={providerOptions} onChange={chooseProviderFor} />
-        {shown.provider === 'jira-orca' ? <JiraOrcaSettings providers={shown.providers} /> : null}
-        {shown.provider === 'jira-twg' ? <JiraTwgSettings providers={shown.providers} /> : null}
-      </Stack>
-    </Collapsible>
+    <Stack gap="sm">
+      <Select label="Tracker" labelHidden value={shown.provider ?? NO_TRACKER} options={providerOptions} onChange={chooseProviderFor} />
+      {shown.provider === 'jira-orca' ? <JiraOrcaSettings providers={shown.providers} /> : null}
+      {shown.provider === 'jira-twg' ? <JiraTwgSettings providers={shown.providers} /> : null}
+    </Stack>
   )
 }
 
@@ -784,7 +851,7 @@ function JiraOrcaSettings({ providers }: { providers: ProviderConfigs }) {
         options={siteOptions}
         onChange={(value) => {
           changeJiraConfig('jira-orca', { siteId: value === DEFAULT_SITE ? '' : value })
-          void load()
+          loadFromSettings()
         }}
       />
       {answered?.kind === 'error' ? (
@@ -807,7 +874,7 @@ function JqlInput({ provider, jql }: { provider: JiraProviderId; jql: string }) 
       value={jql}
       placeholder={DEFAULT_JQL}
       onChange={(value) => changeJiraConfig(provider, { jql: value })}
-      onSubmit={() => void load()}
+      onSubmit={loadFromSettings}
     />
   )
 }
@@ -822,14 +889,14 @@ function JiraTwgSettings({ providers }: { providers: ProviderConfigs }) {
         value={config.site}
         placeholder="twg's default site"
         onChange={(site) => changeJiraConfig('jira-twg', { site })}
-        onSubmit={() => void load()}
+        onSubmit={loadFromSettings}
       />
       <Input
         label="Profile"
         value={config.profile}
         placeholder="twg's default profile"
         onChange={(profile) => changeJiraConfig('jira-twg', { profile })}
-        onSubmit={() => void load()}
+        onSubmit={loadFromSettings}
       />
       <Text size="sm" muted>
         Kickoff reads Jira through the Teamwork Graph CLI. Run `twg login` in a terminal first if you haven't. Leave Site and Profile empty to use twg's defaults.
@@ -838,28 +905,38 @@ function JiraTwgSettings({ providers }: { providers: ProviderConfigs }) {
   )
 }
 
-function StartOptionsSection() {
-  const shown = read(shownSettings)
-  if (!shown) return null
+/** The agent choice and the default template, with the buttons that edit it or add one, and its text. */
+function StartFields({ shown }: { shown: ShownSettings }) {
   const agentOptions = AGENT_OPTIONS.some((option) => option.value === shown.agent)
     ? AGENT_OPTIONS
     : [...AGENT_OPTIONS, { value: shown.agent, label: shown.agent }]
+  const text = shown.templates.find((template) => template.id === shown.defaultTemplateId)?.text ?? ''
   return (
-    <Collapsible title="Start options" open={read(optionsOpen)} onChange={(open) => set(optionsOpen, open)}>
-      <Stack gap="sm">
-        <Select label="Agent" value={shown.agent} options={agentOptions} onChange={(agent) => changeSettings({ agent })} />
-        <Row gap="xs" align="end">
-          <Select
-            label="Default template"
-            value={shown.defaultTemplateId}
-            options={templateOptions(shown.templates)}
-            onChange={(defaultTemplateId) => changeSettings({ defaultTemplateId })}
-          />
-          <IconButton icon="edit" label="Edit template" tooltip="Edit template" variant="ghost" onPress={() => openTemplate(shown.defaultTemplateId)} />
-          <IconButton icon="add" label="New template" tooltip="New template" variant="ghost" onPress={() => openTemplate(null)} />
+    <Stack gap="sm">
+      <Select label="Agent" value={shown.agent} options={agentOptions} onChange={(agent) => changeSettings({ agent })} />
+      <Select
+        label="Default template"
+        value={shown.defaultTemplateId}
+        options={templateOptions(shown.templates)}
+        onChange={(defaultTemplateId) => changeSettings({ defaultTemplateId })}
+      />
+      <Box direction="row" justify="between" align="center" gap="xs">
+        <Text size="sm" muted>
+          Template text
+        </Text>
+        <Row gap="none" align="center">
+          <IconButton icon="edit" label="Edit template" tooltip="Edit template" size="sm" variant="ghost" onPress={() => openTemplate(shown.defaultTemplateId)} />
+          <IconButton icon="add" label="New template" tooltip="New template" size="sm" variant="ghost" onPress={() => openTemplate(null)} />
         </Row>
-      </Stack>
-    </Collapsible>
+      </Box>
+      {text === '' ? (
+        <Text size="sm" muted>
+          Empty: the prompt is the task URL.
+        </Text>
+      ) : (
+        <CodeView code={text} wrap maxHeight="sm" />
+      )}
+    </Stack>
   )
 }
 
@@ -871,7 +948,7 @@ function Body({ list }: { list: TaskList }) {
       return (
         <EmptyState
           title="No tracker for this project"
-          description={`Choose a tracker above to list the tasks of ${list.project.name}.`}
+          description={`Choose a tracker in Project settings to list the tasks of ${list.project.name}.`}
           icon="settings"
         />
       )
