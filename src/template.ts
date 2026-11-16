@@ -1,9 +1,63 @@
 // Prompt templates: `{{name}}` filled from the task, the project and the worktree name. No Node
 // imports, so the panel can use the constants too.
-import type { ProjectRef, Task } from './protocol'
+import type { ProjectRef, ProjectSettings, PromptTemplate, Task } from './protocol'
 
-/** The template of a project that hasn't set one. A constant, never stored. */
-export const DEFAULT_TEMPLATE = 'Complete {{task_key}}: {{task_url}}'
+/** The text of the template a project has before it stores any, and of each new template. A
+ *  constant, never stored. */
+export const INITIAL_TEMPLATE_TEXT = 'Complete {{task_key}}: {{task_url}}'
+
+/** The id and name of the template a project has before it stores any. A template stored with
+ *  the earlier `template` field becomes this one too. */
+export const INITIAL_TEMPLATE_ID = 'default'
+export const INITIAL_TEMPLATE_NAME = 'Default'
+
+/** A project's templates, in their order: the stored ones, or the initial one when none is stored. */
+export function projectTemplates(settings: Pick<ProjectSettings, 'templates'>): PromptTemplate[] {
+  const { templates } = settings
+  if (templates && templates.length > 0) return templates
+  return [{ id: INITIAL_TEMPLATE_ID, name: INITIAL_TEMPLATE_NAME, text: INITIAL_TEMPLATE_TEXT }]
+}
+
+/** A project's default template: the one `defaultTemplateId` names, else the first. */
+export function defaultTemplate(settings: Pick<ProjectSettings, 'templates' | 'defaultTemplateId'>): PromptTemplate {
+  const templates = projectTemplates(settings)
+  return templates.find((template) => template.id === settings.defaultTemplateId) ?? templates[0]
+}
+
+/** What saving or deleting a template changes in a project's settings. */
+export type TemplateChanges = Required<Pick<ProjectSettings, 'templates' | 'defaultTemplateId'>>
+
+type TemplateSettings = Pick<ProjectSettings, 'templates' | 'defaultTemplateId'>
+
+/** The project's templates with `template` saved, its name trimmed: in its place when the project
+ *  has it, else at the end. The default template stays the same. */
+export function withTemplateSaved(settings: TemplateSettings, template: PromptTemplate): TemplateChanges {
+  const saved = { ...template, name: template.name.trim() }
+  const templates = projectTemplates(settings)
+  const known = templates.some((candidate) => candidate.id === saved.id)
+  return {
+    templates: known ? templates.map((candidate) => (candidate.id === saved.id ? saved : candidate)) : [...templates, saved],
+    defaultTemplateId: defaultTemplate(settings).id
+  }
+}
+
+/** The project's templates without the one `id` names, or null when it is the only one: a project
+ *  always has a template. Deleting the default template makes the first remaining one the default. */
+export function withTemplateDeleted(settings: TemplateSettings, id: string): TemplateChanges | null {
+  const templates = projectTemplates(settings).filter((template) => template.id !== id)
+  if (templates.length === 0) return null
+  const current = defaultTemplate(settings).id
+  return { templates, defaultTemplateId: current === id ? templates[0].id : current }
+}
+
+/** Why `name` can't be the name of a template of `templates`, or null when it can. `id` is the
+ *  template being renamed, null for a new one: its own name, in any case, is fine. */
+export function templateNameProblem(templates: readonly PromptTemplate[], name: string, id: string | null): string | null {
+  const wanted = name.trim().toLowerCase()
+  if (wanted === '') return 'Give the template a name.'
+  const other = templates.find((template) => template.id !== id && template.name.trim().toLowerCase() === wanted)
+  return other ? `Another template is already called "${other.name}".` : null
+}
 
 /** `{{task_description}}` is cut to this many characters, `…` included. */
 export const MAX_DESCRIPTION = 4000
@@ -27,11 +81,10 @@ type TemplateVariable = (typeof TEMPLATE_VARIABLES)[number]
 
 export type PromptResult = { ok: true; prompt: string } | { ok: false; message: string }
 
-/** The prompt for `task`. An undefined template is DEFAULT_TEMPLATE; an empty one gives the task
- *  URL. A prompt over MAX_PROMPT characters is refused. */
-export function buildPrompt(template: string | undefined, task: Task, project: ProjectRef, branch: string): PromptResult {
-  const source = template ?? DEFAULT_TEMPLATE
-  const prompt = source === '' ? task.url : fillTemplate(source, templateVariables(task, project, branch))
+/** The prompt for `task` from a template's text. An empty text gives the task URL. A prompt over
+ *  MAX_PROMPT characters is refused. */
+export function buildPrompt(text: string, task: Task, project: ProjectRef, branch: string): PromptResult {
+  const prompt = text === '' ? task.url : fillTemplate(text, templateVariables(task, project, branch))
   if (prompt.length > MAX_PROMPT) {
     return {
       ok: false,
