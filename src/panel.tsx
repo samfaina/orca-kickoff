@@ -27,6 +27,7 @@ import {
   storage,
   update,
   type JsonValue,
+  type OrcaNode,
   type PanelContext
 } from 'orca'
 import { isRecord } from './json'
@@ -178,12 +179,15 @@ function chosenTemplateId(shown: ShownSettings, taskKey: string): string {
 /** The project's templates as `Select` options. */
 const templateOptions = (templates: PromptTemplate[]) => templates.map((template) => ({ value: template.id, label: template.name }))
 
-/** Whether Project settings replaces the list: true or false as the person chose, or null to
- *  follow `needsSettings`. Kept in memory, and back to null when the active project changes. */
-const settingsView = atom<boolean | null>(null)
-/** The active project `settingsView` belongs to, null without one, or undefined before the first
- *  answer that says which. */
-let settingsViewFor: string | null | undefined
+/** Whether Project settings replaces the list: `open` or `closed` as the person left it, or `auto`
+ *  to open it by itself when `needsSettings`. */
+type SettingsChoice = 'open' | 'closed' | 'auto'
+
+/** Kept in memory, and back to `auto` when the active project changes. */
+const settingsChoice = atom<SettingsChoice>('auto')
+/** The active project `settingsChoice` belongs to, null without one, or undefined before the
+ *  first answer that says which. */
+let settingsChoiceFor: string | null | undefined
 
 /** The template detail's draft while it replaces the panel view, else null. */
 const templateDraft = atom<TemplateDraft | null>(null)
@@ -260,9 +264,9 @@ async function showSettings(project: ProjectRef): Promise<void> {
 function openTemplate(id: string | null): void {
   const shown = read(shownSettings)
   if (!shown) return
-  set(settingsView, true)
   const template = id === null ? null : shown.templates.find((candidate) => candidate.id === id)
   if (id !== null && !template) return
+  set(settingsChoice, 'open')
   set(templateDraft, {
     projectId: shown.projectId,
     id: template?.id ?? newTemplateId(shown.templates),
@@ -359,13 +363,13 @@ function chooseProviderFor(value: string): void {
   if (!current || !provider) return
   const chosen = chooseProvider({ providers: current.providers }, provider)
   changeSettings({ provider, providers: { [provider]: chosen.providers[provider] } })
-  loadFromSettings()
+  loadKeepingSettingsOpen()
 }
 
-/** Lists the tasks with the tracker settings shown. Project settings stays open, also when it
+/** Lists the tasks with the tracker shown in Project settings, which stays open: also when it
  *  opened by itself and the tasks now load. */
-function loadFromSettings(): void {
-  set(settingsView, true)
+function loadKeepingSettingsOpen(): void {
+  set(settingsChoice, 'open')
   void load()
 }
 
@@ -413,11 +417,11 @@ async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
   const answeredProjectId = answer.kind === 'no-project' ? null : answer.project?.id
   const draft = read(templateDraft)
   if (draft && answeredProjectId !== undefined && answeredProjectId !== draft.projectId) closeTemplate()
-  // It also sends Project settings back to opening by itself. Only once a project was listed: the
-  // first answer leaves a view that opened by itself as it is.
+  // A change of active project also sends Project settings back to opening by itself. Only once a
+  // project was listed: before that, the choice is still `auto`.
   if (answeredProjectId !== undefined) {
-    if (typeof settingsViewFor === 'string' && answeredProjectId !== settingsViewFor) set(settingsView, null)
-    settingsViewFor = answeredProjectId
+    if (typeof settingsChoiceFor === 'string' && answeredProjectId !== settingsChoiceFor) set(settingsChoice, 'auto')
+    settingsChoiceFor = answeredProjectId
   }
   if ('project' in answer && answer.project) {
     try {
@@ -721,8 +725,8 @@ export function setup(ctx: PanelContext): void {
   set(agentStarting, {})
   set(cardTemplates, {})
   set(templateDraft, null)
-  set(settingsView, null)
-  settingsViewFor = undefined
+  set(settingsChoice, 'auto')
+  settingsChoiceFor = undefined
   // Closing the panel drops the template detail's draft.
   ctx.subscriptions.push({ dispose: closeTemplate })
   let polling = false
@@ -756,7 +760,8 @@ export default function Panel() {
     return <TemplateDetail draft={draft} templates={shown.templates} projectName={project?.name ?? ''} />
   }
   const settings = project !== null && shown?.projectId === project.id ? shown : null
-  if (project && settings && (read(settingsView) ?? needsSettings(current))) {
+  const choice = read(settingsChoice)
+  if (project && settings && (choice === 'auto' ? needsSettings(current) : choice === 'open')) {
     return <SettingsView projectName={project.name} shown={settings} />
   }
   return (
@@ -774,24 +779,27 @@ const needsSettings = (current: TaskList | null) => current?.kind === 'needs-con
  *  that opens Project settings. */
 function Header({ projectName, gear }: { projectName: string | null; gear: boolean }) {
   return (
-    <Box direction="row" justify="between" align="center" gap="xs">
-      <Box direction="row" align="center" gap="xs" grow minWidth={0}>
-        {projectName !== null ? (
-          <>
-            <Text muted>Kickoff ·</Text>
-            <Heading level={2}>{projectName}</Heading>
-          </>
-        ) : (
-          <Heading level={2}>Kickoff</Heading>
-        )}
-      </Box>
+    <TitleRow prefix={projectName !== null ? 'Kickoff ·' : null} title={projectName ?? 'Kickoff'} level={2}>
       <Row gap="xs" align="center">
         {read(loading) && read(list) ? <Spinner label="Reloading tasks" labelHidden /> : null}
         <IconButton icon="refresh" label="Reload tasks" tooltip="Reload tasks" size="sm" variant="ghost" onPress={() => void load()} />
         {gear ? (
-          <IconButton icon="settings" label="Project settings" tooltip="Project settings" size="sm" variant="ghost" onPress={() => set(settingsView, true)} />
+          <IconButton icon="settings" label="Project settings" tooltip="Project settings" size="sm" variant="ghost" onPress={() => set(settingsChoice, 'open')} />
         ) : null}
       </Row>
+    </TitleRow>
+  )
+}
+
+/** A view's title, after a muted `prefix` when there is one, with its actions on the right. */
+function TitleRow({ prefix, title, level, children }: { prefix: string | null; title: string; level: 2 | 3; children?: OrcaNode }) {
+  return (
+    <Box direction="row" justify="between" align="center" gap="xs">
+      <Box direction="row" align="center" gap="xs" grow minWidth={0}>
+        {prefix !== null ? <Text muted>{prefix}</Text> : null}
+        <Heading level={level}>{title}</Heading>
+      </Box>
+      {children}
     </Box>
   )
 }
@@ -800,15 +808,11 @@ function Header({ projectName, gear }: { projectName: string | null; gear: boole
 function SettingsView({ projectName, shown }: { projectName: string; shown: ShownSettings }) {
   return (
     <Stack gap="sm">
-      <Box direction="row" justify="between" align="center" gap="xs">
-        <Box direction="row" align="center" gap="xs" grow minWidth={0}>
-          <Text muted>{`${projectName} ·`}</Text>
-          <Heading level={3}>Project settings</Heading>
-        </Box>
-        <Button key="settings-done" size="sm" variant="ghost" icon="close" onPress={() => set(settingsView, false)}>
+      <TitleRow prefix={`${projectName} ·`} title="Project settings" level={3}>
+        <Button key="settings-done" size="sm" variant="ghost" icon="close" onPress={() => set(settingsChoice, 'closed')}>
           Done
         </Button>
-      </Box>
+      </TitleRow>
       <Text size="sm" weight="semibold">
         Tracker
       </Text>
@@ -851,7 +855,7 @@ function JiraOrcaSettings({ providers }: { providers: ProviderConfigs }) {
         options={siteOptions}
         onChange={(value) => {
           changeJiraConfig('jira-orca', { siteId: value === DEFAULT_SITE ? '' : value })
-          loadFromSettings()
+          loadKeepingSettingsOpen()
         }}
       />
       {answered?.kind === 'error' ? (
@@ -874,7 +878,7 @@ function JqlInput({ provider, jql }: { provider: JiraProviderId; jql: string }) 
       value={jql}
       placeholder={DEFAULT_JQL}
       onChange={(value) => changeJiraConfig(provider, { jql: value })}
-      onSubmit={loadFromSettings}
+      onSubmit={loadKeepingSettingsOpen}
     />
   )
 }
@@ -889,14 +893,14 @@ function JiraTwgSettings({ providers }: { providers: ProviderConfigs }) {
         value={config.site}
         placeholder="twg's default site"
         onChange={(site) => changeJiraConfig('jira-twg', { site })}
-        onSubmit={loadFromSettings}
+        onSubmit={loadKeepingSettingsOpen}
       />
       <Input
         label="Profile"
         value={config.profile}
         placeholder="twg's default profile"
         onChange={(profile) => changeJiraConfig('jira-twg', { profile })}
-        onSubmit={loadFromSettings}
+        onSubmit={loadKeepingSettingsOpen}
       />
       <Text size="sm" muted>
         Kickoff reads Jira through the Teamwork Graph CLI. Run `twg login` in a terminal first if you haven't. Leave Site and Profile empty to use twg's defaults.
