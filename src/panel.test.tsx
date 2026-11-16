@@ -746,6 +746,73 @@ test('closing the panel drops the draft', async () => {
   await second.unmount()
 })
 
+test("a Start after the project's settings couldn't be read reads them again for the default template", async () => {
+  let reads = 0
+  const starts: { templateId: string }[] = []
+  const host = mockHost({
+    capabilities: ['storage:own', 'workspace:read'],
+    requests: { 'tasks.load': ready([task('#42')]), 'task.start': (input) => (starts.push(input), { ok: true, underWay: true }) },
+    results: {
+      'storage.get': () => {
+        if (++reads === 1) throw hostError('unavailable', 'Storage is busy')
+        return { value: twoTemplates.settings }
+      }
+    }
+  })
+  const view = await mount(panel, { host })
+  assert.equal(view.find({ type: 'Select', label: 'Default template' }), null)
+  await view.press({ testId: 'start:#42' })
+  assert.deepEqual(starts.map((start) => start.templateId), ['t-triage'])
+  await view.unmount()
+})
+
+test("a Start whose project's settings can't be read fails on its card without asking the worker", async () => {
+  let starts = 0
+  const host = mockHost({
+    capabilities: ['storage:own', 'workspace:read'],
+    requests: { 'tasks.load': ready([task('#42')]), 'task.start': () => (starts++, { ok: true, underWay: true }), 'worktrees.load': { kind: 'ready', worktrees: {} } },
+    results: {
+      'storage.get': () => {
+        throw hostError('unavailable', 'Storage is busy')
+      }
+    }
+  })
+  const view = await mount(panel, { host })
+  await view.press({ testId: 'start:#42' })
+  assert.equal(starts, 0)
+  assert.ok(view.find({ type: 'Text', text: /Couldn't read the prompt templates/ }))
+  assert.ok(view.find({ testId: 'start:#42' }))
+  await view.unmount()
+})
+
+test('a pending Start option survives a failed template write, and the next Save stores both', async () => {
+  let writes = 0
+  let data: JsonValue = twoTemplates.settings
+  const host = mockHost({
+    capabilities: ['storage:own', 'workspace:read'],
+    requests: { 'tasks.load': ready([task('#42')]) },
+    results: {
+      'storage.get': () => ({ value: data }),
+      'storage.set': (params: { key: string; value: JsonValue }) => {
+        if (++writes === 1) throw hostError('quota_exceeded', 'Storage is full')
+        data = params.value
+        return { ok: true }
+      }
+    }
+  })
+  const view = await mount(panel, { host })
+  await view.select({ type: 'Select', label: 'Agent' }, 'codex')
+  await view.press({ type: 'IconButton', label: 'New template' })
+  await view.type({ type: 'Input', label: 'Name' }, 'Review')
+  await view.press(saveButton)
+  assert.ok(view.find({ type: 'Text', text: /Couldn't save the template/ }))
+  await view.press(saveButton)
+  const project = (data as { projects: Record<string, { agent?: string; templates: { name: string }[] }> }).projects['github:acme/web']
+  assert.equal(project.agent, 'codex')
+  assert.deepEqual(project.templates.map((template) => template.name), ['Implement', 'Triage', 'Review'])
+  await view.unmount()
+})
+
 test('a started task opens its worktree in Orca from the link', async () => {
   const opened: unknown[] = []
   const { view } = await showWith({

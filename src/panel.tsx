@@ -167,17 +167,18 @@ const taskErrors = atom<Record<string, string>>({})
  *  stored; a card whose template no longer exists shows the default template again. */
 const cardTemplates = atom<Record<string, string>>({})
 
-const cardKey = (projectId: string, taskKey: string) => `${projectId}
-${taskKey}`
+/** The key of a task's card in `cardTemplates`. */
+const cardKey = (projectId: string, taskKey: string) => `${projectId}\n${taskKey}`
 
 /** The template a Start of the task uses: the one chosen on its card while the project still has
  *  it, else the project's default template. */
-function chosenTemplateId(projectId: string, taskKey: string): string {
-  const shown = read(shownSettings)
-  if (shown?.projectId !== projectId) return defaultTemplate({}).id
-  const chosen = read(cardTemplates)[cardKey(projectId, taskKey)]
+function chosenTemplateId(shown: ShownSettings, taskKey: string): string {
+  const chosen = read(cardTemplates)[cardKey(shown.projectId, taskKey)]
   return shown.templates.some((template) => template.id === chosen) ? chosen : shown.defaultTemplateId
 }
+
+/** The project's templates as `Select` options. */
+const templateOptions = (templates: PromptTemplate[]) => templates.map((template) => ({ value: template.id, label: template.name }))
 
 /** The template detail's draft while it replaces the panel view, else null. */
 const templateDraft = atom<TemplateDraft | null>(null)
@@ -205,8 +206,22 @@ async function flushSettings(): Promise<void> {
   const toSave = pending
   pending = null
   if (!toSave) return
-  const settings = readSettings(await storage.get(SETTINGS_KEY))
-  await storage.set(SETTINGS_KEY, withProjectChanges(settings, toSave.projectId, toSave.changes) as unknown as JsonValue)
+  try {
+    const settings = readSettings(await storage.get(SETTINGS_KEY))
+    await storage.set(SETTINGS_KEY, withProjectChanges(settings, toSave.projectId, toSave.changes) as unknown as JsonValue)
+  } catch (error) {
+    // Kept for the next save, under the changes made meanwhile.
+    const meanwhile = pending as typeof toSave | null
+    if (meanwhile === null || meanwhile.projectId === toSave.projectId) {
+      pending = { projectId: toSave.projectId, changes: mergeChanges(toSave.changes, meanwhile?.changes ?? {}) }
+    }
+    throw error
+  }
+}
+
+/** `earlier` changes with `later` ones on top, keeping the providers either changed. */
+function mergeChanges(earlier: ProjectChanges, later: ProjectChanges): ProjectChanges {
+  return { ...earlier, ...later, providers: { ...earlier.providers, ...later.providers } }
 }
 
 function changeSettings(changes: ProjectChanges): void {
@@ -215,7 +230,7 @@ function changeSettings(changes: ProjectChanges): void {
   const providers = { ...current.providers, ...changes.providers }
   set(shownSettings, { ...current, ...changes, provider: changes.provider ?? current.provider, providers })
   const earlier = pending?.projectId === current.projectId ? pending.changes : {}
-  pending = { projectId: current.projectId, changes: { ...earlier, ...changes, providers: { ...earlier.providers, ...changes.providers } } }
+  pending = { projectId: current.projectId, changes: mergeChanges(earlier, changes) }
   if (saveTimer !== null) clearTimeout(saveTimer)
   saveTimer = setTimeout(() => void flushSettings(), SAVE_DELAY_MS)
 }
@@ -261,11 +276,12 @@ function newTemplateId(templates: PromptTemplate[]): string {
   }
 }
 
-/** Changes the detail's draft, while it is still the draft of that template. */
-function changeDraft(of: TemplateDraft, changes: Partial<TemplateDraft>): void {
-  update(templateDraft, (draft) => (draft && isSameDraft(draft, of) ? { ...draft, ...changes } : draft))
+/** Changes the detail's draft, while it is still the draft of the `expected` template. */
+function changeDraft(expected: TemplateDraft, changes: Partial<TemplateDraft>): void {
+  update(templateDraft, (draft) => (draft && isSameDraft(draft, expected) ? { ...draft, ...changes } : draft))
 }
 
+/** Whether two drafts are of the same template of the same project. */
 const isSameDraft = (a: TemplateDraft, b: TemplateDraft) => a.projectId === b.projectId && a.id === b.id
 
 /** Leaves the template detail without saving. */
@@ -302,6 +318,7 @@ async function deleteTemplate(): Promise<void> {
   await writeTemplates(draft, (project) => withTemplateDeleted(project, draft.id))
 }
 
+/** Stops waiting for Delete's second click. */
 function cancelConfirmDelete(): void {
   if (confirmDeleteTimer !== null) clearTimeout(confirmDeleteTimer)
   confirmDeleteTimer = null
@@ -387,7 +404,7 @@ async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
     try {
       await showSettings(answer.project)
     } catch {
-      // Storage unreadable: the settings stay hidden; Start still uses what the worker reads.
+      // Storage unreadable: the settings stay hidden, and a Start reads them again for its template.
     }
     if (mine !== generation) return
   }
@@ -523,8 +540,10 @@ async function startTask(task: Task): Promise<void> {
   let answer: StartResult
   try {
     await flushSettings()
-    const templateId = chosenTemplateId(projectId, task.key)
-    answer = await plugin.request('task.start', { projectId, task, templateId }, { timeoutMs: START_TIMEOUT_MS })
+    const shown = await settingsShownFor(projectId)
+    answer = shown.ok
+      ? await plugin.request('task.start', { projectId, task, templateId: chosenTemplateId(shown.settings, task.key) }, { timeoutMs: START_TIMEOUT_MS })
+      : shown
   } catch (thrown) {
     answer = { ok: false, message: `Kickoff's worker didn't answer (${errorCode(thrown)}). Reload the tasks to see whether ${task.key} started.` }
   }
@@ -539,6 +558,22 @@ async function startTask(task: Task): Promise<void> {
   }
   // The task already had its worktree: this Start launched no agent.
   await finishStart(projectId, task.key, answer.ok ? null : answer.message, null)
+}
+
+/** The listed project's settings as shown, read again when a load couldn't read them, or why they
+ *  can't be read: a Start needs its template's id, and never falls back to another. */
+async function settingsShownFor(projectId: string): Promise<{ ok: true; settings: ShownSettings } | { ok: false; message: string }> {
+  const current = read(list)
+  if (read(shownSettings)?.projectId !== projectId && current?.kind === 'ready' && current.project.id === projectId) {
+    try {
+      await showSettings(current.project)
+    } catch (error) {
+      return { ok: false, message: `Couldn't read the prompt templates of ${current.project.name} (${errorCode(error)}). Reload the tasks and try again.` }
+    }
+  }
+  const settings = read(shownSettings)
+  if (settings?.projectId !== projectId) return { ok: false, message: "Couldn't read the prompt templates of this project. Reload the tasks and try again." }
+  return { ok: true, settings }
 }
 
 /** Asks the worker which Starts are under way, while a spinner shows for one this panel isn't
@@ -817,7 +852,7 @@ function StartOptionsSection() {
           <Select
             label="Default template"
             value={shown.defaultTemplateId}
-            options={shown.templates.map((template) => ({ value: template.id, label: template.name }))}
+            options={templateOptions(shown.templates)}
             onChange={(defaultTemplateId) => changeSettings({ defaultTemplateId })}
           />
           <IconButton icon="edit" label="Edit template" tooltip="Edit template" variant="ghost" onPress={() => openTemplate(shown.defaultTemplateId)} />
@@ -909,7 +944,7 @@ function TaskCard({ task, projectId, worktrees }: { task: Task; projectId: strin
   const isStarting = worktree === null && read(starting)[task.key] === true
   const error = read(taskErrors)[task.key]
   const shown = read(shownSettings)
-  const templates = shown?.projectId === projectId ? shown.templates : []
+  const settings = shown?.projectId === projectId ? shown : null
   return (
     <Box border radius="md" padding="sm" direction="column" gap="xs">
       <Row justify="between" align="center" gap="xs">
@@ -920,12 +955,12 @@ function TaskCard({ task, projectId, worktrees }: { task: Task; projectId: strin
           <Spinner label={`Starting ${task.key}`} labelHidden />
         ) : (
           <Row gap="xs" align="center">
-            {templates.length >= 2 ? (
+            {settings && settings.templates.length >= 2 ? (
               <Select
                 label={`Template for ${task.key}`}
                 labelHidden
-                value={chosenTemplateId(projectId, task.key)}
-                options={templates.map((template) => ({ value: template.id, label: template.name }))}
+                value={chosenTemplateId(settings, task.key)}
+                options={templateOptions(settings.templates)}
                 onChange={(id) => update(cardTemplates, (chosen) => ({ ...chosen, [cardKey(projectId, task.key)]: id }))}
               />
             ) : null}

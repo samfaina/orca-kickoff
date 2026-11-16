@@ -88,11 +88,11 @@ test('the default template is the one defaultTemplateId names, or the first when
 
 test('a template name is valid when, trimmed, it is not empty and no other template of the project has it ignoring case', () => {
   const templates = [implement, triage]
-  assert.equal(templateNameProblem(templates, 'Review', null), null)
-  assert.equal(templateNameProblem(templates, '  Review  ', null), null)
-  assert.equal(templateNameProblem(templates, '', null), 'Give the template a name.')
-  assert.equal(templateNameProblem(templates, '   ', null), 'Give the template a name.')
-  assert.equal(templateNameProblem(templates, ' triage ', null), 'Another template is already called "Triage".')
+  assert.equal(templateNameProblem(templates, 'Review', 't-new'), null)
+  assert.equal(templateNameProblem(templates, '  Review  ', 't-new'), null)
+  assert.equal(templateNameProblem(templates, '', 't-new'), 'Give the template a name.')
+  assert.equal(templateNameProblem(templates, '   ', 't-new'), 'Give the template a name.')
+  assert.equal(templateNameProblem(templates, ' triage ', 't-new'), 'Another template is already called "Triage".')
   assert.equal(templateNameProblem(templates, 'TRIAGE', 't-impl'), 'Another template is already called "Triage".')
   // Renaming a template to its own name in another case.
   assert.equal(templateNameProblem(templates, 'IMPLEMENT', 't-impl'), null)
