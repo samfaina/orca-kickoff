@@ -52,6 +52,10 @@ _Avoid_: Mapping, binding
 The per-project setting that says which agent a Start launches: Orca's default agent, a named agent, or none.
 _Avoid_: Default agent (that is Orca's own setting)
 
+**Project settings**:
+What Kickoff keeps for one project: its tracker and how the provider reads it, its agent choice, and its prompt templates with the default template.
+_Avoid_: Settings, Kickoff settings, plugin settings, config
+
 **Active project**:
 The project of the worktree currently selected in Orca's sidebar.
 _Avoid_: Current repo, selected workspace
