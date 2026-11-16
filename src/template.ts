@@ -11,23 +11,24 @@ export const INITIAL_TEMPLATE_TEXT = 'Complete {{task_key}}: {{task_url}}'
 export const INITIAL_TEMPLATE_ID = 'default'
 export const INITIAL_TEMPLATE_NAME = 'Default'
 
+/** The part of a project's settings that holds its templates. */
+export type TemplateSettings = Pick<ProjectSettings, 'templates' | 'defaultTemplateId'>
+
+/** What saving or deleting a template changes in a project's settings. */
+export type TemplateChanges = Required<TemplateSettings>
+
 /** A project's templates, in their order: the stored ones, or the initial one when none is stored. */
-export function projectTemplates(settings: Pick<ProjectSettings, 'templates'>): PromptTemplate[] {
+export function projectTemplates(settings: TemplateSettings): PromptTemplate[] {
   const { templates } = settings
   if (templates && templates.length > 0) return templates
   return [{ id: INITIAL_TEMPLATE_ID, name: INITIAL_TEMPLATE_NAME, text: INITIAL_TEMPLATE_TEXT }]
 }
 
 /** A project's default template: the one `defaultTemplateId` names, else the first. */
-export function defaultTemplate(settings: Pick<ProjectSettings, 'templates' | 'defaultTemplateId'>): PromptTemplate {
+export function defaultTemplate(settings: TemplateSettings): PromptTemplate {
   const templates = projectTemplates(settings)
   return templates.find((template) => template.id === settings.defaultTemplateId) ?? templates[0]
 }
-
-/** What saving or deleting a template changes in a project's settings. */
-export type TemplateChanges = Required<Pick<ProjectSettings, 'templates' | 'defaultTemplateId'>>
-
-type TemplateSettings = Pick<ProjectSettings, 'templates' | 'defaultTemplateId'>
 
 /** The project's templates with `template` saved, its name trimmed: in its place when the project
  *  has it, else at the end. The default template stays the same. */
@@ -50,12 +51,16 @@ export function withTemplateDeleted(settings: TemplateSettings, id: string): Tem
   return { templates, defaultTemplateId: current === id ? templates[0].id : current }
 }
 
-/** Why `name` can't be the name of a template of `templates`, or null when it can. `id` is the
- *  template being renamed, null for a new one: its own name, in any case, is fine. */
-export function templateNameProblem(templates: readonly PromptTemplate[], name: string, id: string | null): string | null {
-  const wanted = name.trim().toLowerCase()
-  if (wanted === '') return 'Give the template a name.'
-  const other = templates.find((template) => template.id !== id && template.name.trim().toLowerCase() === wanted)
+/** Whether two template names are the same, trimmed and ignoring case. */
+export function sameTemplateName(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase()
+}
+
+/** Why `name` can't be the name of the template `id` among `templates`, or null when it can. The
+ *  template's own name, in any case, is fine. */
+export function templateNameProblem(templates: readonly PromptTemplate[], name: string, id: string): string | null {
+  if (name.trim() === '') return 'Give the template a name.'
+  const other = templates.find((template) => template.id !== id && sameTemplateName(template.name, name))
   return other ? `Another template is already called "${other.name}".` : null
 }
 

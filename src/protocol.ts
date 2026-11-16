@@ -2,7 +2,7 @@
 // src/panel.tsx and src/worker.ts both read it, so it imports nothing from Node. Expected failures
 // are data (`kind: 'error'`, `ok: false`): no request throws for them.
 import { isRecord } from './json'
-import { INITIAL_TEMPLATE_ID, INITIAL_TEMPLATE_NAME } from './template'
+import { INITIAL_TEMPLATE_ID, INITIAL_TEMPLATE_NAME, sameTemplateName } from './template'
 
 export type TrackerId = 'github' | 'jira'
 export type ProviderId = 'github' | 'jira-orca' | 'jira-twg'
@@ -111,7 +111,7 @@ function readTemplates(raw: unknown): PromptTemplate[] {
     if (!isRecord(item) || !strings(item, 'id', 'name', 'text')) continue
     const name = item.name.trim()
     if (item.id === '' || name === '') continue
-    if (templates.some((template) => template.id === item.id || template.name.toLowerCase() === name.toLowerCase())) continue
+    if (templates.some((template) => template.id === item.id || sameTemplateName(template.name, name))) continue
     templates.push({ id: item.id, name, text: item.text })
   }
   return templates
