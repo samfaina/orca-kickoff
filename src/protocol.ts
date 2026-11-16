@@ -2,6 +2,7 @@
 // src/panel.tsx and src/worker.ts both read it, so it imports nothing from Node. Expected failures
 // are data (`kind: 'error'`, `ok: false`): no request throws for them.
 import { isRecord } from './json'
+import { INITIAL_TEMPLATE_ID, INITIAL_TEMPLATE_NAME, sameTemplateName } from './template'
 
 export type TrackerId = 'github' | 'jira'
 export type ProviderId = 'github' | 'jira-orca' | 'jira-twg'
@@ -45,12 +46,24 @@ export type ProviderConfigs = {
 /** 'orca-default', 'none', or any other string as an Orca agent id. */
 export type AgentChoice = string
 
+/** A named text with task variables that becomes the prompt of a Start. */
+export type PromptTemplate = {
+  /** Stable, made by the panel; never shown. */
+  id: string
+  /** Trimmed, not empty, unique in the project ignoring case. */
+  name: string
+  /** '': the prompt is the task URL. */
+  text: string
+}
+
 export type ProjectSettings = {
   /** undefined: GitHub when the project has a repo, else none. */
   provider?: ProviderId
   providers: ProviderConfigs
-  /** undefined: DEFAULT_TEMPLATE; '': the prompt is the task URL. */
-  template?: string
+  /** undefined or empty: one template "Default" with INITIAL_TEMPLATE_TEXT. */
+  templates?: PromptTemplate[]
+  /** undefined or unknown: the first template. */
+  defaultTemplateId?: string
   /** undefined: 'orca-default'. */
   agent?: AgentChoice
 }
@@ -78,9 +91,30 @@ export function readSettings(raw: unknown): Settings {
 function readProjectSettings(raw: Record<string, unknown>): ProjectSettings {
   const project: ProjectSettings = { providers: readProviderConfigs(raw.providers) }
   if (PROVIDER_IDS.includes(raw.provider as ProviderId)) project.provider = raw.provider as ProviderId
-  if (typeof raw.template === 'string') project.template = raw.template
+  const templates = readTemplates(raw.templates)
+  // A project stored before it could have several templates kept one text in `template`.
+  if (templates.length === 0 && typeof raw.template === 'string') {
+    templates.push({ id: INITIAL_TEMPLATE_ID, name: INITIAL_TEMPLATE_NAME, text: raw.template })
+  }
+  if (templates.length > 0) project.templates = templates
+  if (typeof raw.defaultTemplateId === 'string') project.defaultTemplateId = raw.defaultTemplateId
   if (typeof raw.agent === 'string' && raw.agent !== '') project.agent = raw.agent
   return project
+}
+
+/** The stored templates of the expected shape, in order. A template whose id or name, ignoring
+ *  case, an earlier one already has is dropped too. */
+function readTemplates(raw: unknown): PromptTemplate[] {
+  const templates: PromptTemplate[] = []
+  if (!Array.isArray(raw)) return templates
+  for (const item of raw) {
+    if (!isRecord(item) || !strings(item, 'id', 'name', 'text')) continue
+    const name = item.name.trim()
+    if (item.id === '' || name === '') continue
+    if (templates.some((template) => template.id === item.id || sameTemplateName(template.name, name))) continue
+    templates.push({ id: item.id, name, text: item.text })
+  }
+  return templates
 }
 
 function readProviderConfigs(raw: unknown): ProviderConfigs {
@@ -215,7 +249,7 @@ declare module 'orca' {
     'worktrees.load': { input: { projectId: string }; output: WorktreesResult }
     'project.active': { input: {}; output: ActiveProjectResult }
     'jira.sites': { input: {}; output: JiraSitesResult }
-    'task.start': { input: { projectId: string; task: Task }; output: StartResult }
+    'task.start': { input: { projectId: string; task: Task; templateId: string }; output: StartResult }
     'starts.load': { input: { projectId: string }; output: StartsResult }
     'worktree.open': { input: { worktreeId: string }; output: ActionResult }
   }

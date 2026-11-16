@@ -41,7 +41,7 @@ import {
 } from './protocol'
 import { taskLister } from './providers'
 import { JIRA_CONNECTION_ARGS, parseJiraSites } from './providers/jira-orca'
-import { buildPrompt } from './template'
+import { buildPrompt, projectTemplates } from './template'
 
 /** After a timed-out `worktree create`, Orca may still finish it; a Start of the same task waits
  *  this long, so it doesn't make a second worktree. */
@@ -145,17 +145,17 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
 
   /** Runs the quick checks and answers with their failure, or starts the create and answers that
    *  it is under way without waiting for it. */
-  function startTask(projectId: string, task: Task): Promise<StartResult> {
+  function startTask(projectId: string, task: Task, templateId: string): Promise<StartResult> {
     const id = `${projectId}\n${task.key}`
     if (creating.has(id)) return Promise.resolve({ ok: true, underWay: true })
     const running = checking.get(id)
     if (running) return running
-    const checked = checkAndCreate(id, projectId, task).finally(() => checking.delete(id))
+    const checked = checkAndCreate(id, projectId, task, templateId).finally(() => checking.delete(id))
     checking.set(id, checked)
     return checked
   }
 
-  async function checkAndCreate(id: string, projectId: string, task: Task): Promise<StartResult> {
+  async function checkAndCreate(id: string, projectId: string, task: Task, templateId: string): Promise<StartResult> {
     try {
       const [projectsOut, worktreesOut] = await Promise.all([run('orca', PROJECT_LIST_ARGS), run('orca', WORKTREE_LIST_ARGS)])
       const project = parseProjects(projectsOut).find((candidate) => candidate.id === projectId)
@@ -175,8 +175,11 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
       const settings = await readProjectSettings(projectId)
       const agent = await resolveAgent(settings.agent, readDefaultAgent)
       if (!agent.ok) return agent
+      // Never another template: the person chose this one for this task.
+      const template = projectTemplates(settings).find((candidate) => candidate.id === templateId)
+      if (!template) return { ok: false, message: 'The prompt template you chose no longer exists — pick another one.' }
       const name = worktreeName(task)
-      const prompt = buildPrompt(settings.template, task, project, name)
+      const prompt = buildPrompt(template.text, task, project, name)
       if (!prompt.ok) return prompt
       const args = worktreeCreateArgs({ projectId, name, task, agent: agent.agent, prompt: prompt.prompt })
       creating.set(id, { projectId, taskKey: task.key })
@@ -239,7 +242,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
   orca.panels.handle('worktrees.load', ({ projectId }) => loadWorktrees(projectId))
   orca.panels.handle('project.active', () => activeProjectId())
   orca.panels.handle('jira.sites', () => jiraSites())
-  orca.panels.handle('task.start', ({ projectId, task }) => startTask(projectId, task))
+  orca.panels.handle('task.start', ({ projectId, task, templateId }) => startTask(projectId, task, templateId))
   orca.panels.handle('starts.load', ({ projectId }) => ({ starting: startsUnderWay(projectId) }))
   orca.panels.handle('worktree.open', ({ worktreeId }) => openWorktree(worktreeId))
 }
