@@ -215,6 +215,8 @@ Icons seen: `rocket`, `play`, `refresh`, `branch`, `close`, `check`.
 
 Dev commands **[Verified]**: `orca plugin validate .`, `test .`, `check .`, `dev watch .`, `inspect`, `dev request`, `dev emit`, `shot --scenario`.
 
+- `orca plugin shot --act` does not keep the panel's state between captures. After the capture, Orca puts the panel's atoms back, persisted ones included. What the acts did outside the panel stays, such as a `storage.set` or a `plugin.request` that changed the worker's storage. So a JQL typed through `--act` stays in storage while the panel shows the earlier one: `shownSettings` is restored, and `showSettings` doesn't read storage again for the project it already shows, until the plugin is loaded again. `--json` reports `restored: false` when the panel reloaded during `--act` and kept the acted state. **[Verified]** by `orca plugin shot --help` of Orca 1.4.259. The maintainer checked inside Orca that a JQL typed by hand stays in the JQL field after a Reload, a switch to another project and back, and hiding and showing the panel (issue #19).
+
 ## Orca CLI
 
 - The executable is `orca` on Windows and macOS. On Linux it is `orca-ide`, because `orca` is usually GNOME's screen reader **[Original]**; not checked on Linux.
