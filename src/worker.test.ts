@@ -86,7 +86,7 @@ const started42 = { id: 'r1::/src/web-42', projectId: 'github:acme/web', display
 
 const CREATED = wrap({ worktree: { id: 'r1::/src/web-42' } })
 
-const startWeb42 = { projectId: 'github:acme/web', task: issue42 }
+const startWeb42 = { projectId: 'github:acme/web', task: issue42, templateId: 'default' }
 
 test('a project with a GitHub repo lists its open issues with no configuration', async () => {
   const { worker } = await start({ ...ORCA_OK, 'gh issue list': GH_ISSUES })
@@ -320,7 +320,7 @@ const web12: Task = {
 
 test('Start on Jira links the worktree with --reference <task URL>, never --issue', async () => {
   const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED }, { storage: jiraSettings() })
-  assert.deepEqual(await worker.request('task.start', { projectId: 'github:acme/web', task: web12 }), { ok: true, underWay: true })
+  assert.deepEqual(await worker.request('task.start', { projectId: 'github:acme/web', task: web12, templateId: 'default' }), { ok: true, underWay: true })
   assert.deepEqual(creates(calls)[0].args, [
     'worktree', 'create', '--project', 'github:acme/web', '--name', 'web-12-anadir-modo-oscuro-a', '--no-parent', '--json',
     '--reference', 'https://example.atlassian.net/browse/WEB-12',
@@ -334,7 +334,7 @@ test("a Start of a Jira task already linked in Orca doesn't run worktree create"
     linkedItems: [{ provider: 'jira', type: 'issue', jiraIdentifier: 'WEB-12', url: 'https://example.atlassian.net/browse/WEB-12' }]
   }
   const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree list': worktreesWith(linked) }, { storage: jiraSettings() })
-  assert.deepEqual(await worker.request('task.start', { projectId: 'github:acme/web', task: web12 }), { ok: true, underWay: false })
+  assert.deepEqual(await worker.request('task.start', { projectId: 'github:acme/web', task: web12, templateId: 'default' }), { ok: true, underWay: false })
   assert.equal(creates(calls).length, 0)
 })
 
@@ -380,9 +380,41 @@ test("Start uses the project's template and agent choice, and no agent means no 
   assert.ok(!args.includes('--agent') && !args.includes('--prompt'))
 })
 
+const twoTemplates = {
+  settings: {
+    version: 1,
+    projects: {
+      'github:acme/web': {
+        providers: {},
+        templates: [
+          { id: 't-impl', name: 'Implement', text: '/acme-skills:tdd {{task_url}}' },
+          { id: 't-triage', name: 'Triage', text: 'Triage {{task_key}}' }
+        ],
+        defaultTemplateId: 't-impl'
+      }
+    }
+  }
+}
+
+test('Start fills the prompt from the template it is given, not the default one', async () => {
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED }, { storage: twoTemplates })
+  assert.deepEqual(await worker.request('task.start', { ...startWeb42, templateId: 't-triage' }), { ok: true, underWay: true })
+  assert.deepEqual(creates(calls)[0].args.slice(-2), ['--prompt', 'Triage #42'])
+})
+
+test('a Start whose template no longer exists fails with a message and creates nothing', async () => {
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED }, { storage: twoTemplates })
+  assert.deepEqual(await worker.request('task.start', { ...startWeb42, templateId: 'default' }), {
+    ok: false,
+    message: 'The prompt template you chose no longer exists — pick another one.'
+  })
+  assert.equal(creates(calls).length, 0)
+  assert.deepEqual(worker.posts, [])
+})
+
 test('Start of a project Orca no longer has fails in its answer, without creating anything', async () => {
   const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED })
-  assert.deepEqual(await worker.request('task.start', { projectId: 'repo:gone', task: issue42 }), {
+  assert.deepEqual(await worker.request('task.start', { projectId: 'repo:gone', task: issue42, templateId: 'default' }), {
     ok: false,
     message: 'Orca has no project "repo:gone".'
   })
@@ -451,7 +483,7 @@ test("the task list and starts.load report the project's Starts under way until 
   }
   assert.deepEqual(await underWay(), [])
   await worker.request('task.start', startWeb42)
-  await worker.request('task.start', { projectId: 'github:acme/web', task: { ...issue42, key: '#7', url: 'https://github.com/acme/web/issues/7' } })
+  await worker.request('task.start', { ...startWeb42, task: { ...issue42, key: '#7', url: 'https://github.com/acme/web/issues/7' } })
   assert.deepEqual(await underWay(), ['#42', '#7'])
   assert.deepEqual(await worker.request('starts.load', { projectId: 'repo:r2' }), { starting: [] })
 
@@ -539,7 +571,7 @@ test("a failed create posts a failed end with Orca's real message", async () => 
 test('a prompt over the limit fails Start without creating anything', async () => {
   const storage = { settings: { version: 1, projects: { 'github:acme/web': { providers: {}, template: '{{task_description}}'.repeat(8) } } } }
   const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED }, { storage })
-  const result = await worker.request('task.start', { projectId: 'github:acme/web', task: { ...issue42, description: 'x'.repeat(5000) } })
+  const result = await worker.request('task.start', { ...startWeb42, task: { ...issue42, description: 'x'.repeat(5000) } })
   assert.ok(!result.ok)
   assert.match(result.message, /30000/)
   assert.equal(creates(calls).length, 0)

@@ -42,8 +42,10 @@ import {
   type JiraProviderId,
   type JiraSitesResult,
   type ProjectChanges,
+  type ProjectSettings,
   type ProjectRef,
   type ProviderConfigs,
+  type PromptTemplate,
   type ProviderId,
   type StartEnded,
   type StartResult,
@@ -51,7 +53,16 @@ import {
   type TaskList,
   type TaskWorktree
 } from './protocol'
-import { DEFAULT_TEMPLATE, TEMPLATE_VARIABLES } from './template'
+import {
+  defaultTemplate,
+  INITIAL_TEMPLATE_TEXT,
+  projectTemplates,
+  TEMPLATE_VARIABLES,
+  templateNameProblem,
+  withTemplateDeleted,
+  withTemplateSaved,
+  type TemplateChanges
+} from './template'
 
 /** Orca queries and the tracker can take up to about 65 s together. */
 const LOAD_TIMEOUT_MS = 90_000
@@ -60,6 +71,8 @@ const LOAD_TIMEOUT_MS = 90_000
 const START_TIMEOUT_MS = 60_000
 /** Start options save themselves after this pause. */
 const SAVE_DELAY_MS = 600
+/** How long Delete waits for its second click, as "Confirm delete". */
+const CONFIRM_DELETE_MS = 4_000
 /** How often the panel asks for the active project while it is visible. */
 const POLL_MS = 3_000
 /** Orca detects the agent of a new worktree a few seconds after its create ends, so the panel
@@ -90,7 +103,28 @@ const NO_TRACKER = ':none'
 const DEFAULT_SITE = ':default'
 
 /** The listed project's settings, as the person sees them. `provider` is null while none is set. */
-type ShownSettings = { projectId: string; provider: ProviderId | null; providers: ProviderConfigs; agent: string; template: string }
+type ShownSettings = {
+  projectId: string
+  provider: ProviderId | null
+  providers: ProviderConfigs
+  agent: string
+  templates: PromptTemplate[]
+  defaultTemplateId: string
+}
+
+/** The template detail's draft: a template of `projectId` being edited, or a new one. */
+type TemplateDraft = {
+  projectId: string
+  id: string
+  isNew: boolean
+  name: string
+  text: string
+  /** The error of the last write, shown until the next one. */
+  error: string | null
+  saving: boolean
+  /** Delete was clicked once and waits for its second click. */
+  confirmingDelete: boolean
+}
 
 const list = atom<TaskList | null>(null)
 const loading = atom(false)
@@ -128,6 +162,25 @@ let worktreesShownAt = 0
 let workspacesTimer: ReturnType<typeof setTimeout> | null = null
 /** The error of each task's last Start, or of opening its worktree. */
 const taskErrors = atom<Record<string, string>>({})
+
+/** The template chosen on each card, by project and task key, while the panel is open. Never
+ *  stored; a card whose template no longer exists shows the default template again. */
+const cardTemplates = atom<Record<string, string>>({})
+
+const cardKey = (projectId: string, taskKey: string) => `${projectId}
+${taskKey}`
+
+/** The template a Start of the task uses: the one chosen on its card while the project still has
+ *  it, else the project's default template. */
+function chosenTemplateId(projectId: string, taskKey: string): string {
+  const shown = read(shownSettings)
+  if (shown?.projectId !== projectId) return defaultTemplate({}).id
+  const chosen = read(cardTemplates)[cardKey(projectId, taskKey)]
+  return shown.templates.some((template) => template.id === chosen) ? chosen : shown.defaultTemplateId
+}
+
+/** The template detail's draft while it replaces the panel view, else null. */
+const templateDraft = atom<TemplateDraft | null>(null)
 
 /** Whether a "Load more" is under way, and the error of the last one. */
 const loadingMore = atom(false)
@@ -177,8 +230,102 @@ async function showSettings(project: ProjectRef): Promise<void> {
     provider,
     providers: settings.providers,
     agent: settings.agent ?? 'orca-default',
-    template: settings.template ?? DEFAULT_TEMPLATE
+    templates: projectTemplates(settings),
+    defaultTemplateId: defaultTemplate(settings).id
   })
+}
+
+/** Opens the template detail for one of the shown project's templates, or for a new one. */
+function openTemplate(id: string | null): void {
+  const shown = read(shownSettings)
+  if (!shown) return
+  const template = id === null ? null : shown.templates.find((candidate) => candidate.id === id)
+  if (id !== null && !template) return
+  set(templateDraft, {
+    projectId: shown.projectId,
+    id: template?.id ?? newTemplateId(shown.templates),
+    isNew: !template,
+    name: template?.name ?? '',
+    text: template?.text ?? INITIAL_TEMPLATE_TEXT,
+    error: null,
+    saving: false,
+    confirmingDelete: false
+  })
+}
+
+/** An id that none of `templates` has. */
+function newTemplateId(templates: PromptTemplate[]): string {
+  for (;;) {
+    const id = `t-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+    if (!templates.some((template) => template.id === id)) return id
+  }
+}
+
+/** Changes the detail's draft, while it is still the draft of that template. */
+function changeDraft(of: TemplateDraft, changes: Partial<TemplateDraft>): void {
+  update(templateDraft, (draft) => (draft && isSameDraft(draft, of) ? { ...draft, ...changes } : draft))
+}
+
+const isSameDraft = (a: TemplateDraft, b: TemplateDraft) => a.projectId === b.projectId && a.id === b.id
+
+/** Leaves the template detail without saving. */
+function closeTemplate(): void {
+  cancelConfirmDelete()
+  set(templateDraft, null)
+}
+
+/** Stores the draft's template and goes back, unless its name can't be saved. */
+async function saveTemplate(): Promise<void> {
+  const draft = read(templateDraft)
+  const shown = read(shownSettings)
+  if (!draft || draft.saving || shown?.projectId !== draft.projectId) return
+  if (templateNameProblem(shown.templates, draft.name, draft.id) !== null) return
+  await writeTemplates(draft, (project) => withTemplateSaved(project, { id: draft.id, name: draft.name, text: draft.text }))
+}
+
+/** The pending end of a Delete's wait for its second click. */
+let confirmDeleteTimer: ReturnType<typeof setTimeout> | null = null
+
+/** The first click asks for a second within a few seconds; the second deletes the template. */
+async function deleteTemplate(): Promise<void> {
+  const draft = read(templateDraft)
+  if (!draft || draft.saving || draft.isNew) return
+  cancelConfirmDelete()
+  if (!draft.confirmingDelete) {
+    changeDraft(draft, { confirmingDelete: true })
+    confirmDeleteTimer = setTimeout(() => {
+      confirmDeleteTimer = null
+      changeDraft(draft, { confirmingDelete: false })
+    }, CONFIRM_DELETE_MS)
+    return
+  }
+  await writeTemplates(draft, (project) => withTemplateDeleted(project, draft.id))
+}
+
+function cancelConfirmDelete(): void {
+  if (confirmDeleteTimer !== null) clearTimeout(confirmDeleteTimer)
+  confirmDeleteTimer = null
+}
+
+/** Writes a change to the draft project's templates, then shows them and goes back. A failed write
+ *  keeps the detail open with its error and the draft. Pending Start options are saved first, so
+ *  the change applies to what the person sees. */
+async function writeTemplates(draft: TemplateDraft, change: (project: ProjectSettings) => TemplateChanges | null): Promise<void> {
+  changeDraft(draft, { saving: true, error: null, confirmingDelete: false })
+  let changes: TemplateChanges | null
+  try {
+    await flushSettings()
+    const settings = readSettings(await storage.get(SETTINGS_KEY))
+    changes = change(projectSettings(settings, draft.projectId))
+    if (changes) await storage.set(SETTINGS_KEY, withProjectChanges(settings, draft.projectId, changes) as unknown as JsonValue)
+  } catch (error) {
+    changeDraft(draft, { saving: false, error: `Couldn't save the template (${errorCode(error)}). Try again.` })
+    return
+  }
+  const shown = read(shownSettings)
+  if (changes && shown?.projectId === draft.projectId) set(shownSettings, { ...shown, ...changes })
+  const current = read(templateDraft)
+  if (current && isSameDraft(current, draft)) set(templateDraft, null)
 }
 
 /** Chooses the project's provider, saves it with its configuration and lists its tasks. */
@@ -231,6 +378,11 @@ async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
     answer = { kind: 'error', project: null, message: `Kickoff's worker didn't answer (${errorCode(error)}). Reload to try again.` }
   }
   if (mine !== generation) return
+  // A change of active project drops the template detail's draft. An answer that names no project
+  // because the worker didn't answer says nothing about it.
+  const answeredProjectId = answer.kind === 'no-project' ? null : answer.project?.id
+  const draft = read(templateDraft)
+  if (draft && answeredProjectId !== undefined && answeredProjectId !== draft.projectId) closeTemplate()
   if ('project' in answer && answer.project) {
     try {
       await showSettings(answer.project)
@@ -371,7 +523,8 @@ async function startTask(task: Task): Promise<void> {
   let answer: StartResult
   try {
     await flushSettings()
-    answer = await plugin.request('task.start', { projectId, task }, { timeoutMs: START_TIMEOUT_MS })
+    const templateId = chosenTemplateId(projectId, task.key)
+    answer = await plugin.request('task.start', { projectId, task, templateId }, { timeoutMs: START_TIMEOUT_MS })
   } catch (thrown) {
     answer = { ok: false, message: `Kickoff's worker didn't answer (${errorCode(thrown)}). Reload the tasks to see whether ${task.key} started.` }
   }
@@ -512,6 +665,10 @@ export function setup(ctx: PanelContext): void {
   // against the list.
   lastPolledProjectId = undefined
   set(agentStarting, {})
+  set(cardTemplates, {})
+  set(templateDraft, null)
+  // Closing the panel drops the template detail's draft.
+  ctx.subscriptions.push({ dispose: closeTemplate })
   let polling = false
   const poll = async () => {
     if (polling || read(loading) || !read(ctx.visible)) return
@@ -538,6 +695,11 @@ export default function Panel() {
   const current = read(list)
   const busy = read(loading)
   const project = current && 'project' in current ? current.project : null
+  const draft = read(templateDraft)
+  const shown = read(shownSettings)
+  if (draft && shown?.projectId === draft.projectId) {
+    return <TemplateDetail draft={draft} templates={shown.templates} projectName={project?.name ?? ''} />
+  }
   return (
     <Stack gap="sm">
       <Row justify="between" align="center">
@@ -651,19 +813,16 @@ function StartOptionsSection() {
     <Collapsible title="Start options" open={read(optionsOpen)} onChange={(open) => set(optionsOpen, open)}>
       <Stack gap="sm">
         <Select label="Agent" value={shown.agent} options={agentOptions} onChange={(agent) => changeSettings({ agent })} />
-        <Textarea
-          label="Prompt template"
-          value={shown.template}
-          rows={4}
-          placeholder="Empty: the prompt is the task URL"
-          onChange={(template) => changeSettings({ template })}
-        />
-        <Text size="sm" muted>
-          {`Variables: ${TEMPLATE_VARIABLES.map((name) => `{{${name}}}`).join(', ')}. An empty template gives the task URL.`}
-        </Text>
-        <Text size="sm" muted>
-          {'To run a Claude Code skill, start the template with its command, for example `/tdd {{task_key}}`: the rest of the template becomes its arguments. The new worktree must see the skill, so install plugins with user scope, not local, and commit project skills. Other agents have their own syntax.'}
-        </Text>
+        <Row gap="xs" align="end">
+          <Select
+            label="Default template"
+            value={shown.defaultTemplateId}
+            options={shown.templates.map((template) => ({ value: template.id, label: template.name }))}
+            onChange={(defaultTemplateId) => changeSettings({ defaultTemplateId })}
+          />
+          <IconButton icon="edit" label="Edit template" tooltip="Edit template" variant="ghost" onPress={() => openTemplate(shown.defaultTemplateId)} />
+          <IconButton icon="add" label="New template" tooltip="New template" variant="ghost" onPress={() => openTemplate(null)} />
+        </Row>
       </Stack>
     </Collapsible>
   )
@@ -749,6 +908,8 @@ function TaskCard({ task, projectId, worktrees }: { task: Task; projectId: strin
   const worktree = worktrees?.[task.key] ?? null
   const isStarting = worktree === null && read(starting)[task.key] === true
   const error = read(taskErrors)[task.key]
+  const shown = read(shownSettings)
+  const templates = shown?.projectId === projectId ? shown.templates : []
   return (
     <Box border radius="md" padding="sm" direction="column" gap="xs">
       <Row justify="between" align="center" gap="xs">
@@ -758,9 +919,20 @@ function TaskCard({ task, projectId, worktrees }: { task: Task; projectId: strin
         {worktree ? null : isStarting ? (
           <Spinner label={`Starting ${task.key}`} labelHidden />
         ) : (
-          <Button key={`start:${task.key}`} size="sm" icon="play" disabled={worktrees === null} onPress={() => void startTask(task)}>
-            Start
-          </Button>
+          <Row gap="xs" align="center">
+            {templates.length >= 2 ? (
+              <Select
+                label={`Template for ${task.key}`}
+                labelHidden
+                value={chosenTemplateId(projectId, task.key)}
+                options={templates.map((template) => ({ value: template.id, label: template.name }))}
+                onChange={(id) => update(cardTemplates, (chosen) => ({ ...chosen, [cardKey(projectId, task.key)]: id }))}
+              />
+            ) : null}
+            <Button key={`start:${task.key}`} size="sm" icon="play" disabled={worktrees === null} onPress={() => void startTask(task)}>
+              Start
+            </Button>
+          </Row>
         )}
       </Row>
       {status || task.labels.length > 0 ? (
@@ -790,5 +962,62 @@ function TaskCard({ task, projectId, worktrees }: { task: Task; projectId: strin
         </Text>
       ) : null}
     </Box>
+  )
+}
+
+function TemplateDetail({ draft, templates, projectName }: { draft: TemplateDraft; templates: PromptTemplate[]; projectName: string }) {
+  const nameProblem = templateNameProblem(templates, draft.name, draft.id)
+  return (
+    <Stack gap="sm">
+      <Heading level={3}>{projectName}</Heading>
+      <Stack gap="xs">
+        <Input label="Name" value={draft.name} invalid={nameProblem !== null} onChange={(name) => changeDraft(draft, { name })} />
+        {nameProblem !== null ? (
+          <Text size="sm" tone="danger">
+            {nameProblem}
+          </Text>
+        ) : null}
+      </Stack>
+      <Textarea
+        label="Text"
+        value={draft.text}
+        rows={6}
+        placeholder="Empty: the prompt is the task URL"
+        onChange={(text) => changeDraft(draft, { text })}
+      />
+      <Text size="sm" muted>
+        {`Variables: ${TEMPLATE_VARIABLES.map((name) => `{{${name}}}`).join(', ')}. An empty template gives the task URL.`}
+      </Text>
+      <Text size="sm" muted>
+        {'To run a Claude Code skill, start the template with its command, for example `/tdd {{task_key}}`: the rest of the template becomes its arguments. The new worktree must see the skill, so install plugins with user scope, not local, and commit project skills. Other agents have their own syntax.'}
+      </Text>
+      {draft.error !== null ? (
+        <Callout tone="danger" icon="error">
+          <Text>{draft.error}</Text>
+        </Callout>
+      ) : null}
+      <Row gap="xs" align="center" wrap>
+        <Button key="template-save" size="sm" variant="solid" disabled={nameProblem !== null || draft.saving} onPress={() => void saveTemplate()}>
+          Save
+        </Button>
+        <Button key="template-cancel" size="sm" variant="ghost" disabled={draft.saving} onPress={closeTemplate}>
+          Cancel
+        </Button>
+        {draft.isNew ? null : (
+          <Button
+            key="template-delete"
+            size="sm"
+            variant="ghost"
+            tone="danger"
+            icon="delete"
+            disabled={templates.length < 2 || draft.saving}
+            onPress={() => void deleteTemplate()}
+          >
+            {draft.confirmingDelete ? 'Confirm delete' : 'Delete'}
+          </Button>
+        )}
+        {draft.saving ? <Spinner label="Saving the template" labelHidden /> : null}
+      </Row>
+    </Stack>
   )
 }

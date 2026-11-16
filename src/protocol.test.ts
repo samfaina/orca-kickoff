@@ -1,5 +1,6 @@
 import { assert, test } from 'orca/testing'
 import { chooseProvider, projectProvider, projectSettings, readSettings, withProjectChanges } from './protocol'
+import { defaultTemplate, projectTemplates } from './template'
 
 const web = { id: 'github:acme/web', name: 'web', repo: 'acme/web' }
 const notes = { id: 'repo:r1', name: 'notes', repo: null }
@@ -71,7 +72,7 @@ test("project changes keep the other projects, fields and providers' configurati
     version: 1 as const,
     projects: {
       [web.id]: { provider: 'jira-twg' as const, providers: { 'jira-twg': { jql: 'project = OLD', site: '', profile: 'work' } }, agent: 'codex' },
-      [notes.id]: { providers: {}, template: '' }
+      [notes.id]: { providers: {}, templates: [{ id: 'default', name: 'Default', text: '' }] }
     }
   }
   const changed = withProjectChanges(settings, web.id, { provider: 'jira-orca', providers: { 'jira-orca': { jql: 'project = WEB', siteId: '' } } })
@@ -83,8 +84,70 @@ test("project changes keep the other projects, fields and providers' configurati
         providers: { 'jira-twg': { jql: 'project = OLD', site: '', profile: 'work' }, 'jira-orca': { jql: 'project = WEB', siteId: '' } },
         agent: 'codex'
       },
-      [notes.id]: { providers: {}, template: '' }
+      [notes.id]: { providers: {}, templates: [{ id: 'default', name: 'Default', text: '' }] }
     }
   })
   assert.deepEqual(withProjectChanges(readSettings(null), 'repo:new', { agent: 'none' }).projects['repo:new'], { providers: {}, agent: 'none' })
+})
+
+/** The templates and default template of a project read from these stored settings. */
+function readTemplates(project: unknown) {
+  const settings = projectSettings(readSettings({ version: 1, projects: { [web.id]: project } }), web.id)
+  return { templates: projectTemplates(settings), defaultId: defaultTemplate(settings).id }
+}
+
+const initial = { id: 'default', name: 'Default', text: 'Complete {{task_key}}: {{task_url}}' }
+
+test('no stored templates gives one template "Default" with INITIAL_TEMPLATE_TEXT', () => {
+  assert.deepEqual(readTemplates({ providers: {} }), { templates: [initial], defaultId: 'default' })
+  assert.deepEqual(readTemplates({ providers: {}, templates: [] }), { templates: [initial], defaultId: 'default' })
+  assert.deepEqual(projectTemplates(projectSettings(readSettings(null), web.id)), [initial])
+})
+
+test('a template stored before several templates, also an empty one, is kept as "Default"', () => {
+  assert.deepEqual(readTemplates({ providers: {}, template: 'Fix {{task_key}}' }), {
+    templates: [{ id: 'default', name: 'Default', text: 'Fix {{task_key}}' }],
+    defaultId: 'default'
+  })
+  assert.deepEqual(readTemplates({ providers: {}, template: '' }).templates, [{ id: 'default', name: 'Default', text: '' }])
+  // Reading drops the earlier field, so saving the project writes `templates` alone.
+  const read = readSettings({ version: 1, projects: { [web.id]: { providers: {}, template: 'Fix' } } })
+  assert.deepEqual(read.projects[web.id], { providers: {}, templates: [{ id: 'default', name: 'Default', text: 'Fix' }] })
+})
+
+test('stored templates are kept in order, with their default template', () => {
+  const templates = [
+    { id: 't-impl', name: 'Implement', text: '/acme-skills:tdd {{task_url}}' },
+    { id: 't-triage', name: 'Triage', text: '' }
+  ]
+  assert.deepEqual(readTemplates({ providers: {}, templates, defaultTemplateId: 't-triage', template: 'ignored' }), { templates, defaultId: 't-triage' })
+})
+
+test('an unknown or missing defaultTemplateId gives the first template as the default', () => {
+  const templates = [
+    { id: 't-impl', name: 'Implement', text: 'a' },
+    { id: 't-triage', name: 'Triage', text: 'b' }
+  ]
+  assert.equal(readTemplates({ providers: {}, templates, defaultTemplateId: 't-gone' }).defaultId, 't-impl')
+  assert.equal(readTemplates({ providers: {}, templates, defaultTemplateId: 7 }).defaultId, 't-impl')
+  assert.equal(readTemplates({ providers: {}, templates }).defaultId, 't-impl')
+})
+
+test('templates of an unexpected shape are dropped, and with none left the "Default" template is used', () => {
+  const triage = { id: 't-triage', name: 'Triage', text: 'b' }
+  const stored = [
+    'garbage',
+    null,
+    { id: 't-x', name: 'No text' },
+    { id: '', name: 'No id', text: 'a' },
+    { id: 't-y', name: '   ', text: 'a' },
+    { id: 't-z', name: 3, text: 'a' },
+    triage,
+    // A second template with an id or a name already read.
+    { id: 't-triage', name: 'Again', text: 'c' },
+    { id: 't-other', name: ' TRIAGE ', text: 'c' }
+  ]
+  assert.deepEqual(readTemplates({ providers: {}, templates: stored }), { templates: [triage], defaultId: 't-triage' })
+  assert.deepEqual(readTemplates({ providers: {}, templates: [{ id: 't-x' }] }), { templates: [initial], defaultId: 'default' })
+  assert.deepEqual(readTemplates({ providers: {}, templates: 'none' }), { templates: [initial], defaultId: 'default' })
 })
