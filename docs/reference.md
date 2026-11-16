@@ -297,7 +297,7 @@ Check `providerIdentity.provider === 'github'`, not just `owner` and `repo`.
 Flags **[Verified]**:
 
 - `--project <id-or-name>`, `--name <name>`, `--issue <n>`, `--no-parent`, `--agent <id>`, `--prompt <text>` and `--json`.
-- Also `--branch`, `--surface chat|terminal`, `--activate`, `--setup`, `--retry-launch <operationId>`, `--reference <url-or-jira-key>` (repeatable) and `--reference-site <id>`.
+- Also `--branch`, `--base-branch <ref>`, `--surface chat|terminal`, `--activate`, `--setup`, `--retry-launch <operationId>`, `--reference <url-or-jira-key>` (repeatable) and `--reference-site <id>`.
 
 Behaviour:
 
@@ -314,6 +314,15 @@ Behaviour:
   - It cannot be combined with `--issue`, `--pr`, `--linear-issue` or `--gitlab-*`.
   - It needs a host with `WORKTREE_LINKED_ITEMS_DELTA`, otherwise `incompatible_runtime`.
 - Orca accepts Jira keys matching `/^[A-Za-z][A-Za-z0-9_]*-\d+$/` **[Verified]**.
+- Base of the new branch (issue #40), read in `--help` and Orca's app bundle **[Verified]**:
+  - Orca takes `--base-branch`, then the repository's `worktreeBaseRef` (set with `orca repo set-base-ref`) if usable, then a default ref it detects. Kickoff passes no `--base-branch`. How the default ref is detected is not known **[Assumed]**.
+  - When the base has a remote-tracking ref, Orca fetches it before `git worktree add`.
+  - No CLI command reports the base before a create. Afterwards, `worktree list --json` rows carry `baseRef` (`refs/remotes/origin/main`), which is `null` on main worktrees.
+- Files that aren't committed, read in Orca's app bundle **[Verified]**:
+  - Orca copies the literal files and folders listed in `.worktreeinclude` at the main checkout's root into the new worktree (no globs, at most 1000 entries, file under 256 KiB).
+  - It also creates the repository's `symlinkPaths` and runs its setup hooks unless `--setup skip`.
+  - Nothing else that isn't tracked is copied.
+- The main checkout of a project is `result.setups[].path` in `orca project setups --project <id> --json`. The same path is in `repo list --json` (`repos[].path`) and in the `worktree list --json` row with `isMainWorktree: true` **[Verified]**.
 
 Timing, measured by the maintainer on Windows with Orca 1.4.257 on a small repository (issue #14) **[Verified]**: `worktree create` takes about 25 s without an agent and about 30 s with `--agent` and `--prompt`; `--setup skip` does not make it faster. Through Kickoff's Start on Orca 1.4.259, `task.start` answered in about 3 s and the create ended 19 to 28 s later **[Verified]**. That a larger repository or setup hooks take over a minute **[Assumed]**; Kickoff gives the create 10 minutes.
 
@@ -330,9 +339,14 @@ A prompt that starts with a Claude Code slash command runs that skill in the new
 - **Several lines.** The prompt arrives as one message. Everything after the command name, newlines and blank lines included, becomes the skill's arguments (`ARGUMENTS:`). So `{{task_description}}` can follow the command.
 - **Names.** A user skill (`~/.claude/skills/<name>`) and a project skill (`<worktree>/.claude/skills/<name>`) run by their bare name. A plugin skill runs with its namespace (`/acme-skills:tdd`) and also by its bare name (`/tdd`): Claude Code rewrites a bare name to the namespaced one, on both surfaces. When a built-in command has the same name, the built-in wins: `/code-review` runs Claude Code's own command, not `acme-skills:code-review`. A partial name (`/grill` for `grilling`) is unknown.
 - **What a new worktree sees.** The agent runs in the new worktree's folder, so it loads what Claude Code loads for that path, which is not always what the main checkout has:
-  - A plugin installed with `local` scope is enabled for one project path only (`projectPath` in `claude plugin list --json`). A new worktree is another path, so its skills are unknown there. This was the cause of the failed Start in issue #16; installing the plugin with `user` scope fixed it.
-  - A project skill in `<repo>/.claude/skills` that isn't committed is not in the new worktree: Orca doesn't copy untracked files into it.
-  - User skills and `user`-scope plugins are seen everywhere.
+  - A plugin installed with `local` scope is enabled for one project path only (`projectPath` in `claude plugin list --json`). On Windows, a new worktree is another path, so its skills are unknown there. This was the cause of the failed Start in issue #16; installing the plugin with `user` scope fixed it **[Verified]**. Claude Code's docs say that inside a git repository the local settings are read from the main checkout's root, except on Windows, so on macOS and Linux a `local` plugin would load in a new worktree too **[Assumed]**; not tried.
+  - A project skill in `<repo>/.claude/skills` that isn't committed is not in the new worktree's own folder, unless `.worktreeinclude` lists it (see `orca worktree create`). But Claude Code's docs say a linked worktree with no `.claude/skills` at its root loads the main checkout's skills, agents and commands (Claude Code 2.1.277 and later). So an uncommitted skill is missing only when the worktree has a `.claude/skills` folder of its own, for example because other skills are committed **[Assumed]**; not tried.
+  - User skills and `user`-scope plugins are seen everywhere **[Verified]**. Docs: `project`-scope plugins (a committed `.claude/settings.json`) load in any checkout that has the file, and `synced` plugins (from the claude.ai account) wherever the user is signed in **[Assumed]**.
+- **Plugin list.** `claude plugin list --json` (Claude Code 2.1.325) answers an array of `{ id, version, scope, enabled, installPath, installedAt, lastUpdated, projectPath, projectEnabled }` **[Verified]**:
+  - `local` rows have `projectPath`. `user` rows have no `projectPath` key. `session` rows (plugin folders passed with `CLAUDE_CODE_PLUGIN_DIRS`, which Orca sets for the agents it launches) and `synced` rows have only `id, version, scope, enabled, installPath`.
+  - The same `id` can appear once per scope and once per `local` project path, including paths that no longer exist.
+  - It doesn't list a plugin's skills. Those are under `installPath`: `skills/<name>/SKILL.md` and `commands/*.md` by default, plus the paths in `.claude-plugin/plugin.json`. The namespace in `/<namespace>:<skill>` is that manifest's `name`, which can differ from the part of `id` before `@`.
+  - With the worker's reduced environment (see [Worker process](#worker-process)), `execFile('claude', ['plugin', 'list', '--json'])` without a shell resolves `claude.exe` and answers in about 0.7 s without network. The `session` rows are missing, since the worker has no `CLAUDE_CODE_PLUGIN_DIRS`.
 
 To try this from Git Bash, set `MSYS_NO_PATHCONV=1`: otherwise MSYS turns an argument such as `/acme-skills:tdd` into a Windows path (`C:/Program Files/Git/acme-skills:tdd`) before Orca gets it **[Verified]**. Kickoff calls `orca.exe` with `execFile` and no shell, so it isn't affected.
 
