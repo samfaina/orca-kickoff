@@ -4,6 +4,7 @@ import type { Task, TaskList, TaskWorktree } from './protocol'
 import * as panel from './panel'
 
 const web = { id: 'github:acme/web', name: 'web', repo: 'acme/web' }
+const notes = { id: 'repo:r1', name: 'notes', repo: null }
 
 const task = (key: string, fields: Partial<Task> = {}): Task => ({
   tracker: 'github',
@@ -128,29 +129,29 @@ test('says when no project is selected', async () => {
   await view.unmount()
 })
 
+const gear = { type: 'IconButton', label: 'Project settings' }
+const done = { type: 'Button', text: 'Done' }
+const settingsTitle = { type: 'Heading', text: 'Project settings' }
+
 test('the header says "Kickoff ·" and the project\'s name, or only "Kickoff" without a project', async () => {
   const listed = await show(ready([task('#42')]))
   const kickoff = listed.find({ type: 'Text', text: 'Kickoff ·' })
   assert.equal(kickoff?.props.muted, true)
   assert.equal(listed.find({ type: 'Heading', text: 'web' })?.props.level, 2)
   assert.equal(listed.find({ type: 'Heading', text: 'Kickoff' }), null)
-  const gear = listed.find({ type: 'IconButton', label: 'Project settings' })
-  assert.equal(gear?.props.icon, 'settings')
-  assert.equal(gear?.props.tooltip, 'Project settings')
+  const button = listed.find(gear)
+  assert.equal(button?.props.icon, 'settings')
+  assert.equal(button?.props.tooltip, 'Project settings')
   assert.ok(listed.find({ type: 'IconButton', label: 'Reload tasks' }))
   await listed.unmount()
 
   const none = await show({ kind: 'no-project' })
   assert.equal(none.find({ type: 'Heading', text: 'Kickoff' })?.props.level, 2)
   assert.equal(none.find({ type: 'Text', text: 'Kickoff ·' }), null)
-  assert.equal(none.find({ type: 'IconButton', label: 'Project settings' }), null)
+  assert.equal(none.find(gear), null)
   assert.ok(none.find({ type: 'IconButton', label: 'Reload tasks' }))
   await none.unmount()
 })
-
-const gear = { type: 'IconButton', label: 'Project settings' }
-const done = { type: 'Button', text: 'Done' }
-const settingsTitle = { type: 'Heading', text: 'Project settings' }
 
 test('the gear opens Project settings in place of the list, and Done goes back to the list', async () => {
   const view = await show(ready([task('#42')]))
@@ -177,10 +178,12 @@ test('the gear opens Project settings in place of the list, and Done goes back t
   await view.unmount()
 })
 
-test('Project settings opens by itself for a project without a tracker, and Done shows the empty state', async () => {
-  const view = await show({ kind: 'needs-config', project: { id: 'repo:r1', name: 'notes', repo: null } })
-  assert.ok(view.find(settingsTitle))
+test('Project settings opens by itself for a project without a tracker, not an error, and Done shows the empty state', async () => {
+  const view = await show({ kind: 'needs-config', project: notes })
   assert.ok(view.find({ type: 'Text', text: 'notes ·' }))
+  assert.equal(view.find({ type: 'Callout' }), null)
+  assert.equal(view.valueOf({ type: 'Select', label: 'Tracker' }), ':none')
+  assert.deepEqual(optionLabels(view, 'Tracker'), ['Choose a tracker', 'GitHub', 'Jira (Orca connection)', 'Jira (twg)'])
   await view.press(done)
   assert.equal(view.find(settingsTitle), null)
   const empty = view.find({ type: 'EmptyState' })
@@ -198,15 +201,6 @@ test('Project settings opens by itself when the load fails, and Done shows the e
   // A reload that fails again keeps the list the person went back to.
   await view.press({ type: 'IconButton', label: 'Reload tasks' })
   assert.equal(view.find(settingsTitle), null)
-  await view.unmount()
-})
-
-test('a project without a provider shows Project settings, not an error', async () => {
-  const view = await show({ kind: 'needs-config', project: { id: 'repo:r1', name: 'notes', repo: null } })
-  assert.ok(view.find(settingsTitle))
-  assert.equal(view.find({ type: 'Callout' }), null)
-  assert.equal(view.valueOf({ type: 'Select', label: 'Tracker' }), ':none')
-  assert.deepEqual(optionLabels(view, 'Tracker'), ['Choose a tracker', 'GitHub', 'Jira (Orca connection)', 'Jira (twg)'])
   await view.unmount()
 })
 
@@ -319,7 +313,6 @@ async function withIntervals(body: (timers: { tick: (view: TestPanel) => Promise
 const api = { id: 'github:acme/api', name: 'api', repo: 'acme/api' }
 
 test('a change of active project goes back to the list, unless the new project needs Project settings', async () => {
-  const notes = { id: 'repo:r1', name: 'notes', repo: null }
   let answer: TaskList = ready([task('#42')])
   const view = await show(() => answer)
   const changeTo = async (next: TaskList, displayName: string) => {
@@ -959,7 +952,7 @@ test("a Start whose project's settings can't be read fails on its card without a
   await view.unmount()
 })
 
-test('a pending Start option survives a failed template write, and the next Save stores both', async () => {
+test('a pending Project settings change survives a failed template write, and the next Save stores both', async () => {
   let writes = 0
   let data: JsonValue = twoTemplates.settings
   const host = mockHost({
@@ -1668,7 +1661,6 @@ test('a workspace event during a reload reads the worktrees once the reload ends
   })
 })
 
-const notes = { id: 'repo:r1', name: 'notes', repo: null }
 const SITES = { kind: 'ready' as const, sites: [{ id: 'site-1', name: 'Example' }, { id: 'site-2', name: 'Other' }] }
 
 test('whether Project settings is open is kept in memory only, and a panel opened again shows the list', async () => {
