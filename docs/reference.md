@@ -180,12 +180,13 @@ Layout and sizing, from the generated types and `references/components.md` of `o
 
 - No `className`, `style` or DOM tags; an unknown prop or enum value is dropped with a warning. `ui.has(component, prop?)` and `ui.catalog` detect what the installed Orca supports.
 - Inner scroll: `Box` takes `height`, `maxHeight` and `minHeight` (`number` of pixels from 0 to 4096, or a whole percent of the parent such as `'50%'`) and `scroll?: 'x' | 'y' | 'both'`; `y` needs `height` or `maxHeight`. `Table`, `Tree` and `CodeView` take `maxHeight?: 'sm' | 'md' | 'lg' | 'none'` and scroll inside. `Stack`, `Row`, `List`, `Grid`, `Card`, `Collapsible` and `Tabs` have no height or scroll prop. There is no `sticky` or `overflow`.
-- Whether `maxHeight: '100%'` on a `Box` fills the height left in the panel, and how the panel itself scrolls: not known **[Assumed]**.
+- With the whole panel in a `Box direction="column" height="100%"` and the list in a `Box grow minHeight={0} maxHeight="100%" scroll="y"`, the list fills the height left in the panel and only the list scrolls: the header and the search above it stay in place, and the list's last row (Load more) can be reached **[Verified]** (seen by the maintainer in the #46 prototype, Orca 1.4.261, a project with more tasks than fit).
 - Field width: `Select`, `Input` and `Textarea` have no size or width prop (`Textarea` has `rows`, 2 to 20). A `Box` around them sizes them: `width`, `minWidth`, `maxWidth`, `grow` and `shrink={false}`. `Button` and `IconButton` take `size: 'xs' | 'sm' | 'md'`. In a `Stack` with no `align`, fields, tables and cards fill the width and buttons keep their own.
 - `Box` also takes `direction`, `gap`, `padding`, `paddingX`, `paddingY`, `margin`, `align`, `justify`, `wrap`, `columns`, `border`, `radius` and `background`. `Row` takes only `gap`, `align`, `justify` and `wrap`.
 - `Text` takes `tone`, `muted`, `size`, `weight` and a boolean `truncate`; there is no line clamp.
 - `Table`: columns (`width`, `minWidth`, `hideBelow: 'sm' | 'md'` for under 360 px or 480 px, `sortable`), rows of plain cells (`string`, `number`, `boolean`, `null` or a relative time), `selectionMode`, `onRowAction` (Enter or a double click), `sort` and `onSortChange` (the plugin sorts), and `hasMore` with `onLoadMore`, called when scrolling near the last row. Rows scroll inside the table and only those in view are drawn. Cells can't hold components, so a row can't have its own button or `Select`, and there is no built-in filter.
 - `ListItem` takes `title`, `description`, `icon`, `current`, `disabled` and `onPress`; with `onPress` the whole row is the press target and can't hold other controls.
+- `IconButton` with `variant="outline"` and `tone="accent"` draws its icon and border in the text color, with no accent **[Verified]** (seen by the maintainer, Orca 1.4.261).
 - There is no menu, popover, dialog or split button. Tooltips exist only as the `tooltip` prop of `Button` and `IconButton`.
 - `orca plugin shot <key> --width <px>` draws the panel at a given width, to check narrow layouts.
 - A plugin panel's tab shows only the panel's icon, with its title as a tooltip **[Verified]** (seen by the maintainer).
@@ -240,6 +241,12 @@ Icons seen: `rocket`, `play`, `refresh`, `branch`, `close`, `check`.
 Dev commands **[Verified]**: `orca plugin validate .`, `test .`, `check .`, `dev watch .`, `inspect`, `dev request`, `dev emit`, `shot --scenario`.
 
 - `orca plugin shot --act` does not keep the panel's state between captures. After the capture, Orca puts the panel's atoms back, persisted ones included. What the acts did outside the panel stays, such as a `storage.set` or a `plugin.request` that changed the worker's storage. So a JQL typed through `--act` stays in storage while the panel shows the earlier one: `shownSettings` is restored, and `showSettings` doesn't read storage again for the project it already shows, until the plugin is loaded again. `--json` reports `restored: false` when the panel reloaded during `--act` and kept the acted state. **[Verified]** by `orca plugin shot --help` of Orca 1.4.259. The maintainer checked inside Orca that a JQL typed by hand stays in the JQL field after a Reload, a switch to another project and back, and hiding and showing the panel (issue #19).
+- Seen while taking the #46 prototype's shots, with Orca 1.4.261 **[Verified]**:
+  - **`orca plugin shot --scenario` needs Orca's window hidden or minimized.** With the window visible it refuses with "needs the window hidden or minimized".
+  - **`--height` is ignored with `--scenario`.** The image grows to the content's height. `--height` is valid only with `--editor`.
+  - **Scenario replays are flaky.** With tall content (over about 1000 px) or with `--theme dark`, a replay often captures Orca's own window instead of the panel. That window shows the user's real projects, so delete those images and never publish them. Once, a replay drew the previous scenario's state. Keep scenarios short (about 5 tasks), and look at every image before publishing it.
+  - **`--act` with a `select` doesn't redraw before the capture.** It changes the `Select`'s value, but the panel isn't drawn again before the image is taken.
+  - **A full `orca plugin test` in a cross-drive copy can be slow.** One ran for more than 5 minutes without output, and was stopped. Whether it would have finished is not known.
 
 ## Orca CLI
 
