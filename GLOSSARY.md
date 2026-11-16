@@ -29,11 +29,15 @@ The tracker-independent stage of a task: to do, in progress or done. Unlike the 
 _Avoid_: State
 
 **Prompt template**:
-The per-project text, with task variables, that becomes the prompt given to the agent when a task starts.
+A named text with task variables that becomes the prompt given to the agent when a task starts. A project has one or more, each with a name of its own, and each Start uses the one the user chooses for that task.
 _Avoid_: Prompt (that is the filled-in result)
 
+**Default template**:
+The prompt template a project's tasks start with unless the user chooses another one for a task. A project has exactly one.
+_Avoid_: Active template, first template
+
 **Start**:
-The user action that creates a task worktree for a task and launches an agent in it with the filled-in prompt.
+The user action that creates a task worktree for a task and launches an agent in it with the prompt filled from the chosen prompt template. A task is started once; a task that already has a task worktree can't be started again.
 _Avoid_: Launch, kick off, run
 
 **Task worktree**:
