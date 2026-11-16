@@ -317,6 +317,25 @@ Behaviour:
 
 Timing, measured by the maintainer on Windows with Orca 1.4.257 on a small repository (issue #14) **[Verified]**: `worktree create` takes about 25 s without an agent and about 30 s with `--agent` and `--prompt`; `--setup skip` does not make it faster. Through Kickoff's Start on Orca 1.4.259, `task.start` answered in about 3 s and the create ended 19 to 28 s later **[Verified]**. That a larger repository or setup hooks take over a minute **[Assumed]**; Kickoff gives the create 10 minutes.
 
+### Skill commands in `--prompt`
+
+A prompt that starts with a Claude Code slash command runs that skill in the new agent (issue #16). Tried on Windows with Orca 1.4.259 and Claude Code 2.1.325, with `orca worktree create --agent claude --prompt`, `orca agent launch --prompt` and Kickoff's Start from the panel **[Verified]**:
+
+- **Delivery.** On the terminal surface Orca types the prompt into Claude Code's input and submits it (`prompt.delivery: "submit"`, `outcome: "handed-to-terminal"`). On the chat surface it sends it as the first message (`outcome: "journaled"`). Claude Code was ready for it in every try, including straight after `worktree create`. The session transcript (`~/.claude/projects/<slug of the worktree path>/<session>.jsonl`) then holds `<command-name>/<skill></command-name>` and `<command-args>`, followed by the skill's content.
+- **Surface.** Terminal and chat behave the same for a skill that exists. They differ for a name that doesn't:
+  - Terminal: Claude Code prints `Unknown command: /<name>` and `Args from unknown skill: <rest>`, and the prompt never reaches the model. The agent sits idle.
+  - Chat: the text reaches the model as plain text, and the model answers that it can't find the skill.
+- **Agent.** Only `claude` was tried. Kickoff's agent choice and Orca's default agent can pick another one. Other agents have their own command syntax, or none **[Assumed]**.
+- **Position.** Whitespace or a blank line before the `/` is removed before Claude Code reads the input, and the command still runs. Any text before it (`Please run /acme-skills:tdd`) makes the whole prompt plain text. The model may still choose to load the skill with its Skill tool, but nothing guarantees it.
+- **Several lines.** The prompt arrives as one message. Everything after the command name, newlines and blank lines included, becomes the skill's arguments (`ARGUMENTS:`). So `{{task_description}}` can follow the command.
+- **Names.** A user skill (`~/.claude/skills/<name>`) and a project skill (`<worktree>/.claude/skills/<name>`) run by their bare name. A plugin skill runs with its namespace (`/acme-skills:tdd`) and also by its bare name (`/tdd`): Claude Code rewrites a bare name to the namespaced one, on both surfaces. When a built-in command has the same name, the built-in wins: `/code-review` runs Claude Code's own command, not `acme-skills:code-review`. A partial name (`/grill` for `grilling`) is unknown.
+- **What a new worktree sees.** The agent runs in the new worktree's folder, so it loads what Claude Code loads for that path, which is not always what the main checkout has:
+  - A plugin installed with `local` scope is enabled for one project path only (`projectPath` in `claude plugin list --json`). A new worktree is another path, so its skills are unknown there. This was the cause of the failed Start in issue #16; installing the plugin with `user` scope fixed it.
+  - A project skill in `<repo>/.claude/skills` that isn't committed is not in the new worktree: Orca doesn't copy untracked files into it.
+  - User skills and `user`-scope plugins are seen everywhere.
+
+To try this from Git Bash, set `MSYS_NO_PATHCONV=1`: otherwise MSYS turns an argument such as `/acme-skills:tdd` into a Windows path (`C:/Program Files/Git/acme-skills:tdd`) before Orca gets it **[Verified]**. Kickoff calls `orca.exe` with `execFile` and no shell, so it isn't affected.
+
 ### `orca worktree activate --worktree id:<id> --json`
 
 Shows the worktree in Orca **[Verified]** (help only, not run).

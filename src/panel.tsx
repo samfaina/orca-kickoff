@@ -661,6 +661,9 @@ function StartOptionsSection() {
         <Text size="sm" muted>
           {`Variables: ${TEMPLATE_VARIABLES.map((name) => `{{${name}}}`).join(', ')}. An empty template gives the task URL.`}
         </Text>
+        <Text size="sm" muted>
+          {'To run a Claude Code skill, start the template with its command, for example `/tdd {{task_key}}`: the rest of the template becomes its arguments. The new worktree must see the skill, so install plugins with user scope, not local, and commit project skills. Other agents have their own syntax.'}
+        </Text>
       </Stack>
     </Collapsible>
   )
