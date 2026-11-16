@@ -452,7 +452,7 @@ Successful output **[Verified]** (no `ok` key):
 
   - `emailAddress` is the assignee's email: Kickoff reads only `displayName`.
   - An unassigned task has `assignee: null` **[Verified]**.
-- `description` is ADF (Jira's JSON document format), an object `{ type: 'doc', version: 1, content: [...] }` **[Verified]**. An empty description is expected to be `null` **[Assumed]**. Node types seen: `paragraph`, `orderedList` (with `attrs.order`), `listItem` and `text`. Others, such as `heading`, `bulletList`, `codeBlock`, `hardBreak`, `mention` and `inlineCard`, follow Atlassian's ADF documentation **[Assumed]**; `src/adf.ts` handles them.
+- `description` is ADF (Jira's JSON document format), an object `{ type: 'doc', version: 1, content: [...] }` **[Verified]**. An empty description is expected to be `null` **[Assumed]**. Node types seen: `paragraph`, `orderedList` (with `attrs.order`), `listItem` and `text`. Also `heading` (with `attrs.level`), `bulletList` (nested inside a list item too), `codeBlock` (with `attrs.language`, its text holding blank lines), `hardBreak`, `blockquote` and `rule`, plus the marks `strong`, `em`, `code` and `link` **[Verified]**: the maintainer saw them reach a started agent's prompt as readable plain text inside Orca (issue #22, version not recorded). A link written as HTML `<a>` becomes a `link` mark, not an `inlineCard`. `mention` and `inlineCard` follow Atlassian's ADF documentation **[Assumed]**; `src/adf.ts` handles them.
 
 Errors **[Verified]**:
 
