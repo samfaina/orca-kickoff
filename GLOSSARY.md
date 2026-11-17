@@ -28,6 +28,14 @@ _Avoid_: Task id, number
 The tracker-independent stage of a task: to do, in progress or done. Unlike the status name, it does not change with the tracker's language or workflow.
 _Avoid_: State
 
+**Filter**:
+Narrowing the tasks already loaded in the panel to those whose task key, title or a label contains what the user typed. It never asks the tracker.
+_Avoid_: Search, local search
+
+**Tracker search**:
+Asking the tracker for the tasks of the project's own list that match the user's words, including tasks not loaded yet. It only narrows that list: it never finds tasks outside it.
+_Avoid_: Search (alone), remote search, query
+
 **Prompt template**:
 A named text with task variables that becomes the prompt given to the agent when a task starts. A project has one or more, each with a name of its own, and each Start uses the one the user chooses for that task.
 _Avoid_: Prompt (that is the filled-in result)
