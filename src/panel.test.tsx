@@ -7,8 +7,10 @@ import * as panel from './panel'
  *  poll, a real `setInterval`, running, and then `orca plugin test` never exits. */
 const mounted = new Set<TestPanel>()
 
-/** `mount` from `orca/testing`, for a view that is unmounted when the test ends even if the test
- *  fails before its own `unmount()`. */
+/** `mount` from `orca/testing`, for a view that is unmounted when the test ends, passing or failing,
+ *  or earlier when `withIntervals` ends. That is how a test's views normally get unmounted: a test
+ *  calls `unmount()` itself only when more work follows, such as another statement, the next loop
+ *  iteration, or `withTimeouts` putting the real timers back, since its `finally` doesn't unmount. */
 const mount: typeof mountUntracked = async (target, options) => {
   const view = await mountUntracked(target, options)
   const unmount = view.unmount
