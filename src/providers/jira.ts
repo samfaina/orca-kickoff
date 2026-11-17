@@ -1,8 +1,9 @@
-// What both Jira providers share: the task shape, the status category and the rule that a blank
-// JQL never runs.
+// What both Jira providers share: the task shape, the status category, the rule that a blank
+// JQL never runs and the JQL of a tracker search.
 import { CliError } from '../cli'
 import { isRecord, text } from '../json'
 import { DEFAULT_JQL, type Task } from '../protocol'
+import { searchWords } from './types'
 
 /** The fields of one Jira issue, as each provider finds them in its tool's output. */
 export type JiraIssueFields = {
@@ -57,4 +58,54 @@ export function requireJql(jql: string): string {
   const trimmed = jql.trim()
   if (!trimmed) throw new CliError(`Enter a JQL query to list Jira tasks, for example: ${DEFAULT_JQL}`)
   return trimmed
+}
+
+/** The JQL that narrows the user's `jql` to the tasks matching the words of `query`, or `jql`
+ *  unchanged when the query has none. Its conditions go in parentheses before the match, and its
+ *  `ORDER BY` stays after it: Jira rejects an `ORDER BY` inside parentheses. Each word matches as
+ *  a prefix, and a word shaped like a task key also matches that key, which `text ~` doesn't. */
+export function jiraSearchJql(jql: string, query = ''): string {
+  const words = searchWords(query)
+  if (words.length === 0) return jql
+  const text = `text ~ "${words.map((word) => `${jqlStringContent(word)}*`).join(' ')}"`
+  const keys = [...new Set(words.filter(isJiraTaskKey).map((word) => word.toUpperCase()))].map((key) => `key = "${key}"`)
+  const match = `(${[text, ...keys].join(' OR ')})`
+  const { conditions, orderBy } = splitJql(jql)
+  const narrowed = conditions === '' ? match : `(${conditions}) AND ${match}`
+  return orderBy === null ? narrowed : `${narrowed} ${orderBy}`
+}
+
+/** A JQL split into its conditions and its top-level `ORDER BY ...`, matched in any case and
+ *  never inside a quoted string. `orderBy` is null when the JQL has none. */
+export function splitJql(jql: string): { conditions: string; orderBy: string | null } {
+  let quote: string | null = null
+  let depth = 0
+  for (let index = 0; index < jql.length; index++) {
+    const char = jql[index]
+    if (quote !== null) {
+      if (char === '\\') index++
+      else if (char === quote) quote = null
+    } else if (char === '"' || char === "'") {
+      quote = char
+    } else if (char === '(') {
+      depth++
+    } else if (char === ')') {
+      depth--
+    } else if (depth === 0 && /^order\s+by\b/i.test(jql.slice(index)) && !/\w/.test(jql[index - 1] ?? '')) {
+      return { conditions: jql.slice(0, index).trim(), orderBy: jql.slice(index).trim() }
+    }
+  }
+  return { conditions: jql.trim(), orderBy: null }
+}
+
+/** Whether a word has the shape of a Jira task key, in any case: letters, then letters, digits or
+ *  `_`, then `-` and digits. Only such a word may go into `key = "..."`: a malformed key makes the
+ *  whole JQL fail, while a well-formed one that doesn't exist matches nothing. */
+export function isJiraTaskKey(word: string): boolean {
+  return /^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(word)
+}
+
+/** `value` escaped to go between the double quotes of a JQL string. */
+function jqlStringContent(value: string): string {
+  return value.replace(/[\\"]/g, (char) => `\\${char}`)
 }

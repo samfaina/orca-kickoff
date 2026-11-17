@@ -60,6 +60,34 @@ test("gh's open issues become tasks keyed #n, with the body as description", asy
   })
 })
 
+const LIST_ARGS = ['issue', 'list', '--repo', 'acme/web', '--state', 'open', '--limit', '100', '--json', 'number,title,url,body,labels,assignees']
+
+test('a tracker search adds --search with each word quoted, without its quotes, and #42 as a bare number', async () => {
+  const { run, calls } = answering('[]')
+  await github.list(run, web, {}, { query: ' fix  "login" #42 ' })
+  assert.deepEqual(calls[0].args, [...LIST_ARGS, '--search', '"fix" "login" "42"'])
+})
+
+test('a qualifier typed in a tracker search is searched as text', async () => {
+  const { run, calls } = answering('[]')
+  await github.list(run, web, {}, { query: 'is:closed is:pr' })
+  assert.deepEqual(calls[0].args.slice(-2), ['--search', '"is:closed" "is:pr"'])
+})
+
+test('a blank tracker search, or one of quotes only, lists the whole list', async () => {
+  const { run, calls } = answering('[]')
+  await github.list(run, web, {}, { query: '   ' })
+  await github.list(run, web, {}, { query: ' "" ' })
+  assert.deepEqual(calls.map((call) => call.args), [LIST_ARGS, LIST_ARGS])
+})
+
+test('100 tracker search results mean they are truncated', async () => {
+  const { run } = answering(JSON.stringify(Array.from({ length: 100 }, (_, index) => issue(index + 1))))
+  const page = await github.list(run, web, {}, { query: 'dark' })
+  assert.equal(page.truncated, true)
+  assert.equal(page.nextCursor, null)
+})
+
 test('an issue without title or URL is dropped', async () => {
   const { run } = answering(JSON.stringify([issue(1, { title: '' }), issue(2, { url: undefined }), issue(3, { body: null })]))
   const page = await github.list(run, web, {})

@@ -99,7 +99,7 @@ const searchField = { type: 'Input', label: 'Search tasks' }
 /** The keys of `keys` whose card the panel shows, once each. */
 const keysShown = (view: TestPanel, keys: string[]) => keys.filter((key) => view.findAll({ type: 'Link', text: key }).length === 1)
 
-test('the search above the list shows only the loaded tasks whose key, title or label contains it', async () => {
+test('typing in the field above the list filters the loaded tasks to those whose key, title or label contains it', async () => {
   const view = await show(ready([task('#42', { title: 'Add dark mode', labels: ['ui'] }), task('#7', { title: 'Fix login' }), task('#8', { labels: ['UI polish'] })]))
   const field = view.find(searchField)
   assert.equal(field?.props.type, 'search')
@@ -117,22 +117,215 @@ test('the search above the list shows only the loaded tasks whose key, title or 
   await view.unmount()
 })
 
-test('while more tasks exist than are loaded, the search says it filters the loaded ones', async () => {
-  const hint = (count: number) => ({ type: 'Text', text: `Filtering ${count} loaded tasks` })
-  const paged = await show(ready([task('#1'), task('#2')], { nextCursor: 'cursor-2' }))
-  assert.equal(paged.find(hint(2))?.props.muted, true)
-  await paged.unmount()
+test('while the field is not blank, the hint says it filters the loaded tasks and that Enter searches the tracker', async () => {
+  const github = await show(ready([task('#1'), task('#2')]))
+  assert.equal(github.find({ type: 'Text', text: /^Filtering/ }), null)
+  await github.type(searchField, 'dark')
+  assert.equal(github.find({ type: 'Text', text: 'Filtering 2 loaded tasks · Enter searches GitHub' })?.props.muted, true)
+  await github.type(searchField, '   ', { replace: true })
+  assert.equal(github.find({ type: 'Text', text: /^Filtering/ }), null)
+  await github.unmount()
 
-  const truncated = await show(ready([task('#1'), task('#2'), task('#3')], { truncated: true }))
-  assert.ok(truncated.find(hint(3)))
-  await truncated.unmount()
-
-  const whole = await show(ready([task('#1'), task('#2')]))
-  assert.equal(whole.find({ type: 'Text', text: /^Filtering/ }), null)
-  await whole.unmount()
+  const jira = await show(ready([task('WEB-1', { tracker: 'jira' })], { provider: 'jira-twg', nextCursor: 'cursor-2' }))
+  assert.equal(jira.find({ type: 'Text', text: /^Filtering/ }), null)
+  await jira.type(searchField, 'dark')
+  assert.ok(jira.find({ type: 'Text', text: 'Filtering 1 loaded tasks · Enter searches Jira' }))
+  await jira.unmount()
 })
 
-test('a search that no loaded task matches says so, and an empty project still says it has no open tasks', async () => {
+const searchIn = (tracker: string) => ({ type: 'Button', text: `Search in ${tracker}` })
+const clearSearch = { type: 'Button', text: 'Clear search' }
+
+type LoadInput = { cursor?: string; query?: string }
+
+/** A panel whose `tasks.load` answers `list` without a query and `found(query)` with one, and the
+ *  inputs it was asked with. */
+async function showSearching(list: TaskList, found: (query: string, input: LoadInput) => TaskList | Promise<TaskList>) {
+  const inputs: LoadInput[] = []
+  const view = await show(async (input: LoadInput) => {
+    inputs.push(input)
+    return input.query === undefined ? list : found(input.query, input)
+  })
+  return { view, inputs }
+}
+
+test('Enter or "Search in GitHub" with a non-blank field asks the tracker for the trimmed words; a blank field asks nothing', async () => {
+  const { view, inputs } = await showSearching(ready([task('#1'), task('#2')]), () => ready([task('#90')]))
+  assert.equal(view.find(searchIn('GitHub')), null)
+  await view.type(searchField, '   ')
+  assert.equal(view.find(searchIn('GitHub')), null)
+  await view.submit(searchField)
+  assert.deepEqual(inputs, [{}])
+
+  await view.type(searchField, '  dark mode ', { replace: true })
+  await view.submit(searchField)
+  assert.deepEqual(inputs, [{}, { query: 'dark mode' }])
+  await view.press(searchIn('GitHub'))
+  assert.deepEqual(inputs, [{}, { query: 'dark mode' }, { query: 'dark mode' }])
+  assert.deepEqual(view.warnings, [])
+  await view.unmount()
+
+  const jira = await showSearching(ready([task('WEB-1', { tracker: 'jira' })], { provider: 'jira-orca' }), () => ready([], { provider: 'jira-orca' }))
+  await jira.view.type(searchField, 'dark')
+  await jira.view.press(searchIn('Jira'))
+  assert.deepEqual(jira.inputs, [{}, { query: 'dark' }])
+  await jira.view.unmount()
+})
+
+test('the results replace the list, without the filter, under "Results in GitHub for" and Clear search', async () => {
+  const { view } = await showSearching(ready([task('#1', { title: 'Dark mode' }), task('#2')]), () =>
+    ready([task('#90', { title: 'Settings page' }), task('#91', { title: 'Theme' })])
+  )
+  await view.type(searchField, ' dark ')
+  await view.submit(searchField)
+  assert.deepEqual(keysShown(view, ['#1', '#2', '#90', '#91']), ['#90', '#91'])
+  assert.ok(view.find({ type: 'Text', text: 'Results in GitHub for "dark"' }))
+  assert.ok(view.find(clearSearch))
+  assert.equal(view.find({ type: 'Text', text: /^Filtering/ }), null)
+  assert.deepEqual(view.warnings, [])
+  await view.unmount()
+})
+
+test('a tracker search without results says that no task in the tracker matches', async () => {
+  const github = await showSearching(ready([task('#1')]), () => ready([]))
+  await github.view.type(searchField, 'nothing')
+  await github.view.submit(searchField)
+  assert.equal(github.view.find({ type: 'Text', text: 'No task in GitHub matches "nothing".' })?.props.muted, true)
+  assert.equal(github.view.find({ type: 'EmptyState' }), null)
+  assert.equal(github.view.find({ type: 'Link', text: '#1' }), null)
+  await github.view.unmount()
+
+  const jira = await showSearching(ready([], { provider: 'jira-twg' }), () => ready([], { provider: 'jira-twg' }))
+  await jira.view.type(searchField, 'nothing')
+  await jira.view.submit(searchField)
+  assert.ok(jira.view.find({ type: 'Text', text: 'No task in Jira matches "nothing".' }))
+  assert.ok(jira.view.find({ type: 'Text', text: 'Results in Jira for "nothing"' }))
+  await jira.view.unmount()
+})
+
+test('editing the field or Clear search goes back to the loaded pages, with the filter, without loading them again', async () => {
+  const inputs: LoadInput[] = []
+  const view = await show(({ cursor, query }: LoadInput) => {
+    inputs.push(cursor === undefined ? { query } : { cursor, query })
+    if (query !== undefined) return ready([task('WEB-90', { tracker: 'jira' })], { provider: 'jira-twg' })
+    if (cursor) return ready([task('WEB-3', { tracker: 'jira', title: 'Login page' })], { provider: 'jira-twg' })
+    return ready([task('WEB-1', { tracker: 'jira', title: 'Login form' }), task('WEB-2', { tracker: 'jira' })], { provider: 'jira-twg', nextCursor: 'cursor-2' })
+  })
+  await view.press({ type: 'Button', text: /· Load more$/ })
+  const keys = ['WEB-1', 'WEB-2', 'WEB-3', 'WEB-90']
+  await view.type(searchField, 'login')
+  await view.submit(searchField)
+  assert.deepEqual(keysShown(view, keys), ['WEB-90'])
+  const asked = inputs.length
+
+  await view.type(searchField, ' form')
+  assert.equal(view.find({ type: 'Text', text: /^Results in/ }), null)
+  assert.deepEqual(keysShown(view, keys), ['WEB-1'])
+  assert.equal(view.valueOf(searchField), 'login form')
+
+  await view.submit(searchField)
+  assert.deepEqual(keysShown(view, keys), ['WEB-90'])
+  await view.press(clearSearch)
+  assert.equal(view.valueOf(searchField), '')
+  assert.deepEqual(keysShown(view, keys), ['WEB-1', 'WEB-2', 'WEB-3'])
+  assert.equal(view.find(clearSearch), null)
+  assert.deepEqual(inputs, [{ query: undefined }, { cursor: 'cursor-2', query: undefined }, { query: 'login' }, { query: 'login form' }])
+  assert.equal(inputs.length, asked + 1)
+  await view.unmount()
+})
+
+test('editing the field while a tracker search loads drops its answer and keeps the loaded pages, without loading them again', async () => {
+  const answer = held()
+  const inputs: LoadInput[] = []
+  const view = await show(async ({ cursor, query }: LoadInput) => {
+    inputs.push({ cursor, query })
+    if (query !== undefined) {
+      await answer.released
+      return ready([task('#90')])
+    }
+    return cursor ? ready([task('#2')]) : ready([task('#1')], { nextCursor: 'cursor-2' })
+  })
+  await view.press({ type: 'Button', text: /· Load more$/ })
+  await view.type(searchField, 'task')
+  const submitted = view.submit(searchField)
+  try {
+    await drawn(view, { type: 'Spinner', label: 'Searching GitHub' })
+    const typed = view.type(searchField, ' #')
+    await turn()
+    answer.release()
+    await submitted
+    await typed
+  } finally {
+    answer.release()
+  }
+  await view.settled()
+  assert.equal(view.valueOf(searchField), 'task #')
+  assert.deepEqual(keysShown(view, ['#1', '#2', '#90']), ['#1', '#2'])
+  assert.equal(view.find({ type: 'Text', text: /^Results in/ }), null)
+  assert.deepEqual(inputs, [
+    { cursor: undefined, query: undefined },
+    { cursor: 'cursor-2', query: undefined },
+    { cursor: undefined, query: 'task' }
+  ])
+  await view.unmount()
+})
+
+test('a change of active project seen by the poll leaves the tracker search before loading the new list', async () => {
+  await withIntervals(async ({ tick }) => {
+    let project = web
+    const inputs: LoadInput[] = []
+    const { view } = await showWith({
+      'tasks.load': ({ query }) => {
+        inputs.push({ query })
+        return query === undefined ? ready([task(project === web ? '#1' : '#9')], { project }) : ready([task('#90')], { project })
+      },
+      'project.active': () => ({ projectId: project.id })
+    })
+    await view.type(searchField, 'dark')
+    await view.submit(searchField)
+    project = api
+    await tick(view)
+    assert.deepEqual(inputs, [{ query: undefined }, { query: 'dark' }, { query: undefined }])
+    assert.equal(view.valueOf(searchField), '')
+    assert.deepEqual(keysShown(view, ['#1', '#9', '#90']), ['#9'])
+    await view.unmount()
+  })
+})
+
+test('while a tracker search loads, the list shows a spinner in place of the tasks', async () => {
+  const answer = held()
+  const { view } = await showSearching(ready([task('#1')]), async () => {
+    await answer.released
+    return ready([task('#90')])
+  })
+  await view.type(searchField, 'dark')
+  const submitted = view.submit(searchField)
+  await drawn(view, { type: 'Spinner', label: 'Searching GitHub' })
+  const cardWhileLoading = view.find({ type: 'Link', text: '#1' })
+  const titleWhileLoading = view.find({ type: 'Text', text: 'Results in GitHub for "dark"' })
+  answer.release()
+  await submitted
+  assert.equal(cardWhileLoading, null)
+  assert.ok(titleWhileLoading)
+  assert.equal(view.find({ type: 'Spinner', label: 'Searching GitHub' }), null)
+  assert.ok(view.find({ type: 'Link', text: '#90' }))
+  await view.unmount()
+})
+
+test('a failed tracker search shows like a load error, and Clear search goes back to the list', async () => {
+  const { view } = await showSearching(ready([task('#1')]), () => ({ kind: 'error', project: web, message: 'gh failed: HTTP 502.' }))
+  await view.type(searchField, 'dark')
+  await view.submit(searchField)
+  assert.ok(view.find({ type: 'Callout', text: /Couldn't load tasks.*HTTP 502/ }))
+  assert.equal(view.find(settingsTitle), null)
+  assert.equal(view.find({ type: 'Link', text: '#1' }), null)
+  await view.press(clearSearch)
+  assert.ok(view.find({ type: 'Link', text: '#1' }))
+  assert.equal(view.find({ type: 'Callout' }), null)
+  await view.unmount()
+})
+
+test('a filter that no loaded task matches says so, and an empty project still says it has no open tasks', async () => {
   const view = await show(ready([task('#42')]))
   await view.type(searchField, ' dark mode ')
   assert.equal(view.find({ type: 'Link', text: '#42' }), null)
@@ -147,7 +340,7 @@ test('a search that no loaded task matches says so, and an empty project still s
   await empty.unmount()
 })
 
-test('only the list scrolls: the header, the warnings and the search stay above it, and Load more and the truncation notice end it', async () => {
+test('only the list scrolls: the header, the warnings and the field stay above it, and Load more and the truncation notice end it', async () => {
   const view = await show(ready([task('#1'), task('#2')], { nextCursor: 'cursor-2', truncated: true, warning: 'Using the last known project (web).' }))
   const frame = view.tree()
   assert.ok(frame && typeof frame !== 'string')
@@ -547,7 +740,7 @@ test('a change of active project goes back to the list, unless the new project n
   await view.unmount()
 })
 
-test('the search stays through a reload and "Load more", and a change of active project clears it', async () => {
+test('the filter stays through a reload and "Load more", and a change of active project clears it', async () => {
   let answer: (input: { cursor?: string }) => TaskList = ({ cursor }) =>
     cursor ? ready([task('#3', { title: 'Dark theme' }), task('#4')]) : ready([task('#1', { title: 'Dark mode' }), task('#2')], { nextCursor: 'cursor-2' })
   const view = await show((input) => answer(input))
@@ -561,7 +754,7 @@ test('the search stays through a reload and "Load more", and a change of active 
   assert.equal(view.valueOf(searchField), 'dark')
   assert.deepEqual(keysShown(view, ['#1', '#2', '#3', '#4']), ['#1', '#3'])
 
-  // A worker that didn't answer says nothing about the project, and a reload of it keeps the search.
+  // A worker that didn't answer says nothing about the project, and a reload of it keeps the filter.
   answer = () => {
     throw hostError('timeout', 'Request timed out')
   }
@@ -2385,6 +2578,122 @@ test('a "Load more" failure keeps the loaded tasks and says why', async () => {
   assert.ok(view.find({ type: 'Link', text: 'WEB-1' }))
   assert.ok(view.find({ type: 'Text', text: /The cursor has expired/ }))
   assert.ok(view.find({ type: 'Button', text: /· Load more$/ }))
+  await view.unmount()
+})
+
+test('100 tracker search results say to refine the search, not the list notice', async () => {
+  for (const provider of ['github', 'jira-orca'] as const) {
+    const { view } = await showSearching(ready([task('#1')], { provider, truncated: true }), () => ready([task('#90')], { provider, truncated: true }))
+    await view.type(searchField, 'dark')
+    await view.submit(searchField)
+    assert.equal(view.find({ type: 'Text', text: 'Showing the first 100 results — refine your search' })?.props.muted, true)
+    assert.equal(view.find({ type: 'Text', text: /repository's issues|narrow your JQL/ }), null)
+    await view.press(clearSearch)
+    assert.equal(view.find({ type: 'Text', text: /refine your search/ }), null)
+    await view.unmount()
+  }
+})
+
+test('"Load more" during a tracker search sends its words with the cursor and appends to its results', async () => {
+  const inputs: LoadInput[] = []
+  const { view } = await showWith(
+    {
+      'tasks.load': ({ cursor, query }) => {
+        inputs.push({ cursor, query })
+        if (query === undefined) return twgReady([twgTask('WEB-1')], { nextCursor: 'list-2' })
+        return cursor ? twgReady([twgTask('WEB-91'), twgTask('WEB-92')]) : twgReady([twgTask('WEB-90'), twgTask('WEB-91')], { nextCursor: 'found-2' })
+      }
+    },
+    twgStored({ jql: 'project = WEB', site: '', profile: '' })
+  )
+  await view.type(searchField, 'dark')
+  await view.submit(searchField)
+  assert.ok(view.find({ type: 'Button', text: 'Showing 2 · Load more' }))
+  await view.press({ type: 'Button', text: /· Load more$/ })
+  assert.deepEqual(inputs.slice(1), [
+    { cursor: undefined, query: 'dark' },
+    { cursor: 'found-2', query: 'dark' }
+  ])
+  assert.deepEqual(keysShown(view, ['WEB-1', 'WEB-90', 'WEB-91', 'WEB-92']), ['WEB-90', 'WEB-91', 'WEB-92'])
+  assert.equal(view.find({ type: 'Button', text: /· Load more$/ }), null)
+
+  await view.press(clearSearch)
+  assert.ok(view.find({ type: 'Button', text: 'Showing 1 · Load more' }))
+  assert.deepEqual(keysShown(view, ['WEB-1', 'WEB-90']), ['WEB-1'])
+  await view.unmount()
+})
+
+test('Reload during a tracker search runs it again, and a Start keeps its results in place', async () => {
+  let searches = 0
+  const inputs: LoadInput[] = []
+  const { view } = await showWith({
+    'tasks.load': ({ query }) => {
+      inputs.push({ query })
+      return query === undefined ? ready([task('#1')]) : ready([task('#90'), task(`#${90 + ++searches}`)])
+    },
+    'task.start': { ok: true, underWay: false },
+    'worktrees.load': { kind: 'ready', worktrees: { '#90': { worktreeId: 'r1::/src/web-90', name: 'issue-90-task-90', agent: 'claude' } } }
+  })
+  await view.type(searchField, 'dark')
+  await view.submit(searchField)
+  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  assert.deepEqual(inputs, [{ query: undefined }, { query: 'dark' }, { query: 'dark' }])
+  assert.deepEqual(keysShown(view, ['#1', '#90', '#91', '#92']), ['#90', '#92'])
+  assert.ok(view.find({ type: 'Text', text: 'Results in GitHub for "dark"' }))
+
+  await view.press({ testId: 'start:#90' })
+  assert.deepEqual(keysShown(view, ['#1', '#90', '#92']), ['#90', '#92'])
+  assert.ok(view.find({ type: 'Link', text: 'issue-90-task-90' }))
+  assert.equal(inputs.length, 3)
+  assert.deepEqual(view.errors, [])
+  await view.unmount()
+})
+
+test('a change of active project clears the tracker search and the field', async () => {
+  let project = web
+  const inputs: LoadInput[] = []
+  const view = await show(({ query }: LoadInput) => {
+    inputs.push({ query })
+    return query === undefined ? ready([task(project === web ? '#1' : '#9')], { project }) : ready([task('#90')], { project })
+  })
+  await view.type(searchField, 'dark')
+  await view.submit(searchField)
+  project = api
+  await view.emit('workspace.changed', { context: { branch: 'main', displayName: 'api', terminals: [] } })
+  await view.settled()
+  assert.equal(view.find({ type: 'Text', text: /^Results in/ }), null)
+  assert.equal(view.valueOf(searchField), '')
+  assert.deepEqual(keysShown(view, ['#1', '#9', '#90']), ['#9'])
+  assert.deepEqual(inputs, [{ query: undefined }, { query: 'dark' }, { query: 'dark' }, { query: undefined }])
+  await view.unmount()
+})
+
+test('a change of the tracker in Project settings clears the tracker search', async () => {
+  const inputs: LoadInput[] = []
+  const { view } = await showWith(
+    {
+      'tasks.load': ({ query }) => {
+        inputs.push({ query })
+        return query === undefined ? twgReady([twgTask('WEB-1')]) : twgReady([twgTask('WEB-90')])
+      }
+    },
+    twgStored({ jql: 'project = WEB', site: '', profile: '' })
+  )
+  await view.type(searchField, 'web')
+  await view.submit(searchField)
+  await view.press(gear)
+  await view.type({ type: 'Input', label: 'JQL' }, ' AND labels = ui')
+  await view.press(done)
+  assert.equal(view.find({ type: 'Text', text: /^Results in/ }), null)
+  assert.equal(view.valueOf(searchField), 'web')
+  assert.deepEqual(keysShown(view, ['WEB-1', 'WEB-90']), ['WEB-1'])
+
+  await view.submit(searchField)
+  await view.press(gear)
+  await view.submit({ type: 'Input', label: 'JQL' })
+  await view.press(done)
+  assert.equal(view.find({ type: 'Text', text: /^Results in/ }), null)
+  assert.deepEqual(inputs, [{ query: undefined }, { query: 'web' }, { query: 'web' }, { query: undefined }])
   await view.unmount()
 })
 

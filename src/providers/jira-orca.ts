@@ -1,10 +1,10 @@
 // Jira through the connection saved in Orca's settings, with `orca jira search`. Orca has no cursor
-// for it, so a page is the first 100 tasks.
+// for it, so a page is the first 100 tasks, of the whole list or of a tracker search.
 import { unreadableOutput } from '../cli'
 import { isRecord, text } from '../json'
 import { orcaResult } from '../orca'
 import type { ProviderConfigs, Task } from '../protocol'
-import { jiraTask, requireJql } from './jira'
+import { jiraSearchJql, jiraTask, requireJql } from './jira'
 import type { Provider } from './types'
 
 const LIMIT = 100
@@ -13,8 +13,8 @@ export const jiraOrca: Provider<Required<ProviderConfigs>['jira-orca']> = {
   id: 'jira-orca',
   tracker: 'jira',
   label: 'Jira (Orca connection)',
-  async list(run, _project, config) {
-    const args = ['jira', 'search', requireJql(config.jql), '--limit', String(LIMIT), '--json']
+  async list(run, _project, config, request = {}) {
+    const args = ['jira', 'search', jiraSearchJql(requireJql(config.jql), request.query), '--limit', String(LIMIT), '--json']
     if (config.siteId !== '') args.push('--site', config.siteId)
     const issues = orcaResult(await run('orca', args))
     if (!Array.isArray(issues)) throw unreadableOutput('orca')

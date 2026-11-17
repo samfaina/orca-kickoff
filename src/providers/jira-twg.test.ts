@@ -132,11 +132,29 @@ test('an item without key or URL is dropped', async () => {
 test('the arguments include --output json, and --site, --profile and --after only when set', async () => {
   const { run, calls } = answering(response([]))
   await jiraTwg.list(run, notes, config)
-  await jiraTwg.list(run, notes, { jql: 'project = WEB', site: ' example ', profile: 'work' }, 'cursor-2')
-  await jiraTwg.list(run, notes, { jql: 'project = WEB', site: '  ', profile: ' ' }, '')
+  await jiraTwg.list(run, notes, { jql: 'project = WEB', site: ' example ', profile: 'work' }, { cursor: 'cursor-2' })
+  await jiraTwg.list(run, notes, { jql: 'project = WEB', site: '  ', profile: ' ' }, { cursor: '' })
   assert.deepEqual(calls[0], { tool: 'twg', args: BASE_ARGS })
   assert.deepEqual(calls[1].args, [...BASE_ARGS, '--site', 'example', '--profile', 'work', '--after', 'cursor-2'])
   assert.deepEqual(calls[2].args, BASE_ARGS)
+})
+
+test('a tracker search runs the JQL narrowed to the words, and its next page sends the words again with the cursor', async () => {
+  const { run, calls } = answering(response([issue('WEB-1')], { hasNextPage: true, nextCursor: 'cursor-2' }))
+  const jql = 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC'
+  const narrowed = '(assignee = currentUser() AND statusCategory != Done) AND (text ~ "dark* web-12*" OR key = "WEB-12") ORDER BY updated DESC'
+  const first = await jiraTwg.list(run, notes, { jql, site: '', profile: '' }, { query: 'dark web-12' })
+  assert.equal(first.nextCursor, 'cursor-2')
+  await jiraTwg.list(run, notes, { jql, site: '', profile: '' }, { query: 'dark web-12', cursor: 'cursor-2' })
+  const withJql = BASE_ARGS.map((arg) => (arg === 'project = WEB' ? narrowed : arg))
+  assert.deepEqual(calls[0].args, withJql)
+  assert.deepEqual(calls[1].args, [...withJql, '--after', 'cursor-2'])
+})
+
+test("a blank JQL doesn't run a tracker search either", async () => {
+  const { run, calls } = answering(response([]))
+  await assert.rejects(jiraTwg.list(run, notes, { jql: ' ', site: '', profile: '' }, { query: 'dark' }), /Enter a JQL query/)
+  assert.equal(calls.length, 0)
 })
 
 test('the next cursor comes from pageInfo only when there is a next page', async () => {
