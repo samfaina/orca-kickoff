@@ -973,14 +973,21 @@ function detailParts(view: TestPanel) {
   assert.ok(frame && typeof frame !== 'string')
   assert.equal(frame.type, 'Box')
   assertProps(frame, { direction: 'column', height: '100%' })
-  const [title, form, ...rest] = elementsIn(frame)
+  const [title, form, deleteBar, ...extra] = elementsIn(frame) as (TreeSnapshot | undefined)[]
   assert.ok(title && form)
-  assert.ok(rest.length <= 1)
-  return { frame, title, form, deleteBar: rest[0] as TreeSnapshot | undefined }
+  assert.deepEqual(extra, [])
+  return { frame, title, form, deleteBar }
 }
 
 /** The text of each button under `node`, in order. */
 const buttonsIn = (node: TreeSnapshot) => nodesIn(node, (inner) => inner.type === 'Button').map(wordsOf)
+
+/** The button under `node` whose text is `text`. */
+function buttonIn(node: TreeSnapshot, text: string): TreeSnapshot {
+  const [button] = nodesIn(node, (inner) => inner.type === 'Button' && wordsOf(inner) === text)
+  assert.ok(button, `no button "${text}"`)
+  return button
+}
 
 test('Cancel and Save are on the right of the title row, and only the form scrolls', async () => {
   const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
@@ -989,8 +996,8 @@ test('Cancel and Save are on the right of the title row, and only the form scrol
   const { frame, title, form } = detailParts(view)
   assert.deepEqual(nodesIn(title, (node) => node.type === 'Text' || node.type === 'Heading').map(wordsOf), ['web ·', 'Edit template'])
   assert.deepEqual(buttonsIn(title), ['Cancel', 'Save'])
-  assertProps(nodesIn(title, (node) => node.type === 'Button' && wordsOf(node) === 'Cancel')[0], { variant: 'ghost', size: 'sm' })
-  assertProps(nodesIn(title, (node) => node.type === 'Button' && wordsOf(node) === 'Save')[0], { variant: 'solid', size: 'sm' })
+  assertProps(buttonIn(title, 'Cancel'), { variant: 'ghost', size: 'sm' })
+  assertProps(buttonIn(title, 'Save'), { variant: 'solid', size: 'sm' })
   assertProps(form, { direction: 'column', grow: true, minHeight: 0, maxHeight: '100%', scroll: 'y' })
   assert.deepEqual(
     nodesIn(frame, (node) => node.props?.scroll !== undefined),
@@ -1001,6 +1008,7 @@ test('Cancel and Save are on the right of the title row, and only the form scrol
   await view.unmount()
 })
 
+/** Finders take a Collapsible's `title` as its label. */
 const variables = { type: 'Collapsible', label: 'Variables' }
 
 test('the hint follows the text, and the closed Variables list gives each variable with what it gives', async () => {
@@ -1009,15 +1017,15 @@ test('the hint follows the text, and the closed Variables list gives each variab
   await view.press({ type: 'IconButton', label: 'Edit template' })
   const { form } = detailParts(view)
   const parts = elementsIn(form)
-  const textAt = parts.findIndex((part) => nodesIn(part, (node) => node.type === 'Textarea').length > 0)
-  const [field] = nodesIn(parts[textAt], (node) => node.type === 'Textarea')
+  const textPart = parts.findIndex((part) => nodesIn(part, (node) => node.type === 'Textarea').length > 0)
+  const [field] = nodesIn(parts[textPart], (node) => node.type === 'Textarea')
   assertProps(field, { label: 'Text', rows: 12 })
-  const hint = nodesIn(parts[textAt], (node) => node.type === 'Text' && wordsOf(node) === 'An empty text gives the task URL.')
+  const hint = nodesIn(parts[textPart], (node) => node.type === 'Text' && wordsOf(node) === 'An empty text gives the task URL.')
   assert.equal(hint.length, 1)
   assertProps(hint[0], { size: 'sm', muted: true })
-  const fieldAndHint = elementsIn(parts[textAt])
+  const fieldAndHint = elementsIn(parts[textPart])
   assert.deepEqual(fieldAndHint.map((part) => part.type), ['Textarea', 'Text'])
-  assert.equal(parts[textAt + 1].type, 'Collapsible')
+  assert.equal(parts[textPart + 1].type, 'Collapsible')
 
   assert.equal(view.find(variables)?.props.open, false)
   assert.equal(view.find({ type: 'Code', text: '{{task_key}}' }), null)
@@ -1101,7 +1109,7 @@ test('"Delete template" sits in a bar of its own under the form, on the right, a
   assert.equal(deleteBar.props?.scroll, undefined)
   assert.deepEqual(buttonsIn(deleteBar), ['Delete template'])
   assert.equal(nodesIn(form, (node) => node.type === 'Button').length, 0)
-  assertProps(nodesIn(deleteBar, (node) => node.type === 'Button')[0], { variant: 'ghost', tone: 'danger', icon: 'delete', size: 'sm' })
+  assertProps(buttonIn(deleteBar, 'Delete template'), { variant: 'ghost', tone: 'danger', icon: 'delete', size: 'sm' })
 
   await view.press({ type: 'Button', text: 'Delete template' })
   assert.deepEqual(buttonsIn(detailParts(view).deleteBar!), ['Confirm delete'])
