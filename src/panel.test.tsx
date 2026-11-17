@@ -108,14 +108,12 @@ test("lists the project's open issues with their key, title and labels", async (
   assert.deepEqual(view.errors, [])
   assert.deepEqual(view.warnings, [])
   assert.deepEqual(view.refusals, [])
-  await view.unmount()
 })
 
 test('shows the status of tasks outside GitHub', async () => {
   const jira = task('WEB-12', { tracker: 'jira', url: 'https://example.atlassian.net/browse/WEB-12', status: 'In Progress' })
   const view = await show(ready([jira], { provider: 'jira-twg' }))
   assert.ok(view.find({ type: 'Badge', text: 'In Progress' }))
-  await view.unmount()
 })
 
 const searchField = { type: 'Input', label: 'Search tasks' }
@@ -138,7 +136,6 @@ test('typing in the field above the list filters the loaded tasks to those whose
   await view.type(searchField, '', { replace: true })
   assert.deepEqual(keysShown(view, ['#42', '#7', '#8']), ['#42', '#7', '#8'])
   assert.deepEqual(view.warnings, [])
-  await view.unmount()
 })
 
 test('while the field is not blank, the hint says it filters the loaded tasks and that Enter searches the tracker', async () => {
@@ -154,7 +151,6 @@ test('while the field is not blank, the hint says it filters the loaded tasks an
   assert.equal(jira.find({ type: 'Text', text: /^Filtering/ }), null)
   await jira.type(searchField, 'dark')
   assert.ok(jira.find({ type: 'Text', text: 'Filtering 1 loaded tasks · Enter searches Jira' }))
-  await jira.unmount()
 })
 
 const searchIn = (tracker: string) => ({ type: 'Button', text: `Search in ${tracker}` })
@@ -193,7 +189,6 @@ test('Enter or "Search in GitHub" with a non-blank field asks the tracker for th
   await jira.view.type(searchField, 'dark')
   await jira.view.press(searchIn('Jira'))
   assert.deepEqual(jira.inputs, [{}, { query: 'dark' }])
-  await jira.view.unmount()
 })
 
 test('the results replace the list, without the filter, under "Results in GitHub for" and Clear search', async () => {
@@ -207,7 +202,6 @@ test('the results replace the list, without the filter, under "Results in GitHub
   assert.ok(view.find(clearSearch))
   assert.equal(view.find({ type: 'Text', text: /^Filtering/ }), null)
   assert.deepEqual(view.warnings, [])
-  await view.unmount()
 })
 
 test('a tracker search without results says that no task in the tracker matches', async () => {
@@ -224,7 +218,6 @@ test('a tracker search without results says that no task in the tracker matches'
   await jira.view.submit(searchField)
   assert.ok(jira.view.find({ type: 'Text', text: 'No task in Jira matches "nothing".' }))
   assert.ok(jira.view.find({ type: 'Text', text: 'Results in Jira for "nothing"' }))
-  await jira.view.unmount()
 })
 
 test('editing the field or Clear search goes back to the loaded pages, with the filter, without loading them again', async () => {
@@ -255,7 +248,6 @@ test('editing the field or Clear search goes back to the loaded pages, with the 
   assert.equal(view.find(clearSearch), null)
   assert.deepEqual(inputs, [{ query: undefined }, { cursor: 'cursor-2', query: undefined }, { query: 'login' }, { query: 'login form' }])
   assert.equal(inputs.length, asked + 1)
-  await view.unmount()
 })
 
 test('editing the field while a tracker search loads drops its answer and keeps the loaded pages, without loading them again', async () => {
@@ -291,7 +283,6 @@ test('editing the field while a tracker search loads drops its answer and keeps 
     { cursor: 'cursor-2', query: undefined },
     { cursor: undefined, query: 'task' }
   ])
-  await view.unmount()
 })
 
 test('a change of active project seen by the poll leaves the tracker search before loading the new list', async () => {
@@ -312,7 +303,6 @@ test('a change of active project seen by the poll leaves the tracker search befo
     assert.deepEqual(inputs, [{ query: undefined }, { query: 'dark' }, { query: undefined }])
     assert.equal(view.valueOf(searchField), '')
     assert.deepEqual(keysShown(view, ['#1', '#9', '#90']), ['#9'])
-    await view.unmount()
   })
 })
 
@@ -333,7 +323,6 @@ test('while a tracker search loads, the list shows a spinner in place of the tas
   assert.ok(titleWhileLoading)
   assert.equal(view.find({ type: 'Spinner', label: 'Searching GitHub' }), null)
   assert.ok(view.find({ type: 'Link', text: '#90' }))
-  await view.unmount()
 })
 
 test('a failed tracker search shows like a load error, and Clear search goes back to the list', async () => {
@@ -346,7 +335,6 @@ test('a failed tracker search shows like a load error, and Clear search goes bac
   await view.press(clearSearch)
   assert.ok(view.find({ type: 'Link', text: '#1' }))
   assert.equal(view.find({ type: 'Callout' }), null)
-  await view.unmount()
 })
 
 test('a filter that no loaded task matches says so, and an empty project still says it has no open tasks', async () => {
@@ -361,7 +349,6 @@ test('a filter that no loaded task matches says so, and an empty project still s
   await empty.type(searchField, 'dark')
   assert.equal(empty.find({ type: 'EmptyState' })?.label, 'No open tasks')
   assert.equal(empty.find({ type: 'Text', text: /No loaded task matches/ }), null)
-  await empty.unmount()
 })
 
 test('only the list scrolls: the header, the warnings and the field stay above it, and Load more and the truncation notice end it', async () => {
@@ -387,7 +374,6 @@ test('only the list scrolls: the header, the warnings and the field stay above i
   const searches = nodesIn(frame, (node) => node.type === 'Input' && node.props?.label === 'Search tasks')
   assert.equal(searches.length, 1)
   assert.deepEqual(view.warnings, [])
-  await view.unmount()
 })
 
 test('shows a spinner until the first list arrives', async () => {
@@ -398,7 +384,6 @@ test('shows a spinner until the first list arrives', async () => {
 
   const after = await show(ready([task('#1')]))
   assert.equal(after.find({ type: 'Spinner', label: 'Loading tasks' }), null)
-  await after.unmount()
 })
 
 test('keeps the list and shows a spinner while it reloads', async () => {
@@ -416,7 +401,6 @@ test('keeps the list and shows a spinner while it reloads', async () => {
   assert.ok(listWhileReloading)
   assert.equal(view.find({ type: 'Spinner', label: 'Reloading tasks' }), null)
   assert.ok(view.find({ type: 'Link', text: '#2' }))
-  await view.unmount()
 })
 
 /** The words in a drawn node and its descendants, as `TestElement.text` folds them. */
@@ -465,7 +449,6 @@ test('a GitHub card without a worktree shows its key and whole title, then its l
   assert.equal(start.props?.justify, 'end')
   assert.equal(nodesIn(start, (node) => node.key === 'start:#42').length, 1)
   assert.deepEqual(rest, [])
-  await view.unmount()
 })
 
 test('a Jira card without a worktree shows its status as an accent badge before its labels', async () => {
@@ -476,7 +459,6 @@ test('a Jira card without a worktree shows its status as an accent badge before 
     { text: 'In Progress', tone: 'accent' },
     { text: 'ui', tone: undefined }
   ])
-  await view.unmount()
 })
 
 test('a card with a worktree shows its key and title, then the worktree as a truncated link, then its agent', async () => {
@@ -518,7 +500,6 @@ test('a card whose worktree runs no agent shows no agent line', async () => {
   const view = await show(ready([task('#42')], { worktrees: { '#42': { worktreeId: 'r1::/src/web-42', name: 'issue-42-add-dark-mode', agent: null } } }))
   assert.equal(agentShown(view, '#42'), null)
   assert.equal(elementsIn(cardOf(view, '#42')).length, 2)
-  await view.unmount()
 })
 
 test('Start is an outline play icon labelled with the task key, at the end of its row, and disabled without worktrees', async () => {
@@ -542,13 +523,11 @@ test('Start is an outline play icon labelled with the task key, at the end of it
 
   const unread = await show(ready([task('#42')], { worktrees: null, worktreesError: 'orca failed.' }))
   assert.equal(unread.find({ type: 'IconButton', label: 'Start #42' })?.disabled, true)
-  await unread.unmount()
 })
 
 test('says when no project is selected', async () => {
   const view = await show({ kind: 'no-project' })
   assert.equal(view.find({ type: 'EmptyState' })?.label, 'No project selected')
-  await view.unmount()
 })
 
 const gear = { type: 'IconButton', label: 'Project settings' }
@@ -572,7 +551,6 @@ test('the header says "Kickoff ·" and the project\'s name, or only "Kickoff" wi
   assert.equal(none.find({ type: 'Text', text: 'Kickoff ·' }), null)
   assert.equal(none.find(gear), null)
   assert.ok(none.find({ type: 'IconButton', label: 'Reload tasks' }))
-  await none.unmount()
 })
 
 test('the gear opens Project settings in place of the list, and Done goes back to the list', async () => {
@@ -599,7 +577,6 @@ test('the gear opens Project settings in place of the list, and Done goes back t
   assert.equal(view.find({ type: 'Select', label: 'Agent' }), null)
   assert.deepEqual(view.errors, [])
   assert.deepEqual(view.warnings, [])
-  await view.unmount()
 })
 
 test('Project settings opens by itself for a project without a tracker, not an error, and Done shows the empty state', async () => {
@@ -613,7 +590,6 @@ test('Project settings opens by itself for a project without a tracker, not an e
   const empty = view.find({ type: 'EmptyState' })
   assert.equal(empty?.label, 'No tracker for this project')
   assert.equal(empty?.props.description, 'Choose a tracker in Project settings to list the tasks of notes.')
-  await view.unmount()
 })
 
 test('Project settings opens by itself when the load fails, and Done shows the error', async () => {
@@ -625,13 +601,11 @@ test('Project settings opens by itself when the load fails, and Done shows the e
   // A reload that fails again keeps the list the person went back to.
   await view.press({ type: 'IconButton', label: 'Reload tasks' })
   assert.equal(view.find(settingsTitle), null)
-  await view.unmount()
 })
 
 test('says when there are no open tasks', async () => {
   const view = await show(ready([]))
   assert.equal(view.find({ type: 'EmptyState' })?.label, 'No open tasks')
-  await view.unmount()
 })
 
 test("shows the tool's real message when loading fails", async () => {
@@ -641,7 +615,6 @@ test("shows the tool's real message when loading fails", async () => {
   const callout = view.find({ type: 'Callout' })
   assert.ok(callout)
   assert.match(callout.text, /gh auth login/)
-  await view.unmount()
 })
 
 test("says so when Kickoff's worker doesn't answer", async () => {
@@ -651,14 +624,12 @@ test("says so when Kickoff's worker doesn't answer", async () => {
   const callout = view.find({ type: 'Callout' })
   assert.ok(callout)
   assert.match(callout.text, /timeout/)
-  await view.unmount()
 })
 
 test('shows a warning next to the list', async () => {
   const view = await show(ready([task('#1')], { warning: 'Using the last known project (web). orca failed: Orca is not running.' }))
   assert.match(view.find({ type: 'Callout' })?.text ?? '', /Orca is not running/)
   assert.ok(view.find({ type: 'Link', text: '#1' }))
-  await view.unmount()
 })
 
 test('a truncated list says only the first 100 are shown', async () => {
@@ -668,7 +639,6 @@ test('a truncated list says only the first 100 are shown', async () => {
 
   const jira = await show(ready([task('WEB-1', { tracker: 'jira' })], { provider: 'jira-orca', truncated: true }))
   assert.ok(jira.find({ type: 'Text', text: 'Showing the first 100 tasks — narrow your JQL.' }))
-  await jira.unmount()
 })
 
 test('reloads when the workspace changes, and on Reload', async () => {
@@ -681,7 +651,6 @@ test('reloads when the workspace changes, and on Reload', async () => {
 
   await view.press({ type: 'IconButton', label: 'Reload tasks' })
   assert.ok(view.find({ type: 'Link', text: '#3' }))
-  await view.unmount()
 })
 
 test('a response that arrives after a newer request is dropped', async () => {
@@ -705,7 +674,6 @@ test('a response that arrives after a newer request is dropped', async () => {
   assert.equal(calls, 3)
   assert.ok(view.find({ type: 'Link', text: '#3' }))
   assert.equal(view.find({ type: 'Link', text: '#20' }), null)
-  await view.unmount()
 })
 
 /** Stands in for `setInterval` while `body` runs, so a test fires the panel's timers by hand:
@@ -767,7 +735,6 @@ test('a change of active project goes back to the list, unless the new project n
   await view.press(done)
   await changeTo({ kind: 'error', project: web, message: 'gh failed.' }, 'web')
   assert.ok(view.find({ type: 'Text', text: 'web ·' }))
-  await view.unmount()
 })
 
 test('the filter stays through a reload and "Load more", and a change of active project clears it', async () => {
@@ -805,7 +772,6 @@ test('the filter stays through a reload and "Load more", and a change of active 
   answer = () => ready([task('#9'), task('#10', { title: 'Dark mode' })], { project: api })
   await view.emit('workspace.changed', { context: { branch: 'main', displayName: 'api', terminals: [] } })
   assert.equal(view.valueOf(searchField), '')
-  await view.unmount()
 })
 
 test('while visible, the panel polls the active project every 3 s and reloads when it changes', async () => {
@@ -831,7 +797,6 @@ test('while visible, the panel polls the active project every 3 s and reloads wh
     assert.ok(view.find({ type: 'Heading', text: 'api' }))
     await tick(view)
     assert.equal(loads, 2)
-    await view.unmount()
   })
 })
 
@@ -853,7 +818,6 @@ test('after a reload for workspace.changed, the next poll measures against the n
     assert.equal(loads, 2)
     await tick(view)
     assert.equal(loads, 2)
-    await view.unmount()
   })
 })
 
@@ -873,7 +837,6 @@ test('an active project the list never shows reloads it once, not on every poll'
     await tick(view)
     await tick(view)
     assert.equal(loads, 2)
-    await view.unmount()
   })
 })
 
@@ -901,7 +864,6 @@ test('while a Start shows its spinner, the poll asks the worker, so a worker tha
     assert.ok(view.find({ testId: 'start:#42' }))
     await tick(view)
     assert.equal(asked.length, 2)
-    await view.unmount()
   })
 })
 
@@ -941,7 +903,6 @@ test("a failed poll keeps the list as it is", async () => {
     assert.equal(loads, 1)
     assert.ok(view.find({ type: 'Link', text: '#1' }))
     assert.equal(view.find({ type: 'Callout' }), null)
-    await view.unmount()
   })
 })
 
@@ -976,7 +937,6 @@ test('Project settings show the agent choice, the default template and the butto
   assert.equal(view.find({ type: 'Textarea' }), null)
   assert.deepEqual(view.errors, [])
   assert.deepEqual(view.warnings, [])
-  await view.unmount()
 })
 
 const implement = { id: 't-impl', name: 'Implement', text: '/acme-skills:tdd {{task_url}}' }
@@ -993,7 +953,6 @@ test("Project settings show the project's stored agent and default template", as
   assert.equal(view.valueOf({ type: 'Select', label: 'Agent' }), 'none')
   assert.equal(view.valueOf({ type: 'Select', label: 'Default template' }), 't-triage')
   assert.deepEqual(optionLabels(view, 'Default template'), ['Implement', 'Triage'])
-  await view.unmount()
 })
 
 test('a project with a template stored before several templates shows it as "Default", unchanged', async () => {
@@ -1003,7 +962,6 @@ test('a project with a template stored before several templates shows it as "Def
   await view.press({ type: 'IconButton', label: 'Edit template' })
   assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Default')
   assert.equal(view.valueOf({ type: 'Textarea', label: 'Text' }), 'Fix {{task_key}}')
-  await view.unmount()
 })
 
 test('default template and agent changes save themselves after a pause', async () => {
@@ -1014,7 +972,6 @@ test('default template and agent changes save themselves after a pause', async (
   assert.equal((storedProject(host) as { defaultTemplateId: string }).defaultTemplateId, 't-triage')
   await wait(800)
   assert.deepEqual(storedProject(host), { providers: {}, templates: [implement, triage], defaultTemplateId: 't-impl', agent: 'codex' })
-  await view.unmount()
 })
 
 test('a pending change is saved before a Start', async () => {
@@ -1035,7 +992,6 @@ test('a pending change is saved before a Start', async () => {
   await view.press(done)
   await view.press({ testId: 'start:#42' })
   assert.deepEqual(seen, { providers: {}, templates: [implement, triage], defaultTemplateId: 't-triage', agent: 'none' })
-  await view.unmount()
 })
 
 test('Start starts the task, then shows its worktree and agent, keeping the loaded tasks', async () => {
@@ -1059,7 +1015,6 @@ test('Start starts the task, then shows its worktree and agent, keeping the load
   assert.equal(view.find({ testId: 'start:#42' }), null)
   assert.ok(view.find({ testId: 'start:#7' }))
   assert.equal(loads, 1)
-  await view.unmount()
 })
 
 /** The card's template Select of a task. */
@@ -1084,7 +1039,6 @@ test('Start uses the template chosen on the card, or the default template when n
   assert.equal(view.find(cardTemplate('#42')), null)
   assert.deepEqual(view.errors, [])
   assert.deepEqual(view.warnings, [])
-  await view.unmount()
 })
 
 test('with two templates, the template Select fills the Start row before the Start icon', async () => {
@@ -1096,14 +1050,12 @@ test('with two templates, the template Select fills the Start row before the Sta
   assertProps(start, { shrink: false })
   assert.equal(nodesIn(start, (node) => node.key === 'start:#42').length, 1)
   assert.deepEqual(view.warnings, [])
-  await view.unmount()
 })
 
 test('with one template, cards show no template Select', async () => {
   const { view } = await showWith({ 'tasks.load': ready([task('#42')]) })
   assert.equal(view.find(cardTemplate('#42')), null)
   assert.ok(view.find({ testId: 'start:#42' }))
-  await view.unmount()
 })
 
 test('a change of default template shows in the cards without a choice of their own', async () => {
@@ -1114,7 +1066,6 @@ test('a change of default template shows in the cards without a choice of their 
   await view.press(done)
   assert.equal(view.valueOf(cardTemplate('#42')), 't-impl')
   assert.equal(view.valueOf(cardTemplate('#7')), 't-triage')
-  await view.unmount()
 })
 
 test("a card's template choice survives a reload", async () => {
@@ -1124,7 +1075,6 @@ test("a card's template choice survives a reload", async () => {
   await view.press({ type: 'IconButton', label: 'Reload tasks' })
   assert.equal(loads, 2)
   assert.equal(view.valueOf(cardTemplate('#42')), 't-impl')
-  await view.unmount()
 })
 
 const saveButton = { type: 'Button', text: 'Save' }
@@ -1145,7 +1095,6 @@ test("Project settings shows the default template's text, read-only, or says tha
   await view.select({ type: 'Select', label: 'Default template' }, 't-empty')
   assert.equal(view.find({ type: 'CodeView' }), null)
   assert.ok(view.find({ type: 'Text', text: 'Empty: the prompt is the task URL.' }))
-  await view.unmount()
 })
 
 test('the template detail opened from Project settings goes back to it on Save, Cancel and Delete', async () => {
@@ -1171,7 +1120,6 @@ test('the template detail opened from Project settings goes back to it on Save, 
   await view.press({ type: 'Button', text: 'Confirm delete' })
   backInSettings()
   assert.deepEqual(optionLabels(view, 'Default template'), ['Implement', 'Review'])
-  await view.unmount()
 })
 
 test('the template detail\'s title says "Edit template" or "New template", after the project\'s name', async () => {
@@ -1187,7 +1135,6 @@ test('the template detail\'s title says "Edit template" or "New template", after
   assert.equal(view.find({ type: 'Text', text: 'web ·' })?.props.muted, true)
   assert.equal(view.find({ type: 'Heading', text: 'New template' })?.props.level, 3)
   assert.equal(view.find({ type: 'Heading', text: 'Edit template' }), null)
-  await view.unmount()
 })
 
 /** The parts of the template detail: its title row, its form, and its Delete bar when it has one. */
@@ -1228,7 +1175,6 @@ test('Cancel and Save are on the right of the title row, and only the form scrol
   )
   assert.equal(nodesIn(form, (node) => node.type === 'Input' && node.props?.label === 'Name').length, 1)
   assert.equal(nodesIn(form, (node) => node.type === 'Button').length, 0)
-  await view.unmount()
 })
 
 /** Finders take a Collapsible's `title` as its label. */
@@ -1268,7 +1214,6 @@ test('the hint follows the text, and the closed Variables list gives each variab
     ]
   )
   assert.deepEqual(view.warnings, [])
-  await view.unmount()
 })
 
 test('the Variables list stays as it was left while the panel is open, and starts closed in a panel opened again', async () => {
@@ -1286,7 +1231,6 @@ test('the Variables list stays as it was left while the panel is open, and start
   await again.view.press(gear)
   await again.view.press({ type: 'IconButton', label: 'Edit template' })
   assert.equal(again.view.find(variables)?.props.open, false)
-  await again.view.unmount()
 })
 
 test('the "Run a skill" Callout ends the form, after the error of a failed write', async () => {
@@ -1319,7 +1263,6 @@ test('the "Run a skill" Callout ends the form, after the error of a failed write
     ]
   )
   assert.match(wordsOf(parts.at(-2)!), /Couldn't save the template/)
-  await view.unmount()
 })
 
 test('"Delete template" sits in a bar of its own under the form, on the right, and asks for a second click', async () => {
@@ -1337,7 +1280,6 @@ test('"Delete template" sits in a bar of its own under the form, on the right, a
   await view.press({ type: 'Button', text: 'Delete template' })
   assert.deepEqual(buttonsIn(detailParts(view).deleteBar!), ['Confirm delete'])
   assert.deepEqual(storedProject(host), twoTemplates.settings.projects['github:acme/web'])
-  await view.unmount()
 })
 
 test('a new template has no Delete bar', async () => {
@@ -1346,7 +1288,6 @@ test('a new template has no Delete bar', async () => {
   await view.press({ type: 'IconButton', label: 'New template' })
   assert.equal(detailParts(view).deleteBar, undefined)
   assert.equal(view.find({ type: 'Button', text: /Delete/ }), null)
-  await view.unmount()
 })
 
 test('the template detail opened from Project settings that opened by itself goes back to it', async () => {
@@ -1354,7 +1295,6 @@ test('the template detail opened from Project settings that opened by itself goe
   await view.press({ type: 'IconButton', label: 'Edit template' })
   await view.press({ type: 'Button', text: 'Cancel' })
   assert.ok(view.find(settingsTitle))
-  await view.unmount()
 })
 
 test('"New template" opens the detail with an empty name and the initial text; Save adds it at the end and goes back to Project settings', async () => {
@@ -1389,7 +1329,6 @@ test('"New template" opens the detail with an empty name and the initial text; S
   assert.equal(view.valueOf({ type: 'Select', label: 'Default template' }), 't-triage')
   assert.deepEqual(view.errors, [])
   assert.deepEqual(view.warnings, [])
-  await view.unmount()
 })
 
 test('the pencil edits the template chosen as default, and Save stores it in its place', async () => {
@@ -1409,7 +1348,6 @@ test('the pencil edits the template chosen as default, and Save stores it in its
     defaultTemplateId: 't-impl'
   })
   assert.deepEqual(optionLabels(view, 'Default template'), ['IMPLEMENT', 'Triage'])
-  await view.unmount()
 })
 
 test('saving a template of a project that stored none stores it, without the earlier field', async () => {
@@ -1424,7 +1362,6 @@ test('saving a template of a project that stored none stores it, without the ear
     defaultTemplateId: 'default',
     agent: 'codex'
   })
-  await view.unmount()
 })
 
 test('Cancel goes back to Project settings without storing anything', async () => {
@@ -1437,7 +1374,6 @@ test('Cancel goes back to Project settings without storing anything', async () =
   assert.deepEqual(storedProject(host), twoTemplates.settings.projects['github:acme/web'])
   await view.press({ type: 'IconButton', label: 'Edit template' })
   assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Triage')
-  await view.unmount()
 })
 
 test('a failed write keeps the detail open with the error and the draft', async () => {
@@ -1459,7 +1395,6 @@ test('a failed write keeps the detail open with the error and the draft', async 
   assert.ok(view.find({ type: 'Text', text: /Couldn't save the template/ }))
   assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Review')
   assert.equal(view.find({ type: 'Link', text: '#42' }), null)
-  await view.unmount()
 })
 
 test('Delete needs a second click, and deleting the default template makes the first remaining one the default', async () => {
@@ -1474,7 +1409,6 @@ test('Delete needs a second click, and deleting the default template makes the f
   assert.ok(view.find(settingsTitle))
   assert.deepEqual(optionLabels(view, 'Default template'), ['Implement'])
   assert.equal(view.valueOf({ type: 'Select', label: 'Default template' }), 't-impl')
-  await view.unmount()
 })
 
 test('Delete turns back after a few seconds without the second click', async () => {
@@ -1497,7 +1431,6 @@ test('Delete is disabled for the only template', async () => {
   await view.press(gear)
   await view.press({ type: 'IconButton', label: 'Edit template' })
   assert.equal(view.find({ type: 'Button', text: 'Delete template' })?.disabled, true)
-  await view.unmount()
 })
 
 test("a card whose template is deleted falls back to the default template", async () => {
@@ -1517,7 +1450,6 @@ test("a card whose template is deleted falls back to the default template", asyn
   assert.equal(view.valueOf(cardTemplate('#42')), 't-impl')
   await view.press({ testId: 'start:#42' })
   assert.deepEqual(starts.map((start) => start.templateId), ['t-impl'])
-  await view.unmount()
 })
 
 test("a change of active project while the detail is open drops the draft and shows the new project's list", async () => {
@@ -1541,7 +1473,6 @@ test("a change of active project while the detail is open drops the draft and sh
   assert.ok(view.find({ type: 'Link', text: '#42' }))
   assert.equal(view.find({ type: 'Input', label: 'Name' }), null)
   assert.deepEqual(storedProject(host), twoTemplates.settings.projects['github:acme/web'])
-  await view.unmount()
 })
 
 test('a reload of the same project keeps the detail open with its draft', async () => {
@@ -1551,7 +1482,6 @@ test('a reload of the same project keeps the detail open with its draft', async 
   await view.type({ type: 'Input', label: 'Name' }, 'Review')
   await view.emit('workspace.changed', { context: { branch: 'main', displayName: 'web', terminals: [] } })
   assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Review')
-  await view.unmount()
 })
 
 test('closing the panel drops the draft', async () => {
@@ -1564,7 +1494,6 @@ test('closing the panel drops the draft', async () => {
   const second = await mount(panel, { host })
   assert.equal(second.find({ type: 'Input', label: 'Name' }), null)
   assert.ok(second.find({ type: 'Link', text: '#42' }))
-  await second.unmount()
 })
 
 test("a Start after the project's settings couldn't be read reads them again for the default template", async () => {
@@ -1584,7 +1513,6 @@ test("a Start after the project's settings couldn't be read reads them again for
   assert.equal(view.find({ type: 'Select', label: 'Default template' }), null)
   await view.press({ testId: 'start:#42' })
   assert.deepEqual(starts.map((start) => start.templateId), ['t-triage'])
-  await view.unmount()
 })
 
 test("a Start whose project's settings can't be read fails on its card without asking the worker", async () => {
@@ -1603,7 +1531,6 @@ test("a Start whose project's settings can't be read fails on its card without a
   assert.equal(starts, 0)
   assert.ok(view.find({ type: 'Text', text: /Couldn't read the prompt templates/ }))
   assert.ok(view.find({ testId: 'start:#42' }))
-  await view.unmount()
 })
 
 test('a pending Project settings change survives a failed template write, and the next Save stores both', async () => {
@@ -1632,7 +1559,6 @@ test('a pending Project settings change survives a failed template write, and th
   const project = (data as { projects: Record<string, { agent?: string; templates: { name: string }[] }> }).projects['github:acme/web']
   assert.equal(project.agent, 'codex')
   assert.deepEqual(project.templates.map((template) => template.name), ['Implement', 'Triage', 'Review'])
-  await view.unmount()
 })
 
 test('a started task opens its worktree in Orca from the link', async () => {
@@ -1647,7 +1573,6 @@ test('a started task opens its worktree in Orca from the link', async () => {
   assert.equal(agentShown(view, '#42'), null)
   await view.press({ type: 'Link', text: 'issue-42-add-dark-mode' })
   assert.deepEqual(opened, [{ worktreeId: 'r1::/src/web-42' }])
-  await view.unmount()
 })
 
 test('a spinner shows on the card while it starts', async () => {
@@ -1667,7 +1592,6 @@ test('a spinner shows on the card while it starts', async () => {
   await pressed
   assert.equal(buttonWhileStarting, null)
   assert.equal(view.find({ type: 'Spinner', label: 'Starting #42' }), null)
-  await view.unmount()
 })
 
 const CAN_TAKE_A_MINUTE = /Creating the worktree can take a minute/
@@ -1688,7 +1612,6 @@ test('a Start under way shows the spinner and says that creating the worktree ca
   assert.equal(view.find({ testId: 'start:#42' }), null)
   assert.equal(view.findAll({ type: 'Text', text: CAN_TAKE_A_MINUTE }).length, 1)
   assert.ok(view.find({ testId: 'start:#7' }))
-  await view.unmount()
 })
 
 test('a panel opened while the worker reports a Start under way shows its spinner and line, then its end', async () => {
@@ -1706,7 +1629,6 @@ test('a panel opened while the worker reports a Start under way shows its spinne
   await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', agent: 'claude', ok: true })
   assert.ok(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }))
   assert.equal(view.find({ type: 'Spinner', label: 'Starting #42' }), null)
-  await view.unmount()
 })
 
 test('a list asked for before a Start went under way, and answered after, keeps its spinner', async () => {
@@ -1730,7 +1652,6 @@ test('a list asked for before a Start went under way, and answered after, keeps 
   assert.equal(loads, 2)
   assert.ok(view.find({ type: 'Spinner', label: 'Starting #42' }))
   assert.ok(view.find({ type: 'Text', text: CAN_TAKE_A_MINUTE }))
-  await view.unmount()
 })
 
 test("a Start's successful end clears the spinner and shows the worktree", async () => {
@@ -1746,7 +1667,6 @@ test("a Start's successful end clears the spinner and shows the worktree", async
   assert.equal(view.find({ type: 'Spinner', label: 'Starting #42' }), null)
   assert.equal(view.find({ type: 'Text', text: CAN_TAKE_A_MINUTE }), null)
   assert.ok(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }))
-  await view.unmount()
 })
 
 test("a Start's failed end clears the spinner and shows its message, unless the worktree is there anyway", async () => {
@@ -1768,7 +1688,6 @@ test("a Start's failed end clears the spinner and shows its message, unless the 
   await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#7', agent: null, ok: false, message: "Orca didn't finish creating the worktree for #7 in time" })
   assert.ok(view.find({ type: 'Link', text: 'issue-7-task-7' }))
   assert.equal(view.find({ type: 'Text', text: /didn't finish/ }), null)
-  await view.unmount()
 })
 
 test('a failed Start shows its error on the card and refreshes the worktrees', async () => {
@@ -1785,7 +1704,6 @@ test('a failed Start shows its error on the card and refreshes the worktrees', a
   assert.equal(refreshed, 1)
   assert.ok(view.find({ type: 'Text', text: "Couldn't read Orca's default agent — pick one in the panel." }))
   assert.ok(view.find({ testId: 'start:#42' }))
-  await view.unmount()
 })
 
 test('a Start whose request timed out counts as done when the task now has a worktree', async () => {
@@ -1799,7 +1717,6 @@ test('a Start whose request timed out counts as done when the task now has a wor
   await view.press({ testId: 'start:#42' })
   assert.ok(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }))
   assert.equal(view.find({ type: 'Text', text: /didn't answer/ }), null)
-  await view.unmount()
 })
 
 test("a failure reading Orca's worktrees still lists the tasks, with Start disabled", async () => {
@@ -1811,7 +1728,6 @@ test("a failure reading Orca's worktrees still lists the tasks, with Start disab
   assert.equal(view.find({ testId: 'start:#42' })?.disabled, true)
   assert.equal(view.find({ testId: 'start:#7' })?.disabled, true)
   assert.ok(view.find({ type: 'Text', text: /Orca is not running/ }))
-  await view.unmount()
 })
 
 /** Stands in for `setTimeout` while `body` runs, for the timers of `ms` only, so a test fires them
@@ -2330,7 +2246,6 @@ test('whether Project settings is open is kept in memory only, and a panel opene
   const second = await mount(panel, { host })
   assert.equal(second.find(settingsTitle), null)
   assert.ok(second.find({ type: 'Link', text: '#42' }))
-  await second.unmount()
 })
 
 test('a GitHub project shows GitHub as its tracker, without the "Choose a tracker" option', async () => {
@@ -2339,7 +2254,6 @@ test('a GitHub project shows GitHub as its tracker, without the "Choose a tracke
   assert.equal(view.valueOf({ type: 'Select', label: 'Tracker' }), 'github')
   assert.deepEqual(optionLabels(view, 'Tracker'), ['GitHub', 'Jira (Orca connection)', 'Jira (twg)'])
   assert.equal(view.find({ type: 'Input', label: 'JQL' }), null)
-  await view.unmount()
 })
 
 test('choosing Jira (Orca connection) saves it with the default JQL, shows its settings and reloads', async () => {
@@ -2372,7 +2286,6 @@ test('choosing Jira (Orca connection) saves it with the default JQL, shows its s
   assert.ok(view.find({ type: 'Text', text: /Connect Jira in Orca's settings/ }))
   assert.deepEqual(view.errors, [])
   assert.deepEqual(view.warnings, [])
-  await view.unmount()
 })
 
 const jiraStored = (jql: string, siteId: string) => ({
@@ -2408,7 +2321,6 @@ test("the JQL and site save themselves, keeping the other providers' settings, a
   const before = loads
   await view.submit({ type: 'Input', label: 'JQL' })
   assert.equal(loads, before + 1)
-  await view.unmount()
 })
 
 test("a stored site that isn't connected any more stays selectable, and a site list failure is shown", async () => {
@@ -2420,7 +2332,6 @@ test("a stored site that isn't connected any more stays selectable, and a site l
   assert.equal(view.valueOf({ type: 'Select', label: 'Site' }), 'site-9')
   assert.deepEqual(optionLabels(view, 'Site'), ['Default site', 'site-9'])
   assert.ok(view.find({ type: 'Text', text: /Orca is not running/ }))
-  await view.unmount()
 })
 
 test('a load failure keeps the provider settings visible', async () => {
@@ -2432,7 +2343,6 @@ test('a load failure keeps the provider settings visible', async () => {
   assert.equal(view.valueOf({ type: 'Input', label: 'JQL' }), 'project = ')
   await view.press(done)
   assert.ok(view.find({ type: 'Callout', text: /JQL no válida/ }))
-  await view.unmount()
 })
 
 test('Project settings that opened by itself stays open once a load from it, or from its template detail, lists the tasks', async () => {
@@ -2456,7 +2366,6 @@ test('Project settings that opened by itself stays open once a load from it, or 
   await second.view.emit('workspace.changed', { context: { branch: 'main', displayName: 'web', terminals: [] } })
   await second.view.press({ type: 'Button', text: 'Cancel' })
   assert.ok(second.view.find(settingsTitle))
-  await second.view.unmount()
 })
 
 test('after a site list failure or no connected site, reloading the tasks asks for the sites again', async () => {
@@ -2479,7 +2388,6 @@ test('after a site list failure or no connected site, reloading the tasks asks f
   assert.deepEqual(optionLabels(view, 'Site'), ['Default site', 'Example', 'Other'])
   await reloadAndOpen()
   assert.equal(asked, 3)
-  await view.unmount()
 })
 
 const twgStored = (config: { jql: string; site: string; profile: string }) => ({
@@ -2514,7 +2422,6 @@ test('choosing Jira (twg) shows its stored JQL, Site and Profile fields, with th
   assert.equal((storedProject(host) as { provider: string }).provider, 'jira-twg')
   assert.deepEqual(view.errors, [])
   assert.deepEqual(view.warnings, [])
-  await view.unmount()
 })
 
 test("the twg JQL, site and profile save themselves, keeping the other providers' settings, and Enter reloads", async () => {
@@ -2534,7 +2441,6 @@ test("the twg JQL, site and profile save themselves, keeping the other providers
     await view.submit({ type: 'Input', label })
     assert.equal(loads, before + 1)
   }
-  await view.unmount()
 })
 
 test('"Load more" appends the next page without duplicate keys, and the loaded pages stay in place after a Start', async () => {
@@ -2562,7 +2468,6 @@ test('"Load more" appends the next page without duplicate keys, and the loaded p
   assert.ok(view.find({ type: 'Link', text: 'web-3-task-web-3' }))
   assert.equal(cursors.length, 2)
   assert.deepEqual(view.errors, [])
-  await view.unmount()
 })
 
 test('"Load more" is a full-width outline button with the count of loaded tasks, which says "Loading…" while a page loads', async () => {
@@ -2593,7 +2498,6 @@ test('"Load more" is a full-width outline button with the count of loaded tasks,
   assert.equal(loading?.disabled, true)
   assert.ok(view.find({ type: 'Button', text: 'Showing 3 · Load more' }))
   assert.deepEqual(view.warnings, [])
-  await view.unmount()
 })
 
 test('a "Load more" failure keeps the loaded tasks and says why', async () => {
@@ -2608,7 +2512,6 @@ test('a "Load more" failure keeps the loaded tasks and says why', async () => {
   assert.ok(view.find({ type: 'Link', text: 'WEB-1' }))
   assert.ok(view.find({ type: 'Text', text: /The cursor has expired/ }))
   assert.ok(view.find({ type: 'Button', text: /· Load more$/ }))
-  await view.unmount()
 })
 
 test('100 tracker search results say to refine the search, not the list notice', async () => {
@@ -2650,7 +2553,6 @@ test('"Load more" during a tracker search sends its words with the cursor and ap
   await view.press(clearSearch)
   assert.ok(view.find({ type: 'Button', text: 'Showing 1 · Load more' }))
   assert.deepEqual(keysShown(view, ['WEB-1', 'WEB-90']), ['WEB-1'])
-  await view.unmount()
 })
 
 test('Reload during a tracker search runs it again, and a Start keeps its results in place', async () => {
@@ -2676,7 +2578,6 @@ test('Reload during a tracker search runs it again, and a Start keeps its result
   assert.ok(view.find({ type: 'Link', text: 'issue-90-task-90' }))
   assert.equal(inputs.length, 3)
   assert.deepEqual(view.errors, [])
-  await view.unmount()
 })
 
 test('a change of active project clears the tracker search and the field', async () => {
@@ -2695,7 +2596,6 @@ test('a change of active project clears the tracker search and the field', async
   assert.equal(view.valueOf(searchField), '')
   assert.deepEqual(keysShown(view, ['#1', '#9', '#90']), ['#9'])
   assert.deepEqual(inputs, [{ query: undefined }, { query: 'dark' }, { query: 'dark' }, { query: undefined }])
-  await view.unmount()
 })
 
 test('a change of the tracker in Project settings clears the tracker search', async () => {
@@ -2724,7 +2624,6 @@ test('a change of the tracker in Project settings clears the tracker search', as
   await view.press(done)
   assert.equal(view.find({ type: 'Text', text: /^Results in/ }), null)
   assert.deepEqual(inputs, [{ query: undefined }, { query: 'web' }, { query: 'web' }, { query: undefined }])
-  await view.unmount()
 })
 
 test('a page that arrives after a reload is dropped', async () => {
@@ -2751,5 +2650,4 @@ test('a page that arrives after a reload is dropped', async () => {
   await view.settled()
   assert.ok(view.find({ type: 'Link', text: 'WEB-20' }))
   assert.equal(view.find({ type: 'Link', text: 'WEB-99' }), null)
-  await view.unmount()
 })
