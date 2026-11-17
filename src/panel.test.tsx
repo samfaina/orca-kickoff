@@ -234,6 +234,64 @@ test('editing the field or Clear search goes back to the loaded pages, with the 
   await view.unmount()
 })
 
+test('editing the field while a tracker search loads drops its answer and keeps the loaded pages, without loading them again', async () => {
+  const answer = held()
+  const inputs: LoadInput[] = []
+  const view = await show(async ({ cursor, query }: LoadInput) => {
+    inputs.push({ cursor, query })
+    if (query !== undefined) {
+      await answer.released
+      return ready([task('#90')])
+    }
+    return cursor ? ready([task('#2')]) : ready([task('#1')], { nextCursor: 'cursor-2' })
+  })
+  await view.press({ type: 'Button', text: /· Load more$/ })
+  await view.type(searchField, 'task')
+  const submitted = view.submit(searchField)
+  try {
+    await drawn(view, { type: 'Spinner', label: 'Searching GitHub' })
+    const typed = view.type(searchField, ' #')
+    await turn()
+    answer.release()
+    await submitted
+    await typed
+  } finally {
+    answer.release()
+  }
+  await view.settled()
+  assert.equal(view.valueOf(searchField), 'task #')
+  assert.deepEqual(keysShown(view, ['#1', '#2', '#90']), ['#1', '#2'])
+  assert.equal(view.find({ type: 'Text', text: /^Results in/ }), null)
+  assert.deepEqual(inputs, [
+    { cursor: undefined, query: undefined },
+    { cursor: 'cursor-2', query: undefined },
+    { cursor: undefined, query: 'task' }
+  ])
+  await view.unmount()
+})
+
+test('a change of active project seen by the poll leaves the tracker search before loading the new list', async () => {
+  await withIntervals(async ({ tick }) => {
+    let project = web
+    const inputs: LoadInput[] = []
+    const { view } = await showWith({
+      'tasks.load': ({ query }) => {
+        inputs.push({ query })
+        return query === undefined ? ready([task(project === web ? '#1' : '#9')], { project }) : ready([task('#90')], { project })
+      },
+      'project.active': () => ({ projectId: project.id })
+    })
+    await view.type(searchField, 'dark')
+    await view.submit(searchField)
+    project = api
+    await tick(view)
+    assert.deepEqual(inputs, [{ query: undefined }, { query: 'dark' }, { query: undefined }])
+    assert.equal(view.valueOf(searchField), '')
+    assert.deepEqual(keysShown(view, ['#1', '#9', '#90']), ['#9'])
+    await view.unmount()
+  })
+})
+
 test('while a tracker search loads, the list shows a spinner in place of the tasks', async () => {
   const answer = held()
   const { view } = await showSearching(ready([task('#1')]), async () => {

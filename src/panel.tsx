@@ -58,6 +58,7 @@ import {
   type TaskList,
   type TaskWorktree
 } from './protocol'
+import type { TaskPage } from './providers/types'
 import { matchesSearch } from './search'
 import {
   defaultTemplate,
@@ -206,7 +207,7 @@ let viewStateFor: string | null | undefined
 type TrackerSearch =
   | { query: string; kind: 'loading' }
   | { query: string; kind: 'error'; message: string }
-  | { query: string; kind: 'ready'; tasks: Task[]; nextCursor: string | null; truncated: boolean }
+  | ({ query: string; kind: 'ready' } & TaskPage)
 
 /** The tracker search shown, or null while the loaded list is. */
 const trackerSearch = atom<TrackerSearch | null>(null)
@@ -423,21 +424,8 @@ async function loadJiraSites(): Promise<void> {
 async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
   const shownSearch = read(trackerSearch)
   if (shownSearch !== null) return searchTracker(shownSearch.query, reason)
-  const mine = ++generation
-  set(loading, true)
-  set(loadingMore, false)
-  set(moreError, null)
-  let answer: TaskList
-  let askedAt = 0
-  let worktreesAskedAt = 0
-  try {
-    await flushSettings()
-    askedAt = ++startClock
-    worktreesAskedAt = ++worktreesClock
-    answer = await plugin.request('tasks.load', {}, { timeoutMs: LOAD_TIMEOUT_MS })
-  } catch (error) {
-    answer = { kind: 'error', project: null, message: `Kickoff's worker didn't answer (${errorCode(error)}). Reload to try again.` }
-  }
+  const mine = startLoading()
+  const { answer, askedAt, worktreesAskedAt } = await askTasks({})
   if (mine !== generation) return
   // A change of active project drops the template detail's draft. An answer that names no project
   // because the worker didn't answer says nothing about it.
@@ -479,23 +467,10 @@ async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
  *  search ends and the list is loaded again. */
 async function searchTracker(query: string, reason: 'poll' | 'other' = 'other'): Promise<void> {
   if (query === '' || read(list)?.kind !== 'ready') return
-  const mine = ++generation
+  const mine = startLoading()
   const before = read(trackerSearch)
-  set(loading, true)
-  set(loadingMore, false)
-  set(moreError, null)
   if (before?.query !== query || before.kind !== 'ready') set(trackerSearch, { query, kind: 'loading' })
-  let answer: TaskList
-  let askedAt = 0
-  let worktreesAskedAt = 0
-  try {
-    await flushSettings()
-    askedAt = ++startClock
-    worktreesAskedAt = ++worktreesClock
-    answer = await plugin.request('tasks.load', { query }, { timeoutMs: LOAD_TIMEOUT_MS })
-  } catch (error) {
-    answer = { kind: 'error', project: null, message: `Kickoff's worker didn't answer (${errorCode(error)}). Reload to try again.` }
-  }
+  const { answer, askedAt, worktreesAskedAt } = await askTasks({ query })
   if (mine !== generation) return
   if (reason !== 'poll') lastPolledProjectId = undefined
   const current = read(list)
@@ -517,18 +492,44 @@ async function searchTracker(query: string, reason: 'poll' | 'other' = 'other'):
   set(loading, false)
 }
 
+/** Starts a load of the list or of a tracker search: an answer to any earlier one, and any "Load
+ *  more" under way, will be dropped. Answers the load's generation. */
+function startLoading(): number {
+  const mine = ++generation
+  set(loading, true)
+  set(loadingMore, false)
+  set(moreError, null)
+  return mine
+}
+
+/** Saves pending settings, then asks the worker for a first page, with when the Starts under way
+ *  and the worktrees were asked for. A worker that doesn't answer gives an error that names no
+ *  project. */
+async function askTasks(input: { query?: string }): Promise<{ answer: TaskList; askedAt: number; worktreesAskedAt: number }> {
+  let askedAt = 0
+  let worktreesAskedAt = 0
+  try {
+    await flushSettings()
+    askedAt = ++startClock
+    worktreesAskedAt = ++worktreesClock
+    return { answer: await plugin.request('tasks.load', input, { timeoutMs: LOAD_TIMEOUT_MS }), askedAt, worktreesAskedAt }
+  } catch (error) {
+    const message = `Kickoff's worker didn't answer (${errorCode(error)}). Reload to try again.`
+    return { answer: { kind: 'error', project: null, message }, askedAt, worktreesAskedAt }
+  }
+}
+
 /** Goes back from the tracker search to the loaded list as it was, with the filter, dropping any
- *  answer still on its way. When a tracker search was loading, its answer may have said that the active
- *  project changed, so the list is loaded again. */
+ *  answer still on its way, without loading the list again. Such an answer might have said that
+ *  the active project changed, so the next poll measures against the list. */
 function leaveTrackerSearch(): void {
   if (read(trackerSearch) === null) return
-  const wasLoading = read(loading)
+  if (read(loading)) lastPolledProjectId = undefined
   generation++
   set(trackerSearch, null)
   set(loading, false)
   set(loadingMore, false)
   set(moreError, null)
-  if (wasLoading) void load()
 }
 
 /** "Clear search": back to the loaded list, with an empty field. */
@@ -852,8 +853,11 @@ export function setup(ctx: PanelContext): void {
       if (!('projectId' in answer)) return
       const before = lastPolledProjectId === undefined ? listedProjectId() : lastPolledProjectId
       lastPolledProjectId = answer.projectId
-      if (before !== undefined && answer.projectId !== before) void load('poll')
-      else await checkStarts()
+      if (before !== undefined && answer.projectId !== before) {
+        // The tracker search narrowed the other project's list.
+        leaveTrackerSearch()
+        void load('poll')
+      } else await checkStarts()
     } catch {
       // The worker didn't answer: the next poll asks again.
     } finally {
@@ -1072,14 +1076,19 @@ function Body({ list }: { list: TaskList }) {
         />
       )
     case 'error':
-      return (
-        <Callout tone="danger" title="Couldn't load tasks" icon="error">
-          <Text>{list.message}</Text>
-        </Callout>
-      )
+      return <LoadError message={list.message} />
     case 'ready':
       return <ReadyList list={list} />
   }
+}
+
+/** A failed load of the list or of a tracker search. */
+function LoadError({ message }: { message: string }) {
+  return (
+    <Callout tone="danger" title="Couldn't load tasks" icon="error">
+      <Text>{message}</Text>
+    </Callout>
+  )
 }
 
 type ReadyTaskList = Extract<TaskList, { kind: 'ready' }>
@@ -1147,22 +1156,22 @@ function ReadyList({ list }: { list: ReadyTaskList }) {
         </Box>
       ) : null}
       <Box direction="column" gap="xs" grow minHeight={0} maxHeight="100%" scroll="y">
-        {found === null ? <LoadedTasks list={list} query={query} /> : <SearchResults found={found} list={list} tracker={tracker} />}
+        {found === null ? <LoadedTasks list={list} filter={query} /> : <SearchResults found={found} list={list} tracker={tracker} />}
       </Box>
     </>
   )
 }
 
-/** The loaded tasks that match the filter, "Load more" and the truncation notice. */
-function LoadedTasks({ list, query }: { list: ReadyTaskList; query: string }) {
-  const tasks = list.tasks.filter((task) => matchesSearch(task, query))
+/** The loaded tasks that match the trimmed `filter`, "Load more" and the truncation notice. */
+function LoadedTasks({ list, filter }: { list: ReadyTaskList; filter: string }) {
+  const tasks = list.tasks.filter((task) => matchesSearch(task, filter))
   return (
     <>
       {list.tasks.length === 0 ? (
         <EmptyState title="No open tasks" icon="check" />
       ) : tasks.length === 0 ? (
         <Text size="sm" muted>
-          {`No loaded task matches "${query}".`}
+          {`No loaded task matches "${filter}".`}
         </Text>
       ) : (
         tasks.map((task) => <TaskCard key={task.key} task={task} projectId={list.project.id} worktrees={list.worktrees} />)
@@ -1185,11 +1194,7 @@ function SearchResults({ found, list, tracker }: { found: TrackerSearch; list: R
     case 'loading':
       return <Spinner label={`Searching ${tracker}`} />
     case 'error':
-      return (
-        <Callout tone="danger" title="Couldn't load tasks" icon="error">
-          <Text>{found.message}</Text>
-        </Callout>
-      )
+      return <LoadError message={found.message} />
     case 'ready':
       return (
         <>
