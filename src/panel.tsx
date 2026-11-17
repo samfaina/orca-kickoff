@@ -55,6 +55,7 @@ import {
   type TaskList,
   type TaskWorktree
 } from './protocol'
+import { matchesSearch } from './search'
 import {
   defaultTemplate,
   INITIAL_TEMPLATE_TEXT,
@@ -191,6 +192,9 @@ let settingsChoiceFor: string | null | undefined
 
 /** The template detail's draft while it replaces the panel view, else null. */
 const templateDraft = atom<TemplateDraft | null>(null)
+
+/** The search over the loaded tasks, kept in memory only. */
+const search = atom('')
 
 /** Whether a "Load more" is under way, and the error of the last one. */
 const loadingMore = atom(false)
@@ -417,10 +421,13 @@ async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
   const answeredProjectId = answer.kind === 'no-project' ? null : answer.project?.id
   const draft = read(templateDraft)
   if (draft && answeredProjectId !== undefined && answeredProjectId !== draft.projectId) closeTemplate()
-  // A change of active project also sends Project settings back to opening by itself. Only once a
-  // project was listed: before that, the choice is still `auto`.
+  // A change of active project also sends Project settings back to opening by itself and clears
+  // the search. Only once a project was listed: before that, both are as they start.
   if (answeredProjectId !== undefined) {
-    if (typeof settingsChoiceFor === 'string' && answeredProjectId !== settingsChoiceFor) set(settingsChoice, 'auto')
+    if (typeof settingsChoiceFor === 'string' && answeredProjectId !== settingsChoiceFor) {
+      set(settingsChoice, 'auto')
+      set(search, '')
+    }
     settingsChoiceFor = answeredProjectId
   }
   if ('project' in answer && answer.project) {
@@ -727,6 +734,7 @@ export function setup(ctx: PanelContext): void {
   set(templateDraft, null)
   set(settingsChoice, 'auto')
   settingsChoiceFor = undefined
+  set(search, '')
   // Closing the panel drops the template detail's draft.
   ctx.subscriptions.push({ dispose: closeTemplate })
   let polling = false
@@ -764,11 +772,12 @@ export default function Panel() {
   if (project && settings && (choice === 'auto' ? needsSettings(current) : choice === 'open')) {
     return <SettingsView projectName={project.name} shown={settings} />
   }
+  // The panel fills its height, so a ready list's last part, the list, scrolls alone.
   return (
-    <Stack gap="sm">
+    <Box direction="column" gap="sm" height="100%">
       <Header projectName={project?.name ?? null} gear={settings !== null} />
       {current ? <Body list={current} /> : <Spinner label="Loading tasks" />}
-    </Stack>
+    </Box>
   )
 }
 
@@ -963,110 +972,132 @@ function Body({ list }: { list: TaskList }) {
         </Callout>
       )
     case 'ready':
-      return (
-        <Stack gap="sm">
-          {list.warning ? (
-            <Callout tone="warning" icon="warning">
-              <Text>{list.warning}</Text>
-            </Callout>
-          ) : null}
-          {list.worktrees === null ? (
-            <Callout tone="warning" icon="warning">
-              <Text>{`Couldn't read Orca's worktrees, so Start is off. ${list.worktreesError ?? ''}`.trim()}</Text>
-            </Callout>
-          ) : null}
-          {list.tasks.length === 0 ? (
-            <EmptyState title="No open tasks" icon="check" />
-          ) : (
-            list.tasks.map((task) => <TaskCard key={task.key} task={task} projectId={list.project.id} worktrees={list.worktrees} />)
-          )}
-          {list.nextCursor !== null ? <LoadMore /> : null}
-          {list.truncated ? (
-            <Text size="sm" muted>
-              {list.provider === 'github'
-                ? "Showing the first 100 of your repository's issues."
-                : 'Showing the first 100 tasks — narrow your JQL.'}
-            </Text>
-          ) : null}
-        </Stack>
-      )
+      return <ReadyList list={list} />
   }
 }
 
-function LoadMore() {
-  const error = read(moreError)
+type ReadyTaskList = Extract<TaskList, { kind: 'ready' }>
+
+/** The warnings and the search, which stay in place, then the list, which scrolls inside the rest
+ *  of the panel's height: the loaded tasks that match the search, "Load more" and the truncation
+ *  notice. */
+function ReadyList({ list }: { list: ReadyTaskList }) {
+  const query = read(search)
+  const tasks = list.tasks.filter((task) => matchesSearch(task, query))
   return (
-    <Stack gap="xs">
+    <>
+      {list.warning ? (
+        <Callout tone="warning" icon="warning">
+          <Text>{list.warning}</Text>
+        </Callout>
+      ) : null}
+      {list.worktrees === null ? (
+        <Callout tone="warning" icon="warning">
+          <Text>{`Couldn't read Orca's worktrees, so Start is off. ${list.worktreesError ?? ''}`.trim()}</Text>
+        </Callout>
+      ) : null}
+      <Stack gap="xs">
+        <Input type="search" label="Search tasks" labelHidden value={query} placeholder="Search key, title or label" onChange={(value) => set(search, value)} />
+        {list.nextCursor !== null || list.truncated ? (
+          <Text size="sm" muted>
+            {`Filtering ${list.tasks.length} loaded tasks`}
+          </Text>
+        ) : null}
+      </Stack>
+      <Box direction="column" gap="xs" grow minHeight={0} maxHeight="100%" scroll="y">
+        {list.tasks.length === 0 ? (
+          <EmptyState title="No open tasks" icon="check" />
+        ) : tasks.length === 0 ? (
+          <Text size="sm" muted>
+            {`No loaded task matches "${query.trim()}".`}
+          </Text>
+        ) : (
+          tasks.map((task) => <TaskCard key={task.key} task={task} projectId={list.project.id} worktrees={list.worktrees} />)
+        )}
+        {list.nextCursor !== null ? <LoadMore count={list.tasks.length} /> : null}
+        {list.truncated ? (
+          <Text size="sm" muted>
+            {list.provider === 'github' ? "Showing the first 100 of your repository's issues." : 'Showing the first 100 tasks — narrow your JQL.'}
+          </Text>
+        ) : null}
+      </Box>
+    </>
+  )
+}
+
+/** A full-width button that says how many tasks are loaded, with the last failure above it. */
+function LoadMore({ count }: { count: number }) {
+  const error = read(moreError)
+  const busy = read(loadingMore)
+  return (
+    <Stack gap="xs" align="stretch">
       {error ? (
         <Text size="sm" tone="danger">
           {`Couldn't load more tasks: ${error}`}
         </Text>
       ) : null}
-      <Row gap="xs" align="center">
-        <Button key="load-more" size="sm" variant="ghost" disabled={read(loadingMore)} onPress={() => void loadMore()}>
-          Load more
-        </Button>
-        {read(loadingMore) ? <Spinner label="Loading more tasks" labelHidden /> : null}
-      </Row>
+      <Button key="load-more" size="sm" variant="outline" disabled={busy} onPress={() => void loadMore()}>
+        {busy ? `Showing ${count} · Loading…` : `Showing ${count} · Load more`}
+      </Button>
     </Stack>
   )
 }
 
-/** What the card says about its worktree's agent. */
-function agentLine(worktree: TaskWorktree, agentStarting: boolean): string {
+/** What the card says about its worktree's agent, or null while it has none and none is starting. */
+function agentLine(worktree: TaskWorktree, agentStarting: boolean): string | null {
   if (worktree.agent) return `Agent: ${worktree.agent}`
-  return agentStarting ? 'Agent starting…' : 'No agent running'
+  return agentStarting ? 'Agent starting…' : null
 }
 
+/** One row per part: the key and the whole title; the worktree, or the status and labels; the
+ *  agent; the template and Start, while there is no worktree. */
 function TaskCard({ task, projectId, worktrees }: { task: Task; projectId: string; worktrees: Record<string, TaskWorktree> | null }) {
   // Every GitHub task is open, so its status says nothing.
   const status = task.tracker !== 'github' ? task.status : null
   const worktree = worktrees?.[task.key] ?? null
   const isStarting = worktree === null && read(starting)[task.key] === true
   const error = read(taskErrors)[task.key]
-  const shown = read(shownSettings)
-  const settings = shown?.projectId === projectId ? shown : null
+  const agent = worktree ? agentLine(worktree, read(agentStarting)[task.key] === projectId) : null
   return (
-    <Box border radius="md" padding="sm" direction="column" gap="xs">
-      <Row justify="between" align="center" gap="xs">
-        <Text>
-          <Link href={task.url}>{task.key}</Link> {task.title}
+    <Box border radius="md" padding="sm" direction="column" gap="sm" shrink={false}>
+      <Text>
+        <Link href={task.url}>{task.key}</Link> {task.title}
+      </Text>
+      {worktree ? (
+        <Text size="sm" truncate>
+          <Link onPress={() => void openWorktree(task.key, worktree.worktreeId)}>{worktree.name}</Link>
         </Text>
-        {worktree ? null : isStarting ? (
-          <Spinner label={`Starting ${task.key}`} labelHidden />
-        ) : (
-          <Row gap="xs" align="center">
-            {settings && settings.templates.length >= 2 ? (
-              <Select
-                label={`Template for ${task.key}`}
-                labelHidden
-                value={chosenTemplateId(settings, task.key)}
-                options={templateOptions(settings.templates)}
-                onChange={(id) => update(cardTemplates, (chosen) => ({ ...chosen, [cardKey(projectId, task.key)]: id }))}
-              />
-            ) : null}
-            <Button key={`start:${task.key}`} size="sm" icon="play" disabled={worktrees === null} onPress={() => void startTask(task)}>
-              Start
-            </Button>
-          </Row>
-        )}
-      </Row>
-      {status || task.labels.length > 0 ? (
-        <Row gap="xs" wrap>
+      ) : status || task.labels.length > 0 ? (
+        <Box direction="row" wrap gap="xs" align="center">
           {status ? <Badge tone="accent">{status}</Badge> : null}
           {task.labels.map((label) => (
             <Badge key={label}>{label}</Badge>
           ))}
-        </Row>
+        </Box>
       ) : null}
-      {worktree ? (
-        <Row gap="xs" align="center" wrap>
-          <Link onPress={() => void openWorktree(task.key, worktree.worktreeId)}>{worktree.name}</Link>
-          <Text size="sm" muted>
-            {agentLine(worktree, read(agentStarting)[task.key] === projectId)}
-          </Text>
-        </Row>
+      {agent !== null ? (
+        <Text size="sm" muted>
+          {agent}
+        </Text>
       ) : null}
+      {worktree ? null : isStarting ? (
+        <Spinner label={`Starting ${task.key}`} />
+      ) : (
+        <Box direction="row" align="center" justify="end" gap="xs">
+          <CardTemplate task={task} projectId={projectId} />
+          <Box shrink={false}>
+            <IconButton
+              key={`start:${task.key}`}
+              icon="play"
+              variant="outline"
+              label={`Start ${task.key}`}
+              tooltip="Start"
+              disabled={worktrees === null}
+              onPress={() => void startTask(task)}
+            />
+          </Box>
+        </Box>
+      )}
       {isStarting ? (
         <Text size="sm" muted>
           Creating the worktree can take a minute.
@@ -1077,6 +1108,24 @@ function TaskCard({ task, projectId, worktrees }: { task: Task; projectId: strin
           {error}
         </Text>
       ) : null}
+    </Box>
+  )
+}
+
+/** The card's template `Select`, filling the Start row; only when the project has two or more
+ *  templates. */
+function CardTemplate({ task, projectId }: { task: Task; projectId: string }) {
+  const shown = read(shownSettings)
+  if (shown?.projectId !== projectId || shown.templates.length < 2) return null
+  return (
+    <Box grow minWidth={0}>
+      <Select
+        label={`Template for ${task.key}`}
+        labelHidden
+        value={chosenTemplateId(shown, task.key)}
+        options={templateOptions(shown.templates)}
+        onChange={(id) => update(cardTemplates, (chosen) => ({ ...chosen, [cardKey(projectId, task.key)]: id }))}
+      />
     </Box>
   )
 }
