@@ -128,7 +128,7 @@ test('typing in the field above the list filters the loaded tasks to those whose
   const field = view.find(searchField)
   assert.equal(field?.props.type, 'search')
   assert.equal(field?.props.labelHidden, true)
-  assert.equal(field?.props.placeholder, 'Search key, title or label')
+  assert.equal(field?.props.placeholder, 'Filter loaded tasks · Enter searches the tracker')
   assert.deepEqual(keysShown(view, ['#42', '#7', '#8']), ['#42', '#7', '#8'])
 
   await view.type(searchField, '  ui ')
