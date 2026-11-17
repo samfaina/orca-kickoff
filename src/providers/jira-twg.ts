@@ -4,18 +4,19 @@ import { unreadableOutput } from '../cli'
 import { adfToText } from '../adf'
 import { isRecord, parseJson, text } from '../json'
 import type { ProviderConfigs, Task } from '../protocol'
-import { jiraTask, requireJql } from './jira'
-import type { Provider } from './types'
+import { jiraSearchJql, jiraTask, requireJql } from './jira'
+import type { PageRequest, Provider } from './types'
 
 const LIMIT = 50
 const FIELDS = 'summary,status,assignee,labels,description'
 
 type Config = Required<ProviderConfigs>['jira-twg']
 
-/** The `twg` arguments for one page. `--site`, `--profile` and `--after` only when not blank, so
- *  twg uses its own defaults otherwise. */
-export function jiraTwgArgs(config: Config, cursor = ''): string[] {
-  const args = ['jira', 'workitem', 'query', '--jql', requireJql(config.jql), '--fields', FIELDS]
+/** The `twg` arguments for one page, of the whole list or of a tracker search. A cursor belongs
+ *  to its query, so the next page of a tracker search sends the same words again. `--site`,
+ *  `--profile` and `--after` only when not blank, so twg uses its own defaults otherwise. */
+export function jiraTwgArgs(config: Config, { cursor = '', query }: PageRequest = {}): string[] {
+  const args = ['jira', 'workitem', 'query', '--jql', jiraSearchJql(requireJql(config.jql), query), '--fields', FIELDS]
   args.push('--limit', String(LIMIT), '--output', 'json', '--api-version', 'v2')
   const site = config.site.trim()
   const profile = config.profile.trim()
@@ -29,8 +30,8 @@ export const jiraTwg: Provider<Config> = {
   id: 'jira-twg',
   tracker: 'jira',
   label: 'Jira (twg)',
-  async list(run, _project, config, cursor) {
-    const answer = parseJson(await run('twg', jiraTwgArgs(config, cursor)))
+  async list(run, _project, config, request) {
+    const answer = parseJson(await run('twg', jiraTwgArgs(config, request)))
     if (!isRecord(answer) || !isRecord(answer.data) || !Array.isArray(answer.data.issues)) throw unreadableOutput('twg')
     return { tasks: toTasks(answer.data.issues), nextCursor: nextCursor(answer), truncated: false }
   }

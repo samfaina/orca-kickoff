@@ -42,6 +42,7 @@ import {
   providerConfig,
   readSettings,
   SETTINGS_KEY,
+  trackerOf,
   withProjectChanges,
   type JiraProviderId,
   type JiraSitesResult,
@@ -192,11 +193,23 @@ type SettingsChoice = 'open' | 'closed' | 'auto'
 
 /** Kept in memory, and back to `auto` when the active project changes. */
 const settingsChoice = atom<SettingsChoice>('auto')
-/** The search over the loaded tasks. Kept in memory, and cleared when the active project changes. */
-const search = atom('')
-/** The active project `settingsChoice` and `search` belong to, null without one, or undefined
+/** The text of the "Search tasks" field: the filter over the loaded tasks, and the words of a
+ *  tracker search. Kept in memory, and cleared when the active project changes. */
+const fieldText = atom('')
+/** The active project `settingsChoice` and `fieldText` belong to, null without one, or undefined
  *  before the first answer that says which. */
 let viewStateFor: string | null | undefined
+
+/** A tracker search shown in place of the loaded list, with the trimmed words it asked for. The
+ *  loaded list stays in `list` meanwhile, so leaving the tracker search shows it again without a
+ *  reload. */
+type TrackerSearch =
+  | { query: string; kind: 'loading' }
+  | { query: string; kind: 'error'; message: string }
+  | { query: string; kind: 'ready'; tasks: Task[]; nextCursor: string | null; truncated: boolean }
+
+/** The tracker search shown, or null while the loaded list is. */
+const trackerSearch = atom<TrackerSearch | null>(null)
 
 /** The template detail's draft while it replaces the panel view, else null. */
 const templateDraft = atom<TemplateDraft | null>(null)
@@ -245,6 +258,8 @@ function mergeChanges(earlier: ProjectChanges, later: ProjectChanges): ProjectCh
 function changeSettings(changes: ProjectChanges): void {
   const current = read(shownSettings)
   if (!current) return
+  // A tracker search narrows the list the tracker settings give, which this changes.
+  if (changes.provider !== undefined || changes.providers !== undefined) leaveTrackerSearch()
   const providers = { ...current.providers, ...changes.providers }
   set(shownSettings, { ...current, ...changes, provider: changes.provider ?? current.provider, providers })
   const earlier = pending?.projectId === current.projectId ? pending.changes : {}
@@ -379,6 +394,7 @@ function chooseProviderFor(value: string): void {
  *  opened by itself and the tasks now load. */
 function loadKeepingSettingsOpen(): void {
   set(settingsChoice, 'open')
+  leaveTrackerSearch()
   void load()
 }
 
@@ -402,9 +418,11 @@ async function loadJiraSites(): Promise<void> {
   }
 }
 
-/** Lists the active project's tasks. `poll` says the poll asked for it, so the poll's last answer
- *  stays the measure for the next one. */
+/** Lists the active project's tasks, or runs the tracker search shown again. `poll` says the poll
+ *  asked for it, so the poll's last answer stays the measure for the next one. */
 async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
+  const shownSearch = read(trackerSearch)
+  if (shownSearch !== null) return searchTracker(shownSearch.query, reason)
   const mine = ++generation
   set(loading, true)
   set(loadingMore, false)
@@ -427,11 +445,11 @@ async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
   const draft = read(templateDraft)
   if (draft && answeredProjectId !== undefined && answeredProjectId !== draft.projectId) closeTemplate()
   // A change of active project also sends Project settings back to opening by itself and clears
-  // the search. Only once a project was listed: before that, both are as they start.
+  // the field. Only once a project was listed: before that, both are as they start.
   if (answeredProjectId !== undefined) {
     if (typeof viewStateFor === 'string' && answeredProjectId !== viewStateFor) {
       set(settingsChoice, 'auto')
-      set(search, '')
+      set(fieldText, '')
     }
     viewStateFor = answeredProjectId
   }
@@ -454,19 +472,94 @@ async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
   set(loading, false)
 }
 
-/** Asks for the next page and appends its tasks, skipping keys already listed. A page that
- *  arrives after a reload is dropped; one for another project means the project changed, so the
- *  list is loaded again. Pending settings are not saved first: the cursor belongs to the query
- *  that listed the first page. */
+/** Asks the tracker for the listed project's tasks that match the trimmed `query`, and shows them
+ *  in place of the loaded list, which stays as it is. The same tracker search run again keeps its
+ *  results while it loads, as a reload keeps the list. A blank query asks nothing. An answer for
+ *  another project or tracker means the list the tracker search narrowed is gone: the tracker
+ *  search ends and the list is loaded again. */
+async function searchTracker(query: string, reason: 'poll' | 'other' = 'other'): Promise<void> {
+  if (query === '' || read(list)?.kind !== 'ready') return
+  const mine = ++generation
+  const before = read(trackerSearch)
+  set(loading, true)
+  set(loadingMore, false)
+  set(moreError, null)
+  if (before?.query !== query || before.kind !== 'ready') set(trackerSearch, { query, kind: 'loading' })
+  let answer: TaskList
+  let askedAt = 0
+  let worktreesAskedAt = 0
+  try {
+    await flushSettings()
+    askedAt = ++startClock
+    worktreesAskedAt = ++worktreesClock
+    answer = await plugin.request('tasks.load', { query }, { timeoutMs: LOAD_TIMEOUT_MS })
+  } catch (error) {
+    answer = { kind: 'error', project: null, message: `Kickoff's worker didn't answer (${errorCode(error)}). Reload to try again.` }
+  }
+  if (mine !== generation) return
+  if (reason !== 'poll') lastPolledProjectId = undefined
+  const current = read(list)
+  if (current?.kind !== 'ready') return
+  if (answer.kind === 'error' && (answer.project === null || answer.project.id === current.project.id)) {
+    set(trackerSearch, { query, kind: 'error', message: answer.message })
+    set(loading, false)
+    return
+  }
+  if (answer.kind !== 'ready' || answer.project.id !== current.project.id || answer.provider !== current.provider) {
+    set(trackerSearch, null)
+    return load()
+  }
+  showStarting(answer.starting, askedAt)
+  if (answer.worktrees) agentsReported(answer.project.id, answer.worktrees)
+  worktreesShownAt = worktreesAskedAt
+  set(list, { ...current, worktrees: answer.worktrees, worktreesError: answer.worktreesError, warning: answer.warning })
+  set(trackerSearch, { query, kind: 'ready', tasks: answer.tasks, nextCursor: answer.nextCursor, truncated: answer.truncated })
+  set(loading, false)
+}
+
+/** Goes back from the tracker search to the loaded list as it was, with the filter, dropping any
+ *  answer still on its way. When a tracker search was loading, its answer may have said that the active
+ *  project changed, so the list is loaded again. */
+function leaveTrackerSearch(): void {
+  if (read(trackerSearch) === null) return
+  const wasLoading = read(loading)
+  generation++
+  set(trackerSearch, null)
+  set(loading, false)
+  set(loadingMore, false)
+  set(moreError, null)
+  if (wasLoading) void load()
+}
+
+/** "Clear search": back to the loaded list, with an empty field. */
+function clearTrackerSearch(): void {
+  leaveTrackerSearch()
+  set(fieldText, '')
+}
+
+/** Typing in the field filters the loaded list, leaving a tracker search shown. */
+function changeField(value: string): void {
+  set(fieldText, value)
+  leaveTrackerSearch()
+}
+
+/** Asks for the next page of the list, or of the tracker search shown, and appends its tasks,
+ *  skipping keys already listed. A page that arrives after a reload or after the tracker search changed
+ *  is dropped; one for another project means the project changed, so the list is loaded again.
+ *  Pending settings are not saved first: the cursor belongs to the query that listed the first
+ *  page, and a tracker search sends its words again with it. */
 async function loadMore(): Promise<void> {
   const current = read(list)
-  if (current?.kind !== 'ready' || current.nextCursor === null || read(loadingMore)) return
+  const found = read(trackerSearch)
+  if (current?.kind !== 'ready' || read(loadingMore) || (found !== null && found.kind !== 'ready')) return
+  const cursor = found ? found.nextCursor : current.nextCursor
+  if (cursor === null) return
   const mine = generation
   set(loadingMore, true)
   set(moreError, null)
   let answer: TaskList
   try {
-    answer = await plugin.request('tasks.load', { cursor: current.nextCursor }, { timeoutMs: LOAD_TIMEOUT_MS })
+    answer = await plugin.request('tasks.load', found ? { cursor, query: found.query } : { cursor }, { timeoutMs: LOAD_TIMEOUT_MS })
   } catch (error) {
     answer = { kind: 'error', project: null, message: `Kickoff's worker didn't answer (${errorCode(error)}).` }
   }
@@ -478,10 +571,16 @@ async function loadMore(): Promise<void> {
     return
   }
   if (answer.kind !== 'ready' || answer.project.id !== shown.project.id || answer.provider !== shown.provider) {
+    set(trackerSearch, null)
     void load()
     return
   }
-  set(list, { ...answer, tasks: appendTasks(shown.tasks, answer.tasks) })
+  const shownSearch = read(trackerSearch)
+  if (shownSearch?.kind === 'ready') {
+    set(trackerSearch, { ...shownSearch, tasks: appendTasks(shownSearch.tasks, answer.tasks), nextCursor: answer.nextCursor, truncated: answer.truncated })
+  } else {
+    set(list, { ...answer, tasks: appendTasks(shown.tasks, answer.tasks) })
+  }
 }
 
 /** The listed project's id, when the list is ready. */
@@ -740,7 +839,8 @@ export function setup(ctx: PanelContext): void {
   set(variablesOpen, false)
   set(settingsChoice, 'auto')
   viewStateFor = undefined
-  set(search, '')
+  set(fieldText, '')
+  set(trackerSearch, null)
   // Closing the panel drops the template detail's draft.
   ctx.subscriptions.push({ dispose: closeTemplate })
   let polling = false
@@ -984,12 +1084,17 @@ function Body({ list }: { list: TaskList }) {
 
 type ReadyTaskList = Extract<TaskList, { kind: 'ready' }>
 
-/** The warnings and the search, which stay in place, then the list, which scrolls inside the rest
- *  of the panel's height: the loaded tasks that match the search, "Load more" and the truncation
- *  notice. */
+/** The tracker's name, as the panel says it. */
+const trackerName = (provider: ProviderId) => (trackerOf(provider) === 'github' ? 'GitHub' : 'Jira')
+
+/** The warnings, the field and the tracker search's title, which stay in place, then the list,
+ *  which scrolls inside the rest of the panel's height: the loaded tasks that match the filter, or
+ *  the tracker search's results, then "Load more" and the truncation notice. */
 function ReadyList({ list }: { list: ReadyTaskList }) {
-  const query = read(search)
-  const tasks = list.tasks.filter((task) => matchesSearch(task, query))
+  const text = read(fieldText)
+  const query = text.trim()
+  const found = read(trackerSearch)
+  const tracker = trackerName(list.provider)
   return (
     <>
       {list.warning ? (
@@ -1003,32 +1108,107 @@ function ReadyList({ list }: { list: ReadyTaskList }) {
         </Callout>
       ) : null}
       <Stack gap="xs">
-        <Input type="search" label="Search tasks" labelHidden value={query} placeholder="Search key, title or label" onChange={(value) => set(search, value)} />
-        {list.nextCursor !== null || list.truncated ? (
-          <Text size="sm" muted>
-            {`Filtering ${list.tasks.length} loaded tasks`}
-          </Text>
+        <Input
+          type="search"
+          label="Search tasks"
+          labelHidden
+          value={text}
+          placeholder="Search key, title or label"
+          onChange={changeField}
+          onSubmit={(value) => void searchTracker(value.trim())}
+        />
+        {query !== '' ? (
+          <Box direction="row" justify="between" align="center" gap="xs">
+            <Box grow minWidth={0}>
+              {found === null ? (
+                <Text size="sm" muted>
+                  {`Filtering ${list.tasks.length} loaded tasks · Enter searches ${tracker}`}
+                </Text>
+              ) : null}
+            </Box>
+            <Box shrink={false}>
+              <Button key="tracker-search" size="sm" variant="outline" onPress={() => void searchTracker(query)}>
+                {`Search in ${tracker}`}
+              </Button>
+            </Box>
+          </Box>
         ) : null}
       </Stack>
+      {found !== null ? (
+        <Box direction="row" justify="between" align="center" gap="xs">
+          <Box grow minWidth={0}>
+            <Text size="sm" weight="semibold">{`Results in ${tracker} for "${found.query}"`}</Text>
+          </Box>
+          <Box shrink={false}>
+            <Button key="clear-search" size="sm" variant="ghost" onPress={clearTrackerSearch}>
+              Clear search
+            </Button>
+          </Box>
+        </Box>
+      ) : null}
       <Box direction="column" gap="xs" grow minHeight={0} maxHeight="100%" scroll="y">
-        {list.tasks.length === 0 ? (
-          <EmptyState title="No open tasks" icon="check" />
-        ) : tasks.length === 0 ? (
-          <Text size="sm" muted>
-            {`No loaded task matches "${query.trim()}".`}
-          </Text>
-        ) : (
-          tasks.map((task) => <TaskCard key={task.key} task={task} projectId={list.project.id} worktrees={list.worktrees} />)
-        )}
-        {list.nextCursor !== null ? <LoadMore count={list.tasks.length} /> : null}
-        {list.truncated ? (
-          <Text size="sm" muted>
-            {list.provider === 'github' ? "Showing the first 100 of your repository's issues." : 'Showing the first 100 tasks — narrow your JQL.'}
-          </Text>
-        ) : null}
+        {found === null ? <LoadedTasks list={list} query={query} /> : <SearchResults found={found} list={list} tracker={tracker} />}
       </Box>
     </>
   )
+}
+
+/** The loaded tasks that match the filter, "Load more" and the truncation notice. */
+function LoadedTasks({ list, query }: { list: ReadyTaskList; query: string }) {
+  const tasks = list.tasks.filter((task) => matchesSearch(task, query))
+  return (
+    <>
+      {list.tasks.length === 0 ? (
+        <EmptyState title="No open tasks" icon="check" />
+      ) : tasks.length === 0 ? (
+        <Text size="sm" muted>
+          {`No loaded task matches "${query}".`}
+        </Text>
+      ) : (
+        tasks.map((task) => <TaskCard key={task.key} task={task} projectId={list.project.id} worktrees={list.worktrees} />)
+      )}
+      {list.nextCursor !== null ? <LoadMore count={list.tasks.length} /> : null}
+      {list.truncated ? (
+        <Text size="sm" muted>
+          {list.provider === 'github' ? "Showing the first 100 of your repository's issues." : 'Showing the first 100 tasks — narrow your JQL.'}
+        </Text>
+      ) : null}
+    </>
+  )
+}
+
+/** A tracker search's results, unfiltered: a result may match on its description, which the
+ *  filter doesn't read. Then "Load more" and the truncation notice. The cards show the worktrees
+ *  of the loaded list, which every read of them keeps up to date. */
+function SearchResults({ found, list, tracker }: { found: TrackerSearch; list: ReadyTaskList; tracker: string }) {
+  switch (found.kind) {
+    case 'loading':
+      return <Spinner label={`Searching ${tracker}`} />
+    case 'error':
+      return (
+        <Callout tone="danger" title="Couldn't load tasks" icon="error">
+          <Text>{found.message}</Text>
+        </Callout>
+      )
+    case 'ready':
+      return (
+        <>
+          {found.tasks.length === 0 ? (
+            <Text size="sm" muted>
+              {`No task in ${tracker} matches "${found.query}".`}
+            </Text>
+          ) : (
+            found.tasks.map((task) => <TaskCard key={task.key} task={task} projectId={list.project.id} worktrees={list.worktrees} />)
+          )}
+          {found.nextCursor !== null ? <LoadMore count={found.tasks.length} /> : null}
+          {found.truncated ? (
+            <Text size="sm" muted>
+              Showing the first 100 results — refine your search
+            </Text>
+          ) : null}
+        </>
+      )
+  }
 }
 
 /** A full-width button that says how many tasks are loaded, with the last failure above it. */
