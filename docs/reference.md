@@ -436,6 +436,13 @@ No CLI command or plugin API exposes it; `orca settings` and `orca config` are u
   - Empty JQL: rejected with `invalid_argument`.
   - Without a Jira connection, Orca's code answers "Not connected to Jira." when creating or editing a task **[Verified]** (read in `app.asar`). `orca jira search` instead fails with the unknown-site message, "No matching connected Jira site. Check orca jira connection and Orca Jira settings." **[Verified]**, seen by the maintainer in Kickoff's panel inside Orca 1.4.259 after disconnecting Jira (issue #23). Its error code was not seen.
 - `orca jira list --filter assigned` uses `assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC` **[Verified]**.
+- Text search in JQL **[Verified]** (issue #48, same results with `orca jira search` and `twg jira workitem query`, Jira Cloud):
+  - `(<jql>) AND text ~ "<words>"` fails with `runtime_error` (exit 1) when `<jql>` ends in `ORDER BY ...`: the `ORDER BY` has to stay outside the parentheses, as in `(<conditions>) AND text ~ "<words>" ORDER BY updated DESC`.
+  - `text ~` matches whole words: a word prefix matches nothing unless it ends in `*` (`"pag*"`).
+  - Stop words such as `a` and `the` match nothing.
+  - `text ~ "<task key>"` does not find the task; `key = "<task key>"` does. A well-formed key that does not exist returns no results, not an error.
+  - An unterminated `"` inside the quoted words (`text ~ "\"abc"`) returns no results, not an error.
+  - Lucene special characters inside the quoted words (`: - ( ) ! ? [ ] ^ ~ / { } && ||`) give no error with `orca jira search`. Inside a JQL string, `"` and `\` still have to be escaped with `\`: an unescaped trailing `\` would escape the closing quote.
 
 ## Executable paths
 
@@ -464,6 +471,13 @@ On Windows all three tools are `.exe` and on PATH **[Verified]**:
 ```
 
 - `--limit` defaults to 30. `--search`, `--assignee` and `--label` also exist.
+- `--limit` above 100 works: gh pages on its own and has no cursor to resume from **[Verified]** (issue #48: `--limit 250` gave 250 issues, `--limit 1000` gave 1000 in about 6 s, on a public repository).
+- `--search <query>` uses GitHub's issue search syntax **[Verified]** (issue #48):
+  - It matches whole words: `pag` and `pag*` find nothing where `pager` finds issues.
+  - A bare issue number finds that issue.
+  - Qualifiers in the query override the other flags: `--state open --search "is:closed"` returns closed issues. Quoted, `"\"is:closed\""` is searched as text and only open issues come back.
+  - `is:pr` fails: "cannot use pull request search qualifiers with `gh issue list`".
+  - An unterminated `"` returns no results, not an error.
 - Logged out (no stored login, no `GH_TOKEN`): exit 4, empty stdout, and stderr starting `To get started with GitHub CLI, please run:  gh auth login`, then a line about `GH_TOKEN` **[Verified]**.
 - For GitHub Enterprise, `--repo` takes `<host>/<owner>/<repo>` **[Assumed]**; it is the documented `gh` form, but not run here.
 
