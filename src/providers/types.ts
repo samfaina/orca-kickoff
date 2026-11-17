@@ -5,11 +5,21 @@ import type { ProjectRef, ProviderId, Task, TrackerId } from '../protocol'
 
 export type TaskPage = { tasks: Task[]; nextCursor: string | null; truncated: boolean }
 
+/** Which page to list. `query` makes it a tracker search: the user's plain words, never tracker
+ *  syntax. A cursor belongs to the query that listed the page before it. */
+export type PageRequest = { cursor?: string; query?: string }
+
 export interface Provider<Config> {
   id: ProviderId
   tracker: TrackerId
   label: string
-  /** One page of open tasks. Rejects with a message the panel can show. `run` is injected so
-   *  providers can be tested without running anything. */
-  list(run: RunCli, project: ProjectRef, config: Config, cursor?: string): Promise<TaskPage>
+  /** One page of open tasks: of the whole list, or of those that match `request.query` when it
+   *  has words. Rejects with a message the panel can show. `run` is injected so providers can be
+   *  tested without running anything. */
+  list(run: RunCli, project: ProjectRef, config: Config, request?: PageRequest): Promise<TaskPage>
+}
+
+/** The words of a tracker search, split on whitespace. A blank query has none. */
+export function searchWords(query = ''): string[] {
+  return query.split(/\s+/).filter((word) => word !== '')
 }

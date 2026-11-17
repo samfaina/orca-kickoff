@@ -182,6 +182,34 @@ test('a project with Jira (twg) lists its tasks through twg, one page at a time'
   assert.deepEqual(twgCalls[1].args.slice(-4), ['--profile', 'work', '--after', 'cursor-2'])
 })
 
+test('tasks.load with a query runs a tracker search, and a Jira (twg) next page sends the query again with the cursor', async () => {
+  const settings = {
+    version: 1,
+    projects: { 'github:acme/web': { provider: 'jira-twg', providers: { 'jira-twg': { jql: 'project = WEB ORDER BY rank', site: '', profile: '' } } } }
+  }
+  const page = JSON.stringify({
+    data: { issues: [{ key: 'WEB-7', summary: 'Dark mode', assignee: null, url: 'https://example.atlassian.net/browse/WEB-7' }] },
+    pageInfo: { hasNextPage: true, nextCursor: 'cursor-2' }
+  })
+  const { worker, calls } = await start({ ...ORCA_OK, 'twg jira workitem': page }, { storage: { settings } })
+  const found = await worker.request('tasks.load', { query: 'dark' })
+  assert.ok(found.kind === 'ready')
+  assert.deepEqual(found.tasks.map((task) => task.key), ['WEB-7'])
+  assert.equal(found.nextCursor, 'cursor-2')
+  await worker.request('tasks.load', { query: 'dark', cursor: 'cursor-2' })
+  const jqls = calls.filter((call) => call.tool === 'twg').map((call) => call.args[call.args.indexOf('--jql') + 1])
+  assert.deepEqual(jqls, ['(project = WEB) AND (text ~ "dark*") ORDER BY rank', '(project = WEB) AND (text ~ "dark*") ORDER BY rank'])
+  assert.equal(calls.filter((call) => call.tool === 'twg')[1].args.at(-1), 'cursor-2')
+})
+
+test('tasks.load with a query searches GitHub with the quoted words', async () => {
+  const { worker, calls } = await start({ ...ORCA_OK, 'gh issue list': GH_ISSUES })
+  const found = await worker.request('tasks.load', { query: 'dark #42' })
+  assert.ok(found.kind === 'ready')
+  const gh = calls.find((call) => call.tool === 'gh')
+  assert.deepEqual(gh?.args.slice(-2), ['--search', '"dark" "42"'])
+})
+
 test("when Orca fails, its real message is shown, or the last known project is used with a warning", async () => {
   const down = new CliError('orca failed: Orca is not running.')
   const { worker, answer } = await start({ ...ORCA_OK, 'orca project list': down })

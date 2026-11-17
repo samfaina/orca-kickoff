@@ -91,6 +91,35 @@ test('the arguments carry --site only when a site is set', async () => {
   assert.equal(calls[1].args.includes('--site'), false)
 })
 
+test('a tracker search runs the JQL narrowed to the words, with the same limit and site', async () => {
+  const { run, calls } = answering(wrap([]))
+  const jql = 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC'
+  await jiraOrca.list(run, notes, { jql, siteId: 'site-2' }, { query: 'dark web-12' })
+  assert.deepEqual(calls[0].args, [
+    'jira',
+    'search',
+    '(assignee = currentUser() AND statusCategory != Done) AND (text ~ "dark* web-12*" OR key = "WEB-12") ORDER BY updated DESC',
+    '--limit',
+    '100',
+    '--json',
+    '--site',
+    'site-2'
+  ])
+})
+
+test('100 tracker search results mean they are truncated', async () => {
+  const items = Array.from({ length: 100 }, (_, index) => issue(`WEB-${index + 1}`))
+  const page = await jiraOrca.list(answering(wrap(items)).run, notes, config, { query: 'dark' })
+  assert.equal(page.truncated, true)
+  assert.equal(page.nextCursor, null)
+})
+
+test("a blank JQL doesn't run a tracker search either", async () => {
+  const { run, calls } = answering(wrap([]))
+  await assert.rejects(jiraOrca.list(run, notes, { jql: '  ', siteId: '' }, { query: 'dark' }), /Enter a JQL query/)
+  assert.equal(calls.length, 0)
+})
+
 test("a blank JQL doesn't run the CLI and asks for one", async () => {
   const { run, calls } = answering(wrap([]))
   await assert.rejects(jiraOrca.list(run, notes, { jql: '  ', siteId: '' }), /Enter a JQL query/)
