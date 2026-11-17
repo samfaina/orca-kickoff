@@ -32,7 +32,7 @@ test('the match ignores case', () => {
   assert.equal(matchesSearch(task, 'UI'), true)
 })
 
-test('the query is trimmed, and an empty or blank query matches every task', () => {
+test('the filter text is trimmed, and an empty or blank one matches every task', () => {
   assert.equal(matchesSearch(task, '  dark  '), true)
   assert.equal(matchesSearch(task, ' dark  settings '), false)
   assert.equal(matchesSearch(task, ''), true)

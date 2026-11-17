@@ -41,6 +41,7 @@ import {
 } from './protocol'
 import { taskLister } from './providers'
 import { JIRA_CONNECTION_ARGS, parseJiraSites } from './providers/jira-orca'
+import type { PageRequest } from './providers/types'
 import { buildPrompt, projectTemplates } from './template'
 
 /** After a timed-out `worktree create`, Orca may still finish it; a Start of the same task waits
@@ -99,7 +100,8 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
     }
   }
 
-  async function loadTasks(cursor: string | undefined): Promise<TaskList> {
+  /** A page of the project's tasks: of the whole list, or of a tracker search with `query`. */
+  async function loadTasks(request: PageRequest): Promise<TaskList> {
     let project: ProjectRef | null = null
     try {
       const active = await activeProject()
@@ -108,7 +110,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
       const settings = await readProjectSettings(project.id)
       const providerId = projectProvider(settings, project)
       if (!providerId) return { kind: 'needs-config', project }
-      const page = await taskLister(providerId)(run, project, settings, cursor)
+      const page = await taskLister(providerId)(run, project, settings, request)
       const { state } = active
       return {
         kind: 'ready',
@@ -238,7 +240,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
     }
   }
 
-  orca.panels.handle('tasks.load', ({ cursor }) => loadTasks(cursor))
+  orca.panels.handle('tasks.load', ({ cursor, query }) => loadTasks({ cursor, query }))
   orca.panels.handle('worktrees.load', ({ projectId }) => loadWorktrees(projectId))
   orca.panels.handle('project.active', () => activeProjectId())
   orca.panels.handle('jira.sites', () => jiraSites())

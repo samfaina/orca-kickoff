@@ -245,7 +245,9 @@ export type StartEnded = { projectId: string; taskKey: string; agent: string | n
 
 declare module 'orca' {
   interface PluginRequests {
-    'tasks.load': { input: { cursor?: string }; output: TaskList }
+    /** `query`: a tracker search with the user's words; `cursor`: the next page of the list, or
+     *  of the tracker search with the same `query`. */
+    'tasks.load': { input: { cursor?: string; query?: string }; output: TaskList }
     'worktrees.load': { input: { projectId: string }; output: WorktreesResult }
     'project.active': { input: {}; output: ActiveProjectResult }
     'jira.sites': { input: {}; output: JiraSitesResult }
