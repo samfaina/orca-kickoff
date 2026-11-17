@@ -874,7 +874,7 @@ function SettingsView({ projectName, shown }: { projectName: string; shown: Show
     <Stack gap="sm">
       <PrototypeBar />
       <TitleRow prefix={`${projectName} ·`} title="Project settings" level={3}>
-        <Button key="settings-done" size="sm" variant="ghost" icon="close" onPress={() => set(settingsChoice, 'closed')}>
+        <Button key="settings-done" size="sm" variant="solid" onPress={() => set(settingsChoice, 'closed')}>
           Done
         </Button>
       </TitleRow>
