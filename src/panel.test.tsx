@@ -96,8 +96,8 @@ test('shows the status of tasks outside GitHub', async () => {
 
 const searchField = { type: 'Input', label: 'Search tasks' }
 
-/** The keys of `keys` whose card the panel shows. */
-const cardsShown = (view: TestPanel, keys: string[]) => keys.filter((key) => view.find({ type: 'Link', text: key }))
+/** The keys of `keys` whose card the panel shows, once each. */
+const keysShown = (view: TestPanel, keys: string[]) => keys.filter((key) => view.findAll({ type: 'Link', text: key }).length === 1)
 
 test('the search above the list shows only the loaded tasks whose key, title or label contains it', async () => {
   const view = await show(ready([task('#42', { title: 'Add dark mode', labels: ['ui'] }), task('#7', { title: 'Fix login' }), task('#8', { labels: ['UI polish'] })]))
@@ -105,14 +105,14 @@ test('the search above the list shows only the loaded tasks whose key, title or 
   assert.equal(field?.props.type, 'search')
   assert.equal(field?.props.labelHidden, true)
   assert.equal(field?.props.placeholder, 'Search key, title or label')
-  assert.deepEqual(cardsShown(view, ['#42', '#7', '#8']), ['#42', '#7', '#8'])
+  assert.deepEqual(keysShown(view, ['#42', '#7', '#8']), ['#42', '#7', '#8'])
 
   await view.type(searchField, '  ui ')
-  assert.deepEqual(cardsShown(view, ['#42', '#7', '#8']), ['#42', '#8'])
+  assert.deepEqual(keysShown(view, ['#42', '#7', '#8']), ['#42', '#8'])
   await view.type(searchField, 'LOGIN', { replace: true })
-  assert.deepEqual(cardsShown(view, ['#42', '#7', '#8']), ['#7'])
+  assert.deepEqual(keysShown(view, ['#42', '#7', '#8']), ['#7'])
   await view.type(searchField, '', { replace: true })
-  assert.deepEqual(cardsShown(view, ['#42', '#7', '#8']), ['#42', '#7', '#8'])
+  assert.deepEqual(keysShown(view, ['#42', '#7', '#8']), ['#42', '#7', '#8'])
   assert.deepEqual(view.warnings, [])
   await view.unmount()
 })
@@ -152,22 +152,23 @@ test('only the list scrolls: the header, the warnings and the search stay above 
   const frame = view.tree()
   assert.ok(frame && typeof frame !== 'string')
   assert.equal(frame.type, 'Box')
-  assert.deepEqual(frame.props, { direction: 'column', gap: 'sm', height: '100%' })
-  const parts = rowsOf(frame)
+  assertProps(frame, { direction: 'column', gap: 'sm', height: '100%' })
+  const parts = elementsIn(frame)
   const scrolling = parts.filter((part) => part.props?.scroll !== undefined)
   assert.equal(scrolling.length, 1)
   const [list] = scrolling
   assert.equal(parts.at(-1), list)
-  assert.deepEqual(list.props, { direction: 'column', gap: 'xs', grow: true, minHeight: 0, maxHeight: '100%', scroll: 'y' })
+  assertProps(list, { direction: 'column', gap: 'xs', grow: true, minHeight: 0, maxHeight: '100%', scroll: 'y' })
   assert.deepEqual(
-    rowsOf(list).map(wordsOf),
+    elementsIn(list).map(wordsOf),
     ['#1 Task #1', '#2 Task #2', 'Showing 2 · Load more', "Showing the first 100 of your repository's issues."]
   )
   const above = parts.slice(0, -1).map(wordsOf).join(' | ')
   assert.match(above, /Kickoff ·/)
   assert.match(above, /Using the last known project/)
   assert.equal(nodesIn(list, (node) => node.type === 'Input').length, 0)
-  assert.equal(parts.filter((part) => nodesIn(part, (node) => node.type === 'Input' && node.props?.label === 'Search tasks').length > 0).length, 1)
+  const searches = nodesIn(frame, (node) => node.type === 'Input' && node.props?.label === 'Search tasks')
+  assert.equal(searches.length, 1)
   assert.deepEqual(view.warnings, [])
   await view.unmount()
 })
@@ -219,8 +220,14 @@ function cardOf(view: TestPanel, key: string): TreeSnapshot {
   return card
 }
 
-/** The rows of a card, one per part. */
-const rowsOf = (card: TreeSnapshot) => (card.children ?? []).filter((child): child is TreeSnapshot => typeof child !== 'string')
+/** The drawn elements directly under `node`, without its bare text: a card's rows, one per part. */
+const elementsIn = (node: TreeSnapshot) => (node.children ?? []).filter((child): child is TreeSnapshot => typeof child !== 'string')
+
+/** Checks the props of `node` that `expected` names, whatever other props it has. */
+function assertProps(node: TreeSnapshot, expected: Record<string, unknown>): void {
+  const named = Object.fromEntries(Object.keys(expected).map((name) => [name, node.props?.[name]]))
+  assert.deepEqual(named, expected)
+}
 
 const badgesIn = (node: TreeSnapshot) => nodesIn(node, (inner) => inner.type === 'Badge').map((badge) => ({ text: wordsOf(badge), tone: badge.props?.tone }))
 
@@ -228,18 +235,18 @@ test('a GitHub card without a worktree shows its key and whole title, then its l
   const title = 'Add dark mode to every settings page, including the ones nobody opens'
   const view = await show(ready([task('#42', { title, labels: ['ui', 'good first issue'] })]))
   const card = cardOf(view, '#42')
-  assert.deepEqual(card.props, { border: true, radius: 'md', padding: 'sm', direction: 'column', gap: 'sm', shrink: false })
-  const [heading, meta, start, ...rest] = rowsOf(card)
+  assertProps(card, { border: true, radius: 'md', padding: 'sm', direction: 'column', gap: 'sm', shrink: false })
+  const [heading, meta, start, ...rest] = elementsIn(card)
   assert.equal(heading.type, 'Text')
   assert.equal(heading.props?.truncate, undefined)
   assert.equal(wordsOf(heading), `#42 ${title}`)
-  assert.deepEqual(meta.props, { direction: 'row', wrap: true, gap: 'xs', align: 'center' })
+  assertProps(meta, { direction: 'row', wrap: true, gap: 'xs', align: 'center' })
   assert.deepEqual(badgesIn(meta), [
     { text: 'ui', tone: undefined },
     { text: 'good first issue', tone: undefined }
   ])
   assert.equal(start.props?.justify, 'end')
-  assert.ok(nodesIn(start, (node) => node.key === 'start:#42').length === 1)
+  assert.equal(nodesIn(start, (node) => node.key === 'start:#42').length, 1)
   assert.deepEqual(rest, [])
   await view.unmount()
 })
@@ -247,7 +254,7 @@ test('a GitHub card without a worktree shows its key and whole title, then its l
 test('a Jira card without a worktree shows its status as an accent badge before its labels', async () => {
   const jira = task('WEB-12', { tracker: 'jira', url: 'https://example.atlassian.net/browse/WEB-12', status: 'In Progress', labels: ['ui'] })
   const view = await show(ready([jira], { provider: 'jira-twg' }))
-  const [, meta] = rowsOf(cardOf(view, 'WEB-12'))
+  const [, meta] = elementsIn(cardOf(view, 'WEB-12'))
   assert.deepEqual(badgesIn(meta), [
     { text: 'In Progress', tone: 'accent' },
     { text: 'ui', tone: undefined }
@@ -267,7 +274,7 @@ test('a card with a worktree shows its key and title, then the worktree as a tru
   for (const { key, list } of cases) {
     const view = await show(list)
     const card = cardOf(view, key)
-    const [heading, name, agent, ...rest] = rowsOf(card)
+    const [heading, name, agent, ...rest] = elementsIn(card)
     assert.equal(wordsOf(heading), `${key} Task ${key}`)
     assert.equal(name.type, 'Text')
     assert.equal(name.props?.truncate, true)
@@ -293,7 +300,7 @@ function agentShown(view: TestPanel, key: string): string | null {
 test('a card whose worktree runs no agent shows no agent line', async () => {
   const view = await show(ready([task('#42')], { worktrees: { '#42': { worktreeId: 'r1::/src/web-42', name: 'issue-42-add-dark-mode', agent: null } } }))
   assert.equal(agentShown(view, '#42'), null)
-  assert.equal(rowsOf(cardOf(view, '#42')).length, 2)
+  assert.equal(elementsIn(cardOf(view, '#42')).length, 2)
   await view.unmount()
 })
 
@@ -307,10 +314,10 @@ test('Start is an outline play icon labelled with the task key, at the end of it
   assert.equal(start.props.tone, undefined)
   assert.equal(start.props.tooltip, 'Start')
   assert.equal(start.disabled, false)
-  const [, startRow] = rowsOf(cardOf(view, '#42'))
-  assert.deepEqual(startRow.props, { direction: 'row', align: 'center', justify: 'end', gap: 'xs' })
-  const [holder, ...others] = rowsOf(startRow)
-  assert.deepEqual(holder.props, { shrink: false })
+  const [, startRow] = elementsIn(cardOf(view, '#42'))
+  assertProps(startRow, { direction: 'row', align: 'center', justify: 'end', gap: 'xs' })
+  const [holder, ...others] = elementsIn(startRow)
+  assertProps(holder, { shrink: false })
   assert.equal(holder.children?.length, 1)
   assert.deepEqual(others, [])
   assert.equal(view.find({ type: 'Button', text: 'Start' }), null)
@@ -546,11 +553,11 @@ test('the search stays through a reload and "Load more", and a change of active 
   assert.deepEqual(view.persisted, { plugin: {}, workspace: {}, storage: {} })
   await view.press({ type: 'IconButton', label: 'Reload tasks' })
   assert.equal(view.valueOf(searchField), 'dark')
-  assert.deepEqual(cardsShown(view, ['#1', '#2']), ['#1'])
+  assert.deepEqual(keysShown(view, ['#1', '#2']), ['#1'])
 
   await view.press({ type: 'Button', text: /Load more/ })
   assert.equal(view.valueOf(searchField), 'dark')
-  assert.deepEqual(cardsShown(view, ['#1', '#2', '#3', '#4']), ['#1', '#3'])
+  assert.deepEqual(keysShown(view, ['#1', '#2', '#3', '#4']), ['#1', '#3'])
 
   // A worker that didn't answer says nothing about the project, and a reload of it keeps the search.
   answer = () => {
@@ -564,7 +571,7 @@ test('the search stays through a reload and "Load more", and a change of active 
   answer = () => ready([task('#9'), task('#10', { title: 'Dark mode' })], { project: api })
   await view.emit('workspace.changed', { context: { branch: 'main', displayName: 'api', terminals: [] } })
   assert.equal(view.valueOf(searchField), '')
-  assert.deepEqual(cardsShown(view, ['#9', '#10']), ['#9', '#10'])
+  assert.deepEqual(keysShown(view, ['#9', '#10']), ['#9', '#10'])
 
   // A project that lists no tasks counts as a change too.
   await view.type(searchField, 'dark')
@@ -857,11 +864,11 @@ test('Start uses the template chosen on the card, or the default template when n
 
 test('with two templates, the template Select fills the Start row before the Start icon', async () => {
   const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
-  const [, startRow] = rowsOf(cardOf(view, '#42'))
-  const [select, start] = rowsOf(startRow)
-  assert.deepEqual(select.props, { grow: true, minWidth: 0 })
+  const [, startRow] = elementsIn(cardOf(view, '#42'))
+  const [select, start] = elementsIn(startRow)
+  assertProps(select, { grow: true, minWidth: 0 })
   assert.deepEqual(nodesIn(select, (node) => node.type === 'Select').map((node) => node.props?.label), ['Template for #42'])
-  assert.deepEqual(start.props, { shrink: false })
+  assertProps(start, { shrink: false })
   assert.equal(nodesIn(start, (node) => node.key === 'start:#42').length, 1)
   assert.deepEqual(view.warnings, [])
   await view.unmount()
@@ -1273,7 +1280,7 @@ test('a Start under way shows the spinner and says that creating the worktree ca
   })
   await view.press({ testId: 'start:#42' })
   // The spinner, with its label shown, takes the place of the Start row; the line comes below it.
-  const [, spinner, line, ...rest] = rowsOf(cardOf(view, '#42'))
+  const [, spinner, line, ...rest] = elementsIn(cardOf(view, '#42'))
   assert.equal(spinner.type, 'Spinner')
   assert.equal(spinner.props?.label, 'Starting #42')
   assert.equal(spinner.props?.labelHidden, undefined)
@@ -2130,8 +2137,6 @@ test("the twg JQL, site and profile save themselves, keeping the other providers
   }
   await view.unmount()
 })
-
-const keysShown = (view: TestPanel, keys: string[]) => keys.filter((key) => view.findAll({ type: 'Link', text: key }).length === 1)
 
 test('"Load more" appends the next page without duplicate keys, and the loaded pages stay in place after a Start', async () => {
   const cursors: (string | undefined)[] = []
