@@ -1,4 +1,4 @@
-import { assert, hostError, mockHost, mount, test, type MockHost, type MockRequests, type TestPanel, type TestQuery } from 'orca/testing'
+import { assert, hostError, mockHost, mount, test, type MockHost, type MockRequests, type TestPanel, type TestQuery, type TreeSnapshot } from 'orca/testing'
 import type { JsonValue } from 'orca'
 import type { Task, TaskList, TaskWorktree } from './protocol'
 import * as panel from './panel'
@@ -94,6 +94,85 @@ test('shows the status of tasks outside GitHub', async () => {
   await view.unmount()
 })
 
+const searchField = { type: 'Input', label: 'Search tasks' }
+
+/** The keys of `keys` whose card the panel shows, once each. */
+const keysShown = (view: TestPanel, keys: string[]) => keys.filter((key) => view.findAll({ type: 'Link', text: key }).length === 1)
+
+test('the search above the list shows only the loaded tasks whose key, title or label contains it', async () => {
+  const view = await show(ready([task('#42', { title: 'Add dark mode', labels: ['ui'] }), task('#7', { title: 'Fix login' }), task('#8', { labels: ['UI polish'] })]))
+  const field = view.find(searchField)
+  assert.equal(field?.props.type, 'search')
+  assert.equal(field?.props.labelHidden, true)
+  assert.equal(field?.props.placeholder, 'Search key, title or label')
+  assert.deepEqual(keysShown(view, ['#42', '#7', '#8']), ['#42', '#7', '#8'])
+
+  await view.type(searchField, '  ui ')
+  assert.deepEqual(keysShown(view, ['#42', '#7', '#8']), ['#42', '#8'])
+  await view.type(searchField, 'LOGIN', { replace: true })
+  assert.deepEqual(keysShown(view, ['#42', '#7', '#8']), ['#7'])
+  await view.type(searchField, '', { replace: true })
+  assert.deepEqual(keysShown(view, ['#42', '#7', '#8']), ['#42', '#7', '#8'])
+  assert.deepEqual(view.warnings, [])
+  await view.unmount()
+})
+
+test('while more tasks exist than are loaded, the search says it filters the loaded ones', async () => {
+  const hint = (count: number) => ({ type: 'Text', text: `Filtering ${count} loaded tasks` })
+  const paged = await show(ready([task('#1'), task('#2')], { nextCursor: 'cursor-2' }))
+  assert.equal(paged.find(hint(2))?.props.muted, true)
+  await paged.unmount()
+
+  const truncated = await show(ready([task('#1'), task('#2'), task('#3')], { truncated: true }))
+  assert.ok(truncated.find(hint(3)))
+  await truncated.unmount()
+
+  const whole = await show(ready([task('#1'), task('#2')]))
+  assert.equal(whole.find({ type: 'Text', text: /^Filtering/ }), null)
+  await whole.unmount()
+})
+
+test('a search that no loaded task matches says so, and an empty project still says it has no open tasks', async () => {
+  const view = await show(ready([task('#42')]))
+  await view.type(searchField, ' dark mode ')
+  assert.equal(view.find({ type: 'Link', text: '#42' }), null)
+  assert.equal(view.find({ type: 'Text', text: 'No loaded task matches "dark mode".' })?.props.muted, true)
+  assert.equal(view.find({ type: 'EmptyState' }), null)
+  await view.unmount()
+
+  const empty = await show(ready([]))
+  await empty.type(searchField, 'dark')
+  assert.equal(empty.find({ type: 'EmptyState' })?.label, 'No open tasks')
+  assert.equal(empty.find({ type: 'Text', text: /No loaded task matches/ }), null)
+  await empty.unmount()
+})
+
+test('only the list scrolls: the header, the warnings and the search stay above it, and Load more and the truncation notice end it', async () => {
+  const view = await show(ready([task('#1'), task('#2')], { nextCursor: 'cursor-2', truncated: true, warning: 'Using the last known project (web).' }))
+  const frame = view.tree()
+  assert.ok(frame && typeof frame !== 'string')
+  assert.equal(frame.type, 'Box')
+  assertProps(frame, { direction: 'column', gap: 'sm', height: '100%' })
+  const parts = elementsIn(frame)
+  const scrolling = parts.filter((part) => part.props?.scroll !== undefined)
+  assert.equal(scrolling.length, 1)
+  const [list] = scrolling
+  assert.equal(parts.at(-1), list)
+  assertProps(list, { direction: 'column', gap: 'xs', grow: true, minHeight: 0, maxHeight: '100%', scroll: 'y' })
+  assert.deepEqual(
+    elementsIn(list).map(wordsOf),
+    ['#1 Task #1', '#2 Task #2', 'Showing 2 · Load more', "Showing the first 100 of your repository's issues."]
+  )
+  const above = parts.slice(0, -1).map(wordsOf).join(' | ')
+  assert.match(above, /Kickoff ·/)
+  assert.match(above, /Using the last known project/)
+  assert.equal(nodesIn(list, (node) => node.type === 'Input').length, 0)
+  const searches = nodesIn(frame, (node) => node.type === 'Input' && node.props?.label === 'Search tasks')
+  assert.equal(searches.length, 1)
+  assert.deepEqual(view.warnings, [])
+  await view.unmount()
+})
+
 test('shows a spinner until the first list arrives', async () => {
   // The component alone, without `setup`, is the panel before its first answer.
   const before = await mount(panel.default, { host: mockHost({ capabilities: ['storage:own', 'workspace:read'] }) })
@@ -121,6 +200,132 @@ test('keeps the list and shows a spinner while it reloads', async () => {
   assert.equal(view.find({ type: 'Spinner', label: 'Reloading tasks' }), null)
   assert.ok(view.find({ type: 'Link', text: '#2' }))
   await view.unmount()
+})
+
+/** The words in a drawn node and its descendants, as `TestElement.text` folds them. */
+const wordsOf = (node: TreeSnapshot | string): string =>
+  typeof node === 'string' ? node : (node.children ?? []).map(wordsOf).join('').replace(/\s+/g, ' ').trim()
+
+/** The drawn nodes under `node`, itself included, that `match`. */
+function nodesIn(node: TreeSnapshot | string | null, match: (node: TreeSnapshot) => boolean): TreeSnapshot[] {
+  if (node === null || typeof node === 'string') return []
+  return [...(match(node) ? [node] : []), ...(node.children ?? []).flatMap((child) => nodesIn(child, match))]
+}
+
+/** The card of the task `key`: the bordered `Box` around the link to it. */
+function cardOf(view: TestPanel, key: string): TreeSnapshot {
+  const holdsKey = (node: TreeSnapshot) => nodesIn(node, (inner) => inner.type === 'Link' && wordsOf(inner) === key).length > 0
+  const [card] = nodesIn(view.tree(), (node) => node.type === 'Box' && node.props?.border === true && holdsKey(node))
+  assert.ok(card, `no card for ${key}`)
+  return card
+}
+
+/** The drawn elements directly under `node`, without its bare text: a card's rows, one per part. */
+const elementsIn = (node: TreeSnapshot) => (node.children ?? []).filter((child): child is TreeSnapshot => typeof child !== 'string')
+
+/** Checks the props of `node` that `expected` names, whatever other props it has. */
+function assertProps(node: TreeSnapshot, expected: Record<string, unknown>): void {
+  const named = Object.fromEntries(Object.keys(expected).map((name) => [name, node.props?.[name]]))
+  assert.deepEqual(named, expected)
+}
+
+const badgesIn = (node: TreeSnapshot) => nodesIn(node, (inner) => inner.type === 'Badge').map((badge) => ({ text: wordsOf(badge), tone: badge.props?.tone }))
+
+test('a GitHub card without a worktree shows its key and whole title, then its labels, then Start', async () => {
+  const title = 'Add dark mode to every settings page, including the ones nobody opens'
+  const view = await show(ready([task('#42', { title, labels: ['ui', 'good first issue'] })]))
+  const card = cardOf(view, '#42')
+  assertProps(card, { border: true, radius: 'md', padding: 'sm', direction: 'column', gap: 'sm', shrink: false })
+  const [heading, meta, start, ...rest] = elementsIn(card)
+  assert.equal(heading.type, 'Text')
+  assert.equal(heading.props?.truncate, undefined)
+  assert.equal(wordsOf(heading), `#42 ${title}`)
+  assertProps(meta, { direction: 'row', wrap: true, gap: 'xs', align: 'center' })
+  assert.deepEqual(badgesIn(meta), [
+    { text: 'ui', tone: undefined },
+    { text: 'good first issue', tone: undefined }
+  ])
+  assert.equal(start.props?.justify, 'end')
+  assert.equal(nodesIn(start, (node) => node.key === 'start:#42').length, 1)
+  assert.deepEqual(rest, [])
+  await view.unmount()
+})
+
+test('a Jira card without a worktree shows its status as an accent badge before its labels', async () => {
+  const jira = task('WEB-12', { tracker: 'jira', url: 'https://example.atlassian.net/browse/WEB-12', status: 'In Progress', labels: ['ui'] })
+  const view = await show(ready([jira], { provider: 'jira-twg' }))
+  const [, meta] = elementsIn(cardOf(view, 'WEB-12'))
+  assert.deepEqual(badgesIn(meta), [
+    { text: 'In Progress', tone: 'accent' },
+    { text: 'ui', tone: undefined }
+  ])
+  await view.unmount()
+})
+
+test('a card with a worktree shows its key and title, then the worktree as a truncated link, then its agent', async () => {
+  const worktree = { worktreeId: 'r1::/src/web-42', name: 'issue-42-add-dark-mode', agent: 'claude' }
+  const cases = [
+    { key: '#42', list: ready([task('#42', { labels: ['ui'] })], { worktrees: { '#42': worktree } }) },
+    {
+      key: 'WEB-12',
+      list: ready([task('WEB-12', { tracker: 'jira', status: 'In Progress', labels: ['ui'] })], { provider: 'jira-twg', worktrees: { 'WEB-12': worktree } })
+    }
+  ]
+  for (const { key, list } of cases) {
+    const view = await show(list)
+    const card = cardOf(view, key)
+    const [heading, name, agent, ...rest] = elementsIn(card)
+    assert.equal(wordsOf(heading), `${key} Task ${key}`)
+    assert.equal(name.type, 'Text')
+    assert.equal(name.props?.truncate, true)
+    assert.deepEqual(
+      nodesIn(name, (node) => node.type === 'Link').map(wordsOf),
+      ['issue-42-add-dark-mode']
+    )
+    assert.equal(wordsOf(agent), 'Agent: claude')
+    assert.deepEqual(rest, [])
+    assert.deepEqual(badgesIn(card), [])
+    assert.equal(nodesIn(card, (node) => node.key === `start:${key}`).length, 0)
+    await view.unmount()
+  }
+})
+
+/** The card's agent line: "Agent: <id>", "Agent starting…", or null when it has none. */
+function agentShown(view: TestPanel, key: string): string | null {
+  const lines = nodesIn(cardOf(view, key), (node) => node.type === 'Text' && /^(Agent|No agent)/.test(wordsOf(node)))
+  assert.ok(lines.length <= 1)
+  return lines.length === 1 ? wordsOf(lines[0]) : null
+}
+
+test('a card whose worktree runs no agent shows no agent line', async () => {
+  const view = await show(ready([task('#42')], { worktrees: { '#42': { worktreeId: 'r1::/src/web-42', name: 'issue-42-add-dark-mode', agent: null } } }))
+  assert.equal(agentShown(view, '#42'), null)
+  assert.equal(elementsIn(cardOf(view, '#42')).length, 2)
+  await view.unmount()
+})
+
+test('Start is an outline play icon labelled with the task key, at the end of its row, and disabled without worktrees', async () => {
+  const view = await show(ready([task('#42')]))
+  const start = view.find({ type: 'IconButton', label: 'Start #42' })
+  assert.ok(start)
+  assert.equal(view.find({ testId: 'start:#42' })?.label, 'Start #42')
+  assert.equal(start.props.icon, 'play')
+  assert.equal(start.props.variant, 'outline')
+  assert.equal(start.props.tone, undefined)
+  assert.equal(start.props.tooltip, 'Start')
+  assert.equal(start.disabled, false)
+  const [, startRow] = elementsIn(cardOf(view, '#42'))
+  assertProps(startRow, { direction: 'row', align: 'center', justify: 'end', gap: 'xs' })
+  const [holder, ...others] = elementsIn(startRow)
+  assertProps(holder, { shrink: false })
+  assert.equal(holder.children?.length, 1)
+  assert.deepEqual(others, [])
+  assert.equal(view.find({ type: 'Button', text: 'Start' }), null)
+  await view.unmount()
+
+  const unread = await show(ready([task('#42')], { worktrees: null, worktreesError: 'orca failed.' }))
+  assert.equal(unread.find({ type: 'IconButton', label: 'Start #42' })?.disabled, true)
+  await unread.unmount()
 })
 
 test('says when no project is selected', async () => {
@@ -337,6 +542,44 @@ test('a change of active project goes back to the list, unless the new project n
   await view.press(done)
   await changeTo({ kind: 'error', project: web, message: 'gh failed.' }, 'web')
   assert.ok(view.find({ type: 'Text', text: 'web ·' }))
+  await view.unmount()
+})
+
+test('the search stays through a reload and "Load more", and a change of active project clears it', async () => {
+  let answer: (input: { cursor?: string }) => TaskList = ({ cursor }) =>
+    cursor ? ready([task('#3', { title: 'Dark theme' }), task('#4')]) : ready([task('#1', { title: 'Dark mode' }), task('#2')], { nextCursor: 'cursor-2' })
+  const view = await show((input) => answer(input))
+  await view.type(searchField, 'dark')
+  assert.deepEqual(view.persisted, { plugin: {}, workspace: {}, storage: {} })
+  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  assert.equal(view.valueOf(searchField), 'dark')
+  assert.deepEqual(keysShown(view, ['#1', '#2']), ['#1'])
+
+  await view.press({ type: 'Button', text: /Load more/ })
+  assert.equal(view.valueOf(searchField), 'dark')
+  assert.deepEqual(keysShown(view, ['#1', '#2', '#3', '#4']), ['#1', '#3'])
+
+  // A worker that didn't answer says nothing about the project, and a reload of it keeps the search.
+  answer = () => {
+    throw hostError('timeout', 'Request timed out')
+  }
+  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  answer = () => ready([task('#1', { title: 'Dark mode' }), task('#2')])
+  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  assert.equal(view.valueOf(searchField), 'dark')
+
+  answer = () => ready([task('#9'), task('#10', { title: 'Dark mode' })], { project: api })
+  await view.emit('workspace.changed', { context: { branch: 'main', displayName: 'api', terminals: [] } })
+  assert.equal(view.valueOf(searchField), '')
+  assert.deepEqual(keysShown(view, ['#9', '#10']), ['#9', '#10'])
+
+  // A project that lists no tasks counts as a change too.
+  await view.type(searchField, 'dark')
+  answer = () => ({ kind: 'no-project' })
+  await view.emit('workspace.changed', { context: { branch: 'main', displayName: 'nothing', terminals: [] } })
+  answer = () => ready([task('#9'), task('#10', { title: 'Dark mode' })], { project: api })
+  await view.emit('workspace.changed', { context: { branch: 'main', displayName: 'api', terminals: [] } })
+  assert.equal(view.valueOf(searchField), '')
   await view.unmount()
 })
 
@@ -615,6 +858,18 @@ test('Start uses the template chosen on the card, or the default template when n
   // A started or starting task offers no templates.
   assert.equal(view.find(cardTemplate('#42')), null)
   assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.warnings, [])
+  await view.unmount()
+})
+
+test('with two templates, the template Select fills the Start row before the Start icon', async () => {
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
+  const [, startRow] = elementsIn(cardOf(view, '#42'))
+  const [select, start] = elementsIn(startRow)
+  assertProps(select, { grow: true, minWidth: 0 })
+  assert.deepEqual(nodesIn(select, (node) => node.type === 'Select').map((node) => node.props?.label), ['Template for #42'])
+  assertProps(start, { shrink: false })
+  assert.equal(nodesIn(start, (node) => node.key === 'start:#42').length, 1)
   assert.deepEqual(view.warnings, [])
   await view.unmount()
 })
@@ -990,7 +1245,7 @@ test('a started task opens its worktree in Orca from the link', async () => {
       return { ok: true }
     }
   })
-  assert.ok(view.find({ type: 'Text', text: /No agent running/ }))
+  assert.equal(agentShown(view, '#42'), null)
   await view.press({ type: 'Link', text: 'issue-42-add-dark-mode' })
   assert.deepEqual(opened, [{ worktreeId: 'r1::/src/web-42' }])
   await view.unmount()
@@ -1024,7 +1279,13 @@ test('a Start under way shows the spinner and says that creating the worktree ca
     'task.start': { ok: true, underWay: true }
   })
   await view.press({ testId: 'start:#42' })
-  assert.ok(view.find({ type: 'Spinner', label: 'Starting #42' }))
+  // The spinner, with its label shown, takes the place of the Start row; the line comes below it.
+  const [, spinner, line, ...rest] = elementsIn(cardOf(view, '#42'))
+  assert.equal(spinner.type, 'Spinner')
+  assert.equal(spinner.props?.label, 'Starting #42')
+  assert.equal(spinner.props?.labelHidden, undefined)
+  assert.match(wordsOf(line), CAN_TAKE_A_MINUTE)
+  assert.deepEqual(rest, [])
   assert.equal(view.find({ testId: 'start:#42' }), null)
   assert.equal(view.findAll({ type: 'Text', text: CAN_TAKE_A_MINUTE }).length, 1)
   assert.ok(view.find({ testId: 'start:#7' }))
@@ -1207,7 +1468,6 @@ test('after a Start with an agent, the card says the agent is starting until Orc
     await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', agent: 'claude', ok: true })
     assert.ok(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }))
     assert.ok(view.find({ type: 'Text', text: 'Agent starting…' }))
-    assert.equal(view.find({ type: 'Text', text: 'No agent running' }), null)
 
     worktrees = { '#42': started }
     await fire(view)
@@ -1226,7 +1486,7 @@ async function drawnWhileHeld(view: TestPanel, query: TestQuery): Promise<Promis
   return rerenders
 }
 
-test('after a Start with an agent, no card says no agent is running before it says the agent is starting', async () => {
+test('after a Start with an agent, no card shows the new worktree without an agent line before it says the agent is starting', async () => {
   await withTimeouts(AGENT_CHECK_MS, async ({ pending }) => {
     const refresh = held()
     let created = false
@@ -1245,11 +1505,9 @@ test('after a Start with an agent, no card says no agent is running before it sa
     const ended = view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', agent: 'claude', ok: true })
     const switched = view.emit('workspace.changed', { context: { branch: 'issue-42-add-dark-mode', displayName: 'web', terminals: [] } })
     const rerenders = await drawnWhileHeld(view, { type: 'Link', text: 'issue-42-add-dark-mode' })
-    const flashed = view.find({ type: 'Text', text: 'No agent running' })
     const startingWhileRead = view.find({ type: 'Text', text: 'Agent starting…' })
     refresh.release()
     await Promise.all([ended, switched, ...rerenders])
-    assert.equal(flashed, null)
     assert.ok(startingWhileRead)
     assert.ok(view.find({ type: 'Text', text: 'Agent starting…' }))
     assert.equal(pending(), 1)
@@ -1343,7 +1601,7 @@ test("an earlier Start's delayed load in another project doesn't end the agent s
   })
 })
 
-test('after a Start with "No agent", the card says no agent is running straight away', async () => {
+test('after a Start with "No agent", the card shows no agent line straight away', async () => {
   await withTimeouts(AGENT_CHECK_MS, async ({ pending }) => {
     let worktrees = {}
     const { view } = await showWith({
@@ -1354,7 +1612,7 @@ test('after a Start with "No agent", the card says no agent is running straight 
     await view.press({ testId: 'start:#42' })
     worktrees = { '#42': { ...started, agent: null } }
     await view.post('start.ended', { projectId: 'github:acme/web', taskKey: '#42', agent: null, ok: true })
-    assert.ok(view.find({ type: 'Text', text: 'No agent running' }))
+    assert.equal(agentShown(view, '#42'), null)
     assert.equal(view.find({ type: 'Text', text: 'Agent starting…' }), null)
     assert.equal(pending(), 0)
     await view.unmount()
@@ -1383,7 +1641,7 @@ test('one delayed worktrees.load runs after a Start, and then the card shows wha
     assert.equal(reads(), 2)
     assert.equal(pending(), 0)
     // Orca still reports no agent.
-    assert.ok(view.find({ type: 'Text', text: 'No agent running' }))
+    assert.equal(agentShown(view, '#42'), null)
     assert.equal(view.find({ type: 'Text', text: 'Agent starting…' }), null)
     await view.unmount()
   })
@@ -1406,7 +1664,7 @@ test('once a reload reports the agent, the card shows what Orca reports from the
     // The agent exits before the delayed load.
     agent = null
     await view.press({ type: 'IconButton', label: 'Reload tasks' })
-    assert.ok(view.find({ type: 'Text', text: 'No agent running' }))
+    assert.equal(agentShown(view, '#42'), null)
     await view.unmount()
   })
 })
@@ -1425,7 +1683,7 @@ test("a Start's agent shows as starting only in its own project", async () => {
     project = api
     await view.emit('workspace.changed', { context: { branch: 'main', displayName: 'api', terminals: [] } })
     assert.ok(view.find({ type: 'Heading', text: 'api' }))
-    assert.ok(view.find({ type: 'Text', text: 'No agent running' }))
+    assert.equal(agentShown(view, '#42'), null)
     await view.unmount()
   })
 })
@@ -1880,8 +2138,6 @@ test("the twg JQL, site and profile save themselves, keeping the other providers
   await view.unmount()
 })
 
-const keysShown = (view: TestPanel, keys: string[]) => keys.filter((key) => view.findAll({ type: 'Link', text: key }).length === 1)
-
 test('"Load more" appends the next page without duplicate keys, and the loaded pages stay in place after a Start', async () => {
   const cursors: (string | undefined)[] = []
   const { view } = await showWith(
@@ -1897,16 +2153,47 @@ test('"Load more" appends the next page without duplicate keys, and the loaded p
     twgStored({ jql: 'project = WEB', site: '', profile: '' })
   )
   assert.deepEqual(keysShown(view, ['WEB-1', 'WEB-2', 'WEB-3']), ['WEB-1', 'WEB-2'])
-  await view.press({ type: 'Button', text: 'Load more' })
+  await view.press({ type: 'Button', text: /· Load more$/ })
   assert.deepEqual(cursors, [undefined, 'cursor-2'])
   assert.deepEqual(keysShown(view, ['WEB-1', 'WEB-2', 'WEB-3']), ['WEB-1', 'WEB-2', 'WEB-3'])
-  assert.equal(view.find({ type: 'Button', text: 'Load more' }), null)
+  assert.equal(view.find({ type: 'Button', text: /· Load more$/ }), null)
 
   await view.press({ testId: 'start:WEB-3' })
   assert.deepEqual(keysShown(view, ['WEB-1', 'WEB-2', 'WEB-3']), ['WEB-1', 'WEB-2', 'WEB-3'])
   assert.ok(view.find({ type: 'Link', text: 'web-3-task-web-3' }))
   assert.equal(cursors.length, 2)
   assert.deepEqual(view.errors, [])
+  await view.unmount()
+})
+
+test('"Load more" is a full-width outline button with the count of loaded tasks, which says "Loading…" while a page loads', async () => {
+  const page = held()
+  const { view } = await showWith(
+    {
+      'tasks.load': async ({ cursor }) => {
+        if (!cursor) return twgReady([twgTask('WEB-1'), twgTask('WEB-2')], { nextCursor: 'cursor-2' })
+        await page.released
+        return twgReady([twgTask('WEB-3')], { nextCursor: 'cursor-3' })
+      }
+    },
+    twgStored({ jql: 'project = WEB', site: '', profile: '' })
+  )
+  const button = view.find({ type: 'Button', text: 'Showing 2 · Load more' })
+  assert.ok(button)
+  assert.equal(button.props.variant, 'outline')
+  assert.equal(button.props.size, 'sm')
+  assert.equal(button.disabled, false)
+  const [holder] = nodesIn(view.tree(), (node) => node.type === 'Stack' && nodesIn(node, (inner) => inner.key === 'load-more').length > 0).reverse()
+  assert.equal(holder.props?.align, 'stretch')
+
+  const pressed = view.press(button)
+  await drawn(view, { type: 'Button', text: 'Showing 2 · Loading…' })
+  const loading = view.find({ type: 'Button', text: 'Showing 2 · Loading…' })
+  page.release()
+  await pressed
+  assert.equal(loading?.disabled, true)
+  assert.ok(view.find({ type: 'Button', text: 'Showing 3 · Load more' }))
+  assert.deepEqual(view.warnings, [])
   await view.unmount()
 })
 
@@ -1918,10 +2205,10 @@ test('a "Load more" failure keeps the loaded tasks and says why', async () => {
     },
     twgStored({ jql: 'project = WEB', site: '', profile: '' })
   )
-  await view.press({ type: 'Button', text: 'Load more' })
+  await view.press({ type: 'Button', text: /· Load more$/ })
   assert.ok(view.find({ type: 'Link', text: 'WEB-1' }))
   assert.ok(view.find({ type: 'Text', text: /The cursor has expired/ }))
-  assert.ok(view.find({ type: 'Button', text: 'Load more' }))
+  assert.ok(view.find({ type: 'Button', text: /· Load more$/ }))
   await view.unmount()
 })
 
@@ -1945,7 +2232,7 @@ test('a page that arrives after a reload is dropped', async () => {
     },
     twgStored({ jql: 'project = WEB', site: '', profile: '' })
   ))
-  await view.press({ type: 'Button', text: 'Load more' })
+  await view.press({ type: 'Button', text: /· Load more$/ })
   await view.settled()
   assert.ok(view.find({ type: 'Link', text: 'WEB-20' }))
   assert.equal(view.find({ type: 'Link', text: 'WEB-99' }), null)
