@@ -1,3 +1,7 @@
+// PROTOTYPE (issue #47), throwaway, on the prototype/template-detail branch, never merged. Two
+// switches at the top of the panel choose how the template detail is drawn (D-A, D-B, D-C) and how
+// Project settings opens it (E-A, E-B). The data, the loads and Save are the real ones.
+//
 // Kickoff's side panel: the active project's open tasks and Start, and its Project settings. No build
 // step: Orca strips the types and compiles the JSX when the panel loads. The worker does the work;
 // the panel asks it and draws the answers.
@@ -7,16 +11,21 @@ import {
   Button,
   Callout,
   CodeView,
+  Collapsible,
   EmptyState,
   Heading,
   IconButton,
   Input,
   Link,
+  List,
+  ListItem,
   Row,
   Select,
   Separator,
   Spinner,
   Stack,
+  Tab,
+  Tabs,
   Text,
   Textarea,
   atom,
@@ -56,7 +65,9 @@ import {
   type TaskWorktree
 } from './protocol'
 import { matchesSearch } from './search'
+import { worktreeName } from './naming'
 import {
+  buildPrompt,
   defaultTemplate,
   INITIAL_TEMPLATE_TEXT,
   projectTemplates,
@@ -194,6 +205,28 @@ let viewStateFor: string | null | undefined
 
 /** The template detail's draft while it replaces the panel view, else null. */
 const templateDraft = atom<TemplateDraft | null>(null)
+
+/** PROTOTYPE: the two variant switches. */
+type DetailVariant = 'D-A' | 'D-B' | 'D-C'
+type EntryVariant = 'E-A' | 'E-B'
+const DETAIL_VARIANTS = [
+  { value: 'D-A', label: 'D-A · aligned form' },
+  { value: 'D-B', label: 'D-B · actions in the header' },
+  { value: 'D-C', label: 'D-C · Text and Preview' }
+]
+const ENTRY_VARIANTS = [
+  { value: 'E-A', label: 'E-A · pencil and +' },
+  { value: 'E-B', label: 'E-B · template list' }
+]
+const detailVariant = atom<DetailVariant>('protoDetailVariant', 'D-A', { persist: 'plugin' })
+const entryVariant = atom<EntryVariant>('protoEntryVariant', 'E-A', { persist: 'plugin' })
+/** PROTOTYPE: D-C's tab, persisted only so a scenario can shoot the preview. */
+const detailTab = atom('protoDetailTab', 'text', { persist: 'plugin' })
+/** PROTOTYPE: a template to open once the first load shows its project (`:new` for a new one,
+ *  `:settings` for Project settings), so a scenario can shoot it. Never set by the panel itself. */
+const openOnLoad = atom<string | null>('protoOpenTemplate', null, { persist: 'plugin' })
+/** PROTOTYPE: whether the note about skills is open. */
+const skillsNoteOpen = atom(false)
 
 /** Whether a "Load more" is under way, and the error of the last one. */
 const loadingMore = atom(false)
@@ -436,6 +469,12 @@ async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
       // Storage unreadable: the settings stay hidden, and a Start reads them again for its template.
     }
     if (mine !== generation) return
+  }
+  const toOpen = read(openOnLoad)
+  if (toOpen !== null && !read(templateDraft)) {
+    set(openOnLoad, null)
+    if (toOpen === ':settings') set(settingsChoice, 'open')
+    else openTemplate(toOpen === ':new' ? null : toOpen)
   }
   if (read(shownSettings)?.provider === 'jira-orca') void loadJiraSites()
   if (reason !== 'poll') lastPolledProjectId = undefined
@@ -774,8 +813,23 @@ export default function Panel() {
   // The panel fills its height, so a ready list's last part, the list, scrolls alone.
   return (
     <Box direction="column" gap="sm" height="100%">
+      <PrototypeBar />
       <Header projectName={project?.name ?? null} gear={settings !== null} />
       {current ? <Body list={current} /> : <Spinner label="Loading tasks" />}
+    </Box>
+  )
+}
+
+/** PROTOTYPE: the two variant switches. */
+function PrototypeBar() {
+  return (
+    <Box direction="row" gap="xs" wrap>
+      <Box grow minWidth={140}>
+        <Select label="PROTOTYPE · detail" value={read(detailVariant)} options={DETAIL_VARIANTS} onChange={(value) => set(detailVariant, value as DetailVariant)} />
+      </Box>
+      <Box grow minWidth={140}>
+        <Select label="PROTOTYPE · entry" value={read(entryVariant)} options={ENTRY_VARIANTS} onChange={(value) => set(entryVariant, value as EntryVariant)} />
+      </Box>
     </Box>
   )
 }
@@ -816,6 +870,7 @@ function TitleRow({ prefix, title, level, children }: { prefix: string | null; t
 function SettingsView({ projectName, shown }: { projectName: string; shown: ShownSettings }) {
   return (
     <Stack gap="sm">
+      <PrototypeBar />
       <TitleRow prefix={`${projectName} ·`} title="Project settings" level={3}>
         <Button key="settings-done" size="sm" variant="ghost" icon="close" onPress={() => set(settingsChoice, 'closed')}>
           Done
@@ -932,6 +987,47 @@ function StartFields({ shown }: { shown: ShownSettings }) {
         options={templateOptions(shown.templates)}
         onChange={(defaultTemplateId) => changeSettings({ defaultTemplateId })}
       />
+      {read(entryVariant) === 'E-B' ? <TemplateList shown={shown} /> : <DefaultTemplateText shown={shown} text={text} />}
+    </Stack>
+  )
+}
+
+/** PROTOTYPE E-B: one row per template that opens its detail, the default one marked, then a
+ *  button for a new template. */
+function TemplateList({ shown }: { shown: ShownSettings }) {
+  return (
+    <Stack gap="xs">
+      <Text size="sm" muted>
+        Templates
+      </Text>
+      <List label="Templates">
+        {shown.templates.map((template) => {
+          const firstLine = template.text.split('\n').find((line) => line.trim() !== '') ?? ''
+          const about = firstLine === '' ? 'Empty: the prompt is the task URL' : firstLine
+          return (
+            <ListItem
+              key={template.id}
+              icon="file-text"
+              title={template.name}
+              description={template.id === shown.defaultTemplateId ? `Default · ${about}` : about}
+              onPress={() => openTemplate(template.id)}
+            />
+          )
+        })}
+      </List>
+      <Box>
+        <Button key="template-new" size="sm" variant="outline" icon="add" onPress={() => openTemplate(null)}>
+          New template
+        </Button>
+      </Box>
+    </Stack>
+  )
+}
+
+/** E-A, as on `main`: the default template's text, with the pencil and the "+". */
+function DefaultTemplateText({ shown, text }: { shown: ShownSettings; text: string }) {
+  return (
+    <Stack gap="sm">
       <Box direction="row" justify="between" align="center" gap="xs">
         <Text size="sm" muted>
           Template text
@@ -1129,59 +1225,192 @@ function CardTemplate({ task, projectId }: { task: Task; projectId: string }) {
   )
 }
 
+/** PROTOTYPE: the template detail, drawn as the detail switch says. */
 function TemplateDetail({ draft, templates, projectName }: { draft: TemplateDraft; templates: PromptTemplate[]; projectName: string }) {
   const nameProblem = templateNameProblem(templates, draft.name, draft.id)
+  const title = draft.isNew ? 'New template' : 'Edit template'
+  const prefix = projectName !== '' ? `${projectName} ·` : null
+  const canSave = nameProblem === null && !draft.saving
+  switch (read(detailVariant)) {
+    case 'D-B':
+      // The title row with its actions stays in place; only the form scrolls.
+      return (
+        <Box direction="column" gap="sm" height="100%">
+          <PrototypeBar />
+          <TitleRow prefix={prefix} title={title} level={3}>
+            <Row gap="xs" align="center">
+              {draft.saving ? <Spinner label="Saving the template" labelHidden /> : null}
+              <Button key="template-cancel" size="sm" variant="ghost" disabled={draft.saving} onPress={closeTemplate}>
+                Cancel
+              </Button>
+              <Button key="template-save" size="sm" variant="solid" disabled={!canSave} onPress={() => void saveTemplate()}>
+                Save
+              </Button>
+            </Row>
+          </TitleRow>
+          <Box direction="column" gap="sm" grow minHeight={0} maxHeight="100%" scroll="y">
+            <NameField draft={draft} problem={nameProblem} />
+            <TextField draft={draft} />
+            <VariablesLine />
+            <SkillsNote />
+            <SaveError draft={draft} />
+            <DeleteRow draft={draft} templates={templates} />
+          </Box>
+        </Box>
+      )
+    case 'D-C':
+      return (
+        <Stack gap="sm">
+          <PrototypeBar />
+          <TitleRow prefix={prefix} title={title} level={3} />
+          <NameField draft={draft} problem={nameProblem} />
+          <Tabs label="Template" value={read(detailTab)} onChange={(value) => set(detailTab, value)}>
+            <Tab value="text" label="Text">
+              <Stack gap="sm">
+                <TextField draft={draft} labelHidden />
+                <VariablesLine />
+              </Stack>
+            </Tab>
+            <Tab value="preview" label="Preview">
+              <PromptPreview draft={draft} />
+            </Tab>
+          </Tabs>
+          <SkillsNote />
+          <SaveError draft={draft} />
+          <SaveCancelRow draft={draft} canSave={canSave} />
+          <DeleteRow draft={draft} templates={templates} />
+        </Stack>
+      )
+    default:
+      return (
+        <Stack gap="sm">
+          <PrototypeBar />
+          <TitleRow prefix={prefix} title={title} level={3} />
+          <NameField draft={draft} problem={nameProblem} />
+          <TextField draft={draft} />
+          <VariablesLine />
+          <SkillsNote />
+          <SaveError draft={draft} />
+          <SaveCancelRow draft={draft} canSave={canSave} />
+          <DeleteRow draft={draft} templates={templates} />
+        </Stack>
+      )
+  }
+}
+
+function NameField({ draft, problem }: { draft: TemplateDraft; problem: string | null }) {
   return (
-    <Stack gap="sm">
-      <Heading level={3}>{projectName}</Heading>
-      <Stack gap="xs">
-        <Input label="Name" value={draft.name} invalid={nameProblem !== null} onChange={(name) => changeDraft(draft, { name })} />
-        {nameProblem !== null ? (
-          <Text size="sm" tone="danger">
-            {nameProblem}
-          </Text>
-        ) : null}
-      </Stack>
-      <Textarea
-        label="Text"
-        value={draft.text}
-        rows={6}
-        placeholder="Empty: the prompt is the task URL"
-        onChange={(text) => changeDraft(draft, { text })}
-      />
-      <Text size="sm" muted>
-        {`Variables: ${TEMPLATE_VARIABLES.map((name) => `{{${name}}}`).join(', ')}. An empty template gives the task URL.`}
-      </Text>
+    <Stack gap="xs">
+      <Input label="Name" value={draft.name} invalid={problem !== null} onChange={(name) => changeDraft(draft, { name })} />
+      {problem !== null ? (
+        <Text size="sm" tone="danger">
+          {problem}
+        </Text>
+      ) : null}
+    </Stack>
+  )
+}
+
+function TextField({ draft, labelHidden = false }: { draft: TemplateDraft; labelHidden?: boolean }) {
+  return (
+    <Textarea
+      label="Text"
+      labelHidden={labelHidden}
+      value={draft.text}
+      rows={12}
+      placeholder="Empty: the prompt is the task URL"
+      onChange={(text) => changeDraft(draft, { text })}
+    />
+  )
+}
+
+function VariablesLine() {
+  return (
+    <Text size="sm" muted>
+      {TEMPLATE_VARIABLES.map((name) => `{{${name}}}`).join(' ')}
+    </Text>
+  )
+}
+
+function SkillsNote() {
+  return (
+    <Collapsible title="Run a skill" open={read(skillsNoteOpen)} onChange={(open) => set(skillsNoteOpen, open)}>
       <Text size="sm" muted>
         {'To run a Claude Code skill, start the template with its command, for example `/tdd {{task_key}}`: the rest of the template becomes its arguments. The new worktree must see the skill, so install plugins with user scope, not local, and commit project skills. Other agents have their own syntax.'}
       </Text>
-      {draft.error !== null ? (
-        <Callout tone="danger" icon="error">
-          <Text>{draft.error}</Text>
-        </Callout>
-      ) : null}
-      <Row gap="xs" align="center" wrap>
-        <Button key="template-save" size="sm" variant="solid" disabled={nameProblem !== null || draft.saving} onPress={() => void saveTemplate()}>
-          Save
+    </Collapsible>
+  )
+}
+
+function SaveError({ draft }: { draft: TemplateDraft }) {
+  return draft.error !== null ? (
+    <Callout tone="danger" icon="error">
+      <Text>{draft.error}</Text>
+    </Callout>
+  ) : null
+}
+
+function SaveCancelRow({ draft, canSave }: { draft: TemplateDraft; canSave: boolean }) {
+  return (
+    <Row gap="xs" align="center" wrap>
+      <Button key="template-save" size="sm" variant="solid" disabled={!canSave} onPress={() => void saveTemplate()}>
+        Save
+      </Button>
+      <Button key="template-cancel" size="sm" variant="ghost" disabled={draft.saving} onPress={closeTemplate}>
+        Cancel
+      </Button>
+      {draft.saving ? <Spinner label="Saving the template" labelHidden /> : null}
+    </Row>
+  )
+}
+
+/** Delete on its own, below a separator; not for a new template. */
+function DeleteRow({ draft, templates }: { draft: TemplateDraft; templates: PromptTemplate[] }) {
+  if (draft.isNew) return null
+  return (
+    <>
+      <Separator />
+      <Row gap="xs" align="center">
+        <Button
+          key="template-delete"
+          size="sm"
+          variant="ghost"
+          tone="danger"
+          icon="delete"
+          disabled={templates.length < 2 || draft.saving}
+          onPress={() => void deleteTemplate()}
+        >
+          {draft.confirmingDelete ? 'Confirm delete' : 'Delete template'}
         </Button>
-        <Button key="template-cancel" size="sm" variant="ghost" disabled={draft.saving} onPress={closeTemplate}>
-          Cancel
-        </Button>
-        {draft.isNew ? null : (
-          <Button
-            key="template-delete"
-            size="sm"
-            variant="ghost"
-            tone="danger"
-            icon="delete"
-            disabled={templates.length < 2 || draft.saving}
-            onPress={() => void deleteTemplate()}
-          >
-            {draft.confirmingDelete ? 'Confirm delete' : 'Delete'}
-          </Button>
-        )}
-        {draft.saving ? <Spinner label="Saving the template" labelHidden /> : null}
       </Row>
+    </>
+  )
+}
+
+/** PROTOTYPE D-C: the prompt the draft gives for the first loaded task, filled as a Start fills it. */
+function PromptPreview({ draft }: { draft: TemplateDraft }) {
+  const current = read(list)
+  const task = current?.kind === 'ready' && current.project.id === draft.projectId ? current.tasks[0] : undefined
+  if (current?.kind !== 'ready' || !task) {
+    return (
+      <Text size="sm" muted>
+        No task is loaded to preview the prompt with.
+      </Text>
+    )
+  }
+  const prompt = buildPrompt(draft.text, task, current.project, worktreeName(task))
+  return (
+    <Stack gap="xs">
+      <Text size="sm" muted truncate>
+        {`For ${task.key} · ${task.title}`}
+      </Text>
+      {prompt.ok ? (
+        <CodeView code={prompt.prompt} wrap maxHeight="md" />
+      ) : (
+        <Text size="sm" tone="danger">
+          {prompt.message}
+        </Text>
+      )}
     </Stack>
   )
 }
