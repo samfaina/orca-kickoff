@@ -186,15 +186,14 @@ type SettingsChoice = 'open' | 'closed' | 'auto'
 
 /** Kept in memory, and back to `auto` when the active project changes. */
 const settingsChoice = atom<SettingsChoice>('auto')
-/** The active project `settingsChoice` belongs to, null without one, or undefined before the
- *  first answer that says which. */
-let settingsChoiceFor: string | null | undefined
+/** The search over the loaded tasks. Kept in memory, and cleared when the active project changes. */
+const search = atom('')
+/** The active project `settingsChoice` and `search` belong to, null without one, or undefined
+ *  before the first answer that says which. */
+let viewStateFor: string | null | undefined
 
 /** The template detail's draft while it replaces the panel view, else null. */
 const templateDraft = atom<TemplateDraft | null>(null)
-
-/** The search over the loaded tasks, kept in memory only. */
-const search = atom('')
 
 /** Whether a "Load more" is under way, and the error of the last one. */
 const loadingMore = atom(false)
@@ -424,11 +423,11 @@ async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
   // A change of active project also sends Project settings back to opening by itself and clears
   // the search. Only once a project was listed: before that, both are as they start.
   if (answeredProjectId !== undefined) {
-    if (typeof settingsChoiceFor === 'string' && answeredProjectId !== settingsChoiceFor) {
+    if (typeof viewStateFor === 'string' && answeredProjectId !== viewStateFor) {
       set(settingsChoice, 'auto')
       set(search, '')
     }
-    settingsChoiceFor = answeredProjectId
+    viewStateFor = answeredProjectId
   }
   if ('project' in answer && answer.project) {
     try {
@@ -733,7 +732,7 @@ export function setup(ctx: PanelContext): void {
   set(cardTemplates, {})
   set(templateDraft, null)
   set(settingsChoice, 'auto')
-  settingsChoiceFor = undefined
+  viewStateFor = undefined
   set(search, '')
   // Closing the panel drops the template detail's draft.
   ctx.subscriptions.push({ dispose: closeTemplate })
