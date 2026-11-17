@@ -1243,7 +1243,12 @@ function TemplateDetail({ draft, templates, projectName }: { draft: TemplateDraf
           <DetailHeader draft={draft} prefix={prefix} title={title} canSave={canSave} />
           <Box direction="column" gap="sm" grow minHeight={0} maxHeight="100%" scroll="y">
             <NameField draft={draft} problem={nameProblem} />
-            <TextField draft={draft} />
+            <Stack gap="xs">
+              <TextField draft={draft} />
+              <Text size="sm" muted>
+                An empty text gives the task URL.
+              </Text>
+            </Stack>
             <VariableList />
             <SaveError draft={draft} />
             <Callout icon="info" title="Run a skill">
@@ -1352,22 +1357,21 @@ const VARIABLE_HELP: Record<(typeof TEMPLATE_VARIABLES)[number], string> = {
   branch: "The new worktree's name, such as web-12-add-dark-mode."
 }
 
-/** D-D: one row per variable, with what it gives. */
+/** D-D: whether the variable list is open. */
+const variablesOpen = atom(false)
+
+/** D-D: one row per variable, with what it gives, in a closed `Collapsible`. */
 function VariableList() {
   return (
-    <Stack gap="xs">
-      <Text size="sm" weight="semibold">
-        Variables
-      </Text>
-      {TEMPLATE_VARIABLES.map((name) => (
-        <Text key={name} size="sm">
-          <Code>{`{{${name}}}`}</Code> {VARIABLE_HELP[name]}
-        </Text>
-      ))}
-      <Text size="sm" muted>
-        An empty text gives the task URL.
-      </Text>
-    </Stack>
+    <Collapsible title="Variables" open={read(variablesOpen)} onChange={(open) => set(variablesOpen, open)}>
+      <Stack gap="xs">
+        {TEMPLATE_VARIABLES.map((name) => (
+          <Text key={name} size="sm">
+            <Code>{`{{${name}}}`}</Code> {VARIABLE_HELP[name]}
+          </Text>
+        ))}
+      </Stack>
+    </Collapsible>
   )
 }
 
