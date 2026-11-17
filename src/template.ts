@@ -84,6 +84,18 @@ export const TEMPLATE_VARIABLES = [
 
 type TemplateVariable = (typeof TEMPLATE_VARIABLES)[number]
 
+/** What each variable gives, as the template detail describes it. Every variable needs one. */
+export const TEMPLATE_VARIABLE_DESCRIPTIONS: Record<TemplateVariable, string> = {
+  task_key: 'The task key, such as WEB-12 or #42.',
+  task_title: "The task's title.",
+  task_url: "The task's link in the tracker.",
+  task_description: `The task's description as plain text, cut to ${MAX_DESCRIPTION} characters.`,
+  task_status: 'The status as the tracker shows it, such as "In Progress". "Open" on GitHub.',
+  tracker: '"github" or "jira".',
+  repo: "The project's repository (owner/name) when Orca knows it, else the project's name.",
+  branch: "The new worktree's name, such as web-12-add-dark-mode."
+}
+
 export type PromptResult = { ok: true; prompt: string } | { ok: false; message: string }
 
 /** The prompt for `task` from a template's text. An empty text gives the task URL. A prompt over

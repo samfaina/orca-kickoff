@@ -6,7 +6,9 @@ import {
   Box,
   Button,
   Callout,
+  Code,
   CodeView,
+  Collapsible,
   EmptyState,
   Heading,
   IconButton,
@@ -60,6 +62,7 @@ import {
   defaultTemplate,
   INITIAL_TEMPLATE_TEXT,
   projectTemplates,
+  TEMPLATE_VARIABLE_DESCRIPTIONS,
   TEMPLATE_VARIABLES,
   templateNameProblem,
   withTemplateDeleted,
@@ -166,6 +169,9 @@ const taskErrors = atom<Record<string, string>>({})
 /** The template chosen on each card, by project and task key, while the panel is open. Never
  *  stored; a card whose template no longer exists shows the default template again. */
 const cardTemplates = atom<Record<string, string>>({})
+
+/** Whether the template detail's Variables list is open, while the panel is open. */
+const variablesOpen = atom(false)
 
 /** The key of a task's card in `cardTemplates`. */
 const cardKey = (projectId: string, taskKey: string) => `${projectId}\n${taskKey}`
@@ -731,6 +737,7 @@ export function setup(ctx: PanelContext): void {
   set(agentStarting, {})
   set(cardTemplates, {})
   set(templateDraft, null)
+  set(variablesOpen, false)
   set(settingsChoice, 'auto')
   viewStateFor = undefined
   set(search, '')
@@ -817,7 +824,7 @@ function SettingsView({ projectName, shown }: { projectName: string; shown: Show
   return (
     <Stack gap="sm">
       <TitleRow prefix={`${projectName} ·`} title="Project settings" level={3}>
-        <Button key="settings-done" size="sm" variant="ghost" icon="close" onPress={() => set(settingsChoice, 'closed')}>
+        <Button key="settings-done" size="sm" variant="solid" onPress={() => set(settingsChoice, 'closed')}>
           Done
         </Button>
       </TitleRow>
@@ -1129,45 +1136,66 @@ function CardTemplate({ task, projectId }: { task: Task; projectId: string }) {
   )
 }
 
+/** The template detail, in place of the panel view. The title row with Cancel and Save, and the
+ *  Delete bar, stay in place while the form between them scrolls. */
 function TemplateDetail({ draft, templates, projectName }: { draft: TemplateDraft; templates: PromptTemplate[]; projectName: string }) {
   const nameProblem = templateNameProblem(templates, draft.name, draft.id)
   return (
-    <Stack gap="sm">
-      <Heading level={3}>{projectName}</Heading>
-      <Stack gap="xs">
-        <Input label="Name" value={draft.name} invalid={nameProblem !== null} onChange={(name) => changeDraft(draft, { name })} />
-        {nameProblem !== null ? (
-          <Text size="sm" tone="danger">
-            {nameProblem}
+    <Box direction="column" gap="sm" height="100%">
+      <TitleRow prefix={`${projectName} ·`} title={draft.isNew ? 'New template' : 'Edit template'} level={3}>
+        <Row gap="xs" align="center">
+          {draft.saving ? <Spinner label="Saving the template" labelHidden /> : null}
+          <Button key="template-cancel" size="sm" variant="ghost" disabled={draft.saving} onPress={closeTemplate}>
+            Cancel
+          </Button>
+          <Button key="template-save" size="sm" variant="solid" disabled={nameProblem !== null || draft.saving} onPress={() => void saveTemplate()}>
+            Save
+          </Button>
+        </Row>
+      </TitleRow>
+      <Box direction="column" gap="sm" grow minHeight={0} maxHeight="100%" scroll="y">
+        <Stack gap="xs">
+          <Input label="Name" value={draft.name} invalid={nameProblem !== null} onChange={(name) => changeDraft(draft, { name })} />
+          {nameProblem !== null ? (
+            <Text size="sm" tone="danger">
+              {nameProblem}
+            </Text>
+          ) : null}
+        </Stack>
+        <Stack gap="xs">
+          <Textarea
+            label="Text"
+            value={draft.text}
+            rows={12}
+            placeholder="Empty: the prompt is the task URL"
+            onChange={(text) => changeDraft(draft, { text })}
+          />
+          <Text size="sm" muted>
+            An empty text gives the task URL.
           </Text>
+        </Stack>
+        <Collapsible title="Variables" open={read(variablesOpen)} onChange={(open) => set(variablesOpen, open)}>
+          <Stack gap="xs">
+            {TEMPLATE_VARIABLES.map((name) => (
+              <Text key={name} size="sm">
+                <Code>{`{{${name}}}`}</Code> {TEMPLATE_VARIABLE_DESCRIPTIONS[name]}
+              </Text>
+            ))}
+          </Stack>
+        </Collapsible>
+        {draft.error !== null ? (
+          <Callout tone="danger" icon="error">
+            <Text>{draft.error}</Text>
+          </Callout>
         ) : null}
-      </Stack>
-      <Textarea
-        label="Text"
-        value={draft.text}
-        rows={6}
-        placeholder="Empty: the prompt is the task URL"
-        onChange={(text) => changeDraft(draft, { text })}
-      />
-      <Text size="sm" muted>
-        {`Variables: ${TEMPLATE_VARIABLES.map((name) => `{{${name}}}`).join(', ')}. An empty template gives the task URL.`}
-      </Text>
-      <Text size="sm" muted>
-        {'To run a Claude Code skill, start the template with its command, for example `/tdd {{task_key}}`: the rest of the template becomes its arguments. The new worktree must see the skill, so install plugins with user scope, not local, and commit project skills. Other agents have their own syntax.'}
-      </Text>
-      {draft.error !== null ? (
-        <Callout tone="danger" icon="error">
-          <Text>{draft.error}</Text>
+        <Callout icon="info" title="Run a skill">
+          <Text size="sm">
+            {'To run a Claude Code skill, start the template with its command, for example `/tdd {{task_key}}`: the rest of the template becomes its arguments. The new worktree must see the skill, so install plugins with user scope, not local, and commit project skills. Other agents have their own syntax.'}
+          </Text>
         </Callout>
-      ) : null}
-      <Row gap="xs" align="center" wrap>
-        <Button key="template-save" size="sm" variant="solid" disabled={nameProblem !== null || draft.saving} onPress={() => void saveTemplate()}>
-          Save
-        </Button>
-        <Button key="template-cancel" size="sm" variant="ghost" disabled={draft.saving} onPress={closeTemplate}>
-          Cancel
-        </Button>
-        {draft.isNew ? null : (
+      </Box>
+      {draft.isNew ? null : (
+        <Box direction="row" justify="end" align="center" shrink={false}>
           <Button
             key="template-delete"
             size="sm"
@@ -1177,11 +1205,10 @@ function TemplateDetail({ draft, templates, projectName }: { draft: TemplateDraf
             disabled={templates.length < 2 || draft.saving}
             onPress={() => void deleteTemplate()}
           >
-            {draft.confirmingDelete ? 'Confirm delete' : 'Delete'}
+            {draft.confirmingDelete ? 'Confirm delete' : 'Delete template'}
           </Button>
-        )}
-        {draft.saving ? <Spinner label="Saving the template" labelHidden /> : null}
-      </Row>
-    </Stack>
+        </Box>
+      )}
+    </Box>
   )
 }

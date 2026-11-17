@@ -366,7 +366,9 @@ test('the gear opens Project settings in place of the list, and Done goes back t
   assert.equal(view.find({ type: 'Text', text: 'web ·' })?.props.muted, true)
   assert.equal(view.find({ type: 'Link', text: '#42' }), null)
   assert.equal(view.find(gear), null)
-  assert.equal(view.find(done)?.props.icon, 'close')
+  // Done looks like the template detail's Save.
+  const doneProps = view.find(done)?.props
+  assert.deepEqual([doneProps?.variant, doneProps?.size, doneProps?.icon], ['solid', 'sm', undefined])
   assert.ok(view.find({ type: 'Text', text: 'Tracker' }))
   assert.ok(view.find({ type: 'Text', text: 'Start' }))
   assert.ok(view.find({ type: 'Separator' }))
@@ -942,10 +944,177 @@ test('the template detail opened from Project settings goes back to it on Save, 
   backInSettings()
 
   await view.press({ type: 'IconButton', label: 'Edit template' })
-  await view.press({ type: 'Button', text: 'Delete' })
+  await view.press({ type: 'Button', text: 'Delete template' })
   await view.press({ type: 'Button', text: 'Confirm delete' })
   backInSettings()
   assert.deepEqual(optionLabels(view, 'Default template'), ['Implement', 'Review'])
+  await view.unmount()
+})
+
+test('the template detail\'s title says "Edit template" or "New template", after the project\'s name', async () => {
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
+  await view.press(gear)
+  await view.press({ type: 'IconButton', label: 'Edit template' })
+  assert.equal(view.find({ type: 'Text', text: 'web ·' })?.props.muted, true)
+  assert.equal(view.find({ type: 'Heading', text: 'Edit template' })?.props.level, 3)
+  assert.equal(view.find({ type: 'Heading', text: 'web' }), null)
+
+  await view.press({ type: 'Button', text: 'Cancel' })
+  await view.press({ type: 'IconButton', label: 'New template' })
+  assert.equal(view.find({ type: 'Text', text: 'web ·' })?.props.muted, true)
+  assert.equal(view.find({ type: 'Heading', text: 'New template' })?.props.level, 3)
+  assert.equal(view.find({ type: 'Heading', text: 'Edit template' }), null)
+  await view.unmount()
+})
+
+/** The parts of the template detail: its title row, its form, and its Delete bar when it has one. */
+function detailParts(view: TestPanel) {
+  const frame = view.tree()
+  assert.ok(frame && typeof frame !== 'string')
+  assert.equal(frame.type, 'Box')
+  assertProps(frame, { direction: 'column', height: '100%' })
+  const [title, form, ...rest] = elementsIn(frame)
+  assert.ok(title && form)
+  assert.ok(rest.length <= 1)
+  return { frame, title, form, deleteBar: rest[0] as TreeSnapshot | undefined }
+}
+
+/** The text of each button under `node`, in order. */
+const buttonsIn = (node: TreeSnapshot) => nodesIn(node, (inner) => inner.type === 'Button').map(wordsOf)
+
+test('Cancel and Save are on the right of the title row, and only the form scrolls', async () => {
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
+  await view.press(gear)
+  await view.press({ type: 'IconButton', label: 'Edit template' })
+  const { frame, title, form } = detailParts(view)
+  assert.deepEqual(nodesIn(title, (node) => node.type === 'Text' || node.type === 'Heading').map(wordsOf), ['web ·', 'Edit template'])
+  assert.deepEqual(buttonsIn(title), ['Cancel', 'Save'])
+  assertProps(nodesIn(title, (node) => node.type === 'Button' && wordsOf(node) === 'Cancel')[0], { variant: 'ghost', size: 'sm' })
+  assertProps(nodesIn(title, (node) => node.type === 'Button' && wordsOf(node) === 'Save')[0], { variant: 'solid', size: 'sm' })
+  assertProps(form, { direction: 'column', grow: true, minHeight: 0, maxHeight: '100%', scroll: 'y' })
+  assert.deepEqual(
+    nodesIn(frame, (node) => node.props?.scroll !== undefined),
+    [form]
+  )
+  assert.equal(nodesIn(form, (node) => node.type === 'Input' && node.props?.label === 'Name').length, 1)
+  assert.equal(nodesIn(form, (node) => node.type === 'Button').length, 0)
+  await view.unmount()
+})
+
+const variables = { type: 'Collapsible', label: 'Variables' }
+
+test('the hint follows the text, and the closed Variables list gives each variable with what it gives', async () => {
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
+  await view.press(gear)
+  await view.press({ type: 'IconButton', label: 'Edit template' })
+  const { form } = detailParts(view)
+  const parts = elementsIn(form)
+  const textAt = parts.findIndex((part) => nodesIn(part, (node) => node.type === 'Textarea').length > 0)
+  const [field] = nodesIn(parts[textAt], (node) => node.type === 'Textarea')
+  assertProps(field, { label: 'Text', rows: 12 })
+  const hint = nodesIn(parts[textAt], (node) => node.type === 'Text' && wordsOf(node) === 'An empty text gives the task URL.')
+  assert.equal(hint.length, 1)
+  assertProps(hint[0], { size: 'sm', muted: true })
+  const fieldAndHint = elementsIn(parts[textAt])
+  assert.deepEqual(fieldAndHint.map((part) => part.type), ['Textarea', 'Text'])
+  assert.equal(parts[textAt + 1].type, 'Collapsible')
+
+  assert.equal(view.find(variables)?.props.open, false)
+  assert.equal(view.find({ type: 'Code', text: '{{task_key}}' }), null)
+  await view.toggle(variables)
+  const rows = elementsIn(nodesIn(view.tree(), (node) => node.type === 'Collapsible')[0]).flatMap(elementsIn)
+  assert.deepEqual(
+    rows.map((row) => [elementsIn(row).map((code) => `${code.type} ${wordsOf(code)}`), wordsOf(row)]),
+    [
+      [['Code {{task_key}}'], '{{task_key}} The task key, such as WEB-12 or #42.'],
+      [['Code {{task_title}}'], "{{task_title}} The task's title."],
+      [['Code {{task_url}}'], "{{task_url}} The task's link in the tracker."],
+      [['Code {{task_description}}'], "{{task_description}} The task's description as plain text, cut to 4000 characters."],
+      [['Code {{task_status}}'], '{{task_status}} The status as the tracker shows it, such as "In Progress". "Open" on GitHub.'],
+      [['Code {{tracker}}'], '{{tracker}} "github" or "jira".'],
+      [['Code {{repo}}'], "{{repo}} The project's repository (owner/name) when Orca knows it, else the project's name."],
+      [['Code {{branch}}'], "{{branch}} The new worktree's name, such as web-12-add-dark-mode."]
+    ]
+  )
+  assert.deepEqual(view.warnings, [])
+  await view.unmount()
+})
+
+test('the Variables list stays as it was left while the panel is open, and starts closed in a panel opened again', async () => {
+  const first = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
+  await first.view.press(gear)
+  await first.view.press({ type: 'IconButton', label: 'Edit template' })
+  await first.view.toggle(variables)
+  await first.view.press({ type: 'Button', text: 'Cancel' })
+  await first.view.press({ type: 'IconButton', label: 'New template' })
+  assert.equal(first.view.find(variables)?.props.open, true)
+  assert.ok(first.view.find({ type: 'Code', text: '{{branch}}' }))
+  await first.view.unmount()
+
+  const again = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
+  await again.view.press(gear)
+  await again.view.press({ type: 'IconButton', label: 'Edit template' })
+  assert.equal(again.view.find(variables)?.props.open, false)
+  await again.view.unmount()
+})
+
+test('the "Run a skill" Callout ends the form, after the error of a failed write', async () => {
+  const host = mockHost({
+    capabilities: ['storage:own', 'workspace:read'],
+    requests: { 'tasks.load': ready([task('#42')]) },
+    storage: twoTemplates,
+    results: {
+      'storage.set': () => {
+        throw hostError('quota_exceeded', 'Storage is full')
+      }
+    }
+  })
+  const view = await mount(panel, { host })
+  await view.press(gear)
+  await view.press({ type: 'IconButton', label: 'Edit template' })
+  const skill = detailParts(view).form.children?.at(-1)
+  assert.ok(skill && typeof skill !== 'string')
+  assert.equal(skill.type, 'Callout')
+  assertProps(skill, { icon: 'info', title: 'Run a skill' })
+  assert.match(wordsOf(skill), /^To run a Claude Code skill, start the template with its command, for example `\/tdd \{\{task_key\}\}`/)
+
+  await view.press(saveButton)
+  const parts = elementsIn(detailParts(view).form)
+  assert.deepEqual(
+    parts.slice(-2).map((part) => [part.type, part.props?.tone ?? null, part.props?.title ?? null]),
+    [
+      ['Callout', 'danger', null],
+      ['Callout', null, 'Run a skill']
+    ]
+  )
+  assert.match(wordsOf(parts.at(-2)!), /Couldn't save the template/)
+  await view.unmount()
+})
+
+test('"Delete template" sits in a bar of its own under the form, on the right, and asks for a second click', async () => {
+  const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
+  await view.press(gear)
+  await view.press({ type: 'IconButton', label: 'Edit template' })
+  const { form, deleteBar } = detailParts(view)
+  assert.ok(deleteBar)
+  assertProps(deleteBar, { direction: 'row', justify: 'end' })
+  assert.equal(deleteBar.props?.scroll, undefined)
+  assert.deepEqual(buttonsIn(deleteBar), ['Delete template'])
+  assert.equal(nodesIn(form, (node) => node.type === 'Button').length, 0)
+  assertProps(nodesIn(deleteBar, (node) => node.type === 'Button')[0], { variant: 'ghost', tone: 'danger', icon: 'delete', size: 'sm' })
+
+  await view.press({ type: 'Button', text: 'Delete template' })
+  assert.deepEqual(buttonsIn(detailParts(view).deleteBar!), ['Confirm delete'])
+  assert.deepEqual(storedProject(host), twoTemplates.settings.projects['github:acme/web'])
+  await view.unmount()
+})
+
+test('a new template has no Delete bar', async () => {
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
+  await view.press(gear)
+  await view.press({ type: 'IconButton', label: 'New template' })
+  assert.equal(detailParts(view).deleteBar, undefined)
+  assert.equal(view.find({ type: 'Button', text: /Delete/ }), null)
   await view.unmount()
 })
 
@@ -961,12 +1130,11 @@ test('"New template" opens the detail with an empty name and the initial text; S
   const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
   await view.press(gear)
   await view.press({ type: 'IconButton', label: 'New template' })
-  assert.ok(view.find({ type: 'Heading', text: 'web' }))
+  assert.ok(view.find({ type: 'Heading', text: 'New template' }))
   assert.equal(view.find({ type: 'Link', text: '#42' }), null)
   assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), '')
   assert.equal(view.valueOf({ type: 'Textarea', label: 'Text' }), 'Complete {{task_key}}: {{task_url}}')
-  assert.ok(view.find({ type: 'Text', text: /\{\{task_description\}\}/ }))
-  assert.equal(view.find({ type: 'Button', text: 'Delete' }), null)
+  assert.equal(view.find({ type: 'Button', text: 'Delete template' }), null)
   assert.equal(view.find(saveButton)?.disabled, true)
   assert.ok(view.find({ type: 'Text', text: 'Give the template a name.' }))
 
@@ -1067,7 +1235,7 @@ test('Delete needs a second click, and deleting the default template makes the f
   const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
   await view.press(gear)
   await view.press({ type: 'IconButton', label: 'Edit template' })
-  await view.press({ type: 'Button', text: 'Delete' })
+  await view.press({ type: 'Button', text: 'Delete template' })
   assert.ok(view.find({ type: 'Button', text: 'Confirm delete' }))
   assert.deepEqual(storedProject(host), twoTemplates.settings.projects['github:acme/web'])
   await view.press({ type: 'Button', text: 'Confirm delete' })
@@ -1083,11 +1251,11 @@ test('Delete turns back after a few seconds without the second click', async () 
     const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
     await view.press(gear)
     await view.press({ type: 'IconButton', label: 'Edit template' })
-    await view.press({ type: 'Button', text: 'Delete' })
+    await view.press({ type: 'Button', text: 'Delete template' })
     await fire(view)
-    assert.ok(view.find({ type: 'Button', text: 'Delete' }))
+    assert.ok(view.find({ type: 'Button', text: 'Delete template' }))
     assert.equal(view.find({ type: 'Button', text: 'Confirm delete' }), null)
-    await view.press({ type: 'Button', text: 'Delete' })
+    await view.press({ type: 'Button', text: 'Delete template' })
     assert.deepEqual(storedProject(host), twoTemplates.settings.projects['github:acme/web'])
     await view.unmount()
   })
@@ -1097,7 +1265,7 @@ test('Delete is disabled for the only template', async () => {
   const { view } = await showWith({ 'tasks.load': ready([task('#42')]) })
   await view.press(gear)
   await view.press({ type: 'IconButton', label: 'Edit template' })
-  assert.equal(view.find({ type: 'Button', text: 'Delete' })?.disabled, true)
+  assert.equal(view.find({ type: 'Button', text: 'Delete template' })?.disabled, true)
   await view.unmount()
 })
 
@@ -1112,7 +1280,7 @@ test("a card whose template is deleted falls back to the default template", asyn
   await view.press(gear)
   await view.select({ type: 'Select', label: 'Default template' }, 't-triage')
   await view.press({ type: 'IconButton', label: 'Edit template' })
-  await view.press({ type: 'Button', text: 'Delete' })
+  await view.press({ type: 'Button', text: 'Delete template' })
   await view.press({ type: 'Button', text: 'Confirm delete' })
   await view.press(done)
   assert.equal(view.valueOf(cardTemplate('#42')), 't-impl')
