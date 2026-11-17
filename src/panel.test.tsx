@@ -1,7 +1,31 @@
-import { assert, hostError, mockHost, mount, test, type MockHost, type MockRequests, type TestPanel, type TestQuery, type TreeSnapshot } from 'orca/testing'
+import { afterEach, assert, hostError, mockHost, mount as mountUntracked, test, type MockHost, type MockRequests, type TestPanel, type TestQuery, type TreeSnapshot } from 'orca/testing'
 import type { JsonValue } from 'orca'
 import type { Task, TaskList, TaskWorktree } from './protocol'
 import * as panel from './panel'
+
+/** The views the running test mounted and hasn't unmounted. A view left mounted keeps the panel's
+ *  poll, a real `setInterval`, running, and then `orca plugin test` never exits. */
+const mounted = new Set<TestPanel>()
+
+/** `mount` from `orca/testing`, for a view that is unmounted when the test ends even if the test
+ *  fails before its own `unmount()`. */
+const mount: typeof mountUntracked = async (target, options) => {
+  const view = await mountUntracked(target, options)
+  const unmount = view.unmount
+  view.unmount = () => {
+    mounted.delete(view)
+    return unmount.call(view)
+  }
+  mounted.add(view)
+  return view
+}
+
+/** Unmounts every view still mounted, each once. */
+async function unmountAll(): Promise<void> {
+  for (const view of [...mounted]) await view.unmount()
+}
+
+afterEach(unmountAll)
 
 const web = { id: 'github:acme/web', name: 'web', repo: 'acme/web' }
 const notes = { id: 'repo:r1', name: 'notes', repo: null }
@@ -685,7 +709,8 @@ test('a response that arrives after a newer request is dropped', async () => {
 })
 
 /** Stands in for `setInterval` while `body` runs, so a test fires the panel's timers by hand:
- *  `tick()` runs every live interval once and waits for the panel to settle. */
+ *  `tick()` runs every live interval once and waits for the panel to settle. When `body` ends, even
+ *  by failing, it unmounts the views still mounted, then puts the real timers back. */
 async function withIntervals(body: (timers: { tick: (view: TestPanel) => Promise<void>; live: () => number[] }) => Promise<void>) {
   const realSet = globalThis.setInterval
   const realClear = globalThis.clearInterval
@@ -705,8 +730,13 @@ async function withIntervals(body: (timers: { tick: (view: TestPanel) => Promise
       live: () => [...live.values()].map((timer) => timer.ms)
     })
   } finally {
-    globalThis.setInterval = realSet
-    globalThis.clearInterval = realClear
+    // A view the body left mounted clears its intervals here, while they are still in `live`.
+    try {
+      await unmountAll()
+    } finally {
+      globalThis.setInterval = realSet
+      globalThis.clearInterval = realClear
+    }
   }
 }
 
