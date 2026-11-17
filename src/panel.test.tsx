@@ -1,4 +1,4 @@
-import { afterEach, assert, hostError, mockHost, mount as mountOnce, test, type MockHost, type MockRequests, type TestPanel, type TestQuery, type TreeSnapshot } from 'orca/testing'
+import { afterEach, assert, hostError, mockHost, mount as mountUntracked, test, type MockHost, type MockRequests, type TestPanel, type TestQuery, type TreeSnapshot } from 'orca/testing'
 import type { JsonValue } from 'orca'
 import type { Task, TaskList, TaskWorktree } from './protocol'
 import * as panel from './panel'
@@ -9,8 +9,8 @@ const mounted = new Set<TestPanel>()
 
 /** `mount` from `orca/testing`, for a view that is unmounted when the test ends even if the test
  *  fails before its own `unmount()`. */
-const mount: typeof mountOnce = async (target, options) => {
-  const view = await mountOnce(target, options)
+const mount: typeof mountUntracked = async (target, options) => {
+  const view = await mountUntracked(target, options)
   const unmount = view.unmount
   view.unmount = () => {
     mounted.delete(view)
@@ -709,7 +709,8 @@ test('a response that arrives after a newer request is dropped', async () => {
 })
 
 /** Stands in for `setInterval` while `body` runs, so a test fires the panel's timers by hand:
- *  `tick()` runs every live interval once and waits for the panel to settle. */
+ *  `tick()` runs every live interval once and waits for the panel to settle. When `body` ends, even
+ *  by failing, it unmounts the views still mounted, then puts the real timers back. */
 async function withIntervals(body: (timers: { tick: (view: TestPanel) => Promise<void>; live: () => number[] }) => Promise<void>) {
   const realSet = globalThis.setInterval
   const realClear = globalThis.clearInterval
