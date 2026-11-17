@@ -443,6 +443,7 @@ No CLI command or plugin API exposes it; `orca settings` and `orca config` are u
   - `text ~ "<task key>"` does not find the task; `key = "<task key>"` does. A well-formed key that does not exist returns no results, not an error.
   - An unterminated `"` inside the quoted words (`text ~ "\"abc"`) returns no results, not an error.
   - Lucene special characters inside the quoted words (`: - ( ) ! ? [ ] ^ ~ / { } && ||`) give no error with `orca jira search`. Inside a JQL string, `"` and `\` still have to be escaped with `\`: an unescaped trailing `\` would escape the closing quote.
+  - The JQL a Kickoff tracker search sends, `(<conditions>) AND (text ~ "dark* mode*" OR key = "<KEY>") ORDER BY updated DESC`, with several prefixed words in one string, is accepted by `orca jira search` with no error **[Verified]** (Orca 1.4.261, Jira Cloud). Whether a task must match every word or any one of them was not checked.
 
 ## Executable paths
 
