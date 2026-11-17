@@ -681,8 +681,8 @@ test('a response that arrives after a newer request is dropped', async () => {
 type TimerGlobal = 'setInterval' | 'clearInterval' | 'setTimeout' | 'clearTimeout'
 
 /** Puts `fakes` in place of those timer globals while `body` runs. When `body` ends, even by
- *  failing, it unmounts the views still mounted with the fakes still in place, so a view's cleanup
- *  clears its timers in the fakes, then puts the real timers back, even if an unmount fails. */
+ *  failing, it unmounts the views still mounted while the fakes are in place, so each view clears
+ *  its timers in the fakes. Then it puts the real timers back, even if an unmount fails. */
 async function withFakeTimers<K extends TimerGlobal>(fakes: Pick<typeof globalThis, K>, body: () => Promise<void>): Promise<void> {
   const names = Object.keys(fakes) as K[]
   const real = Object.fromEntries(names.map((name) => [name, globalThis[name]])) as Pick<typeof globalThis, K>
@@ -918,6 +918,28 @@ test("a failed poll keeps the list as it is", async () => {
     assert.ok(view.find({ type: 'Link', text: '#1' }))
     assert.equal(view.find({ type: 'Callout' }), null)
   })
+})
+
+test('withIntervals unmounts a view the body left mounted and puts the real timers back when the body fails', async () => {
+  const realSet = globalThis.setInterval
+  const realClear = globalThis.clearInterval
+  let liveOnceDone = (): number[] => [-1]
+  await assert.rejects(
+    withIntervals(async ({ live }) => {
+      const host = mockHost({
+        capabilities: ['storage:own', 'workspace:read'],
+        requests: { 'tasks.load': ready([task('#1')]), 'project.active': { projectId: web.id } }
+      })
+      await mount(panel, { host })
+      assert.deepEqual(live(), [3000])
+      liveOnceDone = live
+      throw new Error('body failed')
+    }),
+    /body failed/
+  )
+  assert.deepEqual(liveOnceDone(), [])
+  assert.equal(globalThis.setInterval, realSet)
+  assert.equal(globalThis.clearInterval, realClear)
 })
 
 /** The panel with these worker answers and stored values, and its host. */
@@ -2018,28 +2040,28 @@ test('no delayed worktrees.load runs after the panel is deactivated', async () =
 })
 
 test('withTimeouts unmounts a view the body left mounted while its timers are still held', async () => {
-  let pendingAfter = () => -1
+  let pendingOnceDone = () => -1
   await withTimeouts(AGENT_CHECK_MS, async ({ pending }) => {
     await startedWithoutAgentYet()
     assert.equal(pending(), 1)
-    pendingAfter = pending
+    pendingOnceDone = pending
   })
-  assert.equal(pendingAfter(), 0)
+  assert.equal(pendingOnceDone(), 0)
 })
 
 test('withTimeouts unmounts and puts the real timers back when the body fails', async () => {
   const realSet = globalThis.setTimeout
   const realClear = globalThis.clearTimeout
-  let pendingAfter = () => -1
+  let pendingOnceDone = () => -1
   await assert.rejects(
     withTimeouts(AGENT_CHECK_MS, async ({ pending }) => {
       await startedWithoutAgentYet()
-      pendingAfter = pending
+      pendingOnceDone = pending
       throw new Error('body failed')
     }),
     /body failed/
   )
-  assert.equal(pendingAfter(), 0)
+  assert.equal(pendingOnceDone(), 0)
   assert.equal(globalThis.setTimeout, realSet)
   assert.equal(globalThis.clearTimeout, realClear)
 })
