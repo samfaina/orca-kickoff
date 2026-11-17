@@ -8,9 +8,9 @@ import * as panel from './panel'
 const mounted = new Set<TestPanel>()
 
 /** `mount` from `orca/testing`, for a view that is unmounted when the test ends, passing or failing,
- *  or earlier when `withIntervals` ends. That is how a test's views normally get unmounted: a test
- *  calls `unmount()` itself only when more work follows, such as another statement, the next loop
- *  iteration, or `withTimeouts` putting the real timers back, since its `finally` doesn't unmount. */
+ *  or earlier when a fake-timer helper (`withIntervals`, `withTimeouts`) ends. That is how a test's
+ *  views normally get unmounted: a test calls `unmount()` itself only when more work follows, such
+ *  as another statement or the next loop iteration. */
 const mount: typeof mountUntracked = async (target, options) => {
   const view = await mountUntracked(target, options)
   const unmount = view.unmount
@@ -678,36 +678,48 @@ test('a response that arrives after a newer request is dropped', async () => {
   assert.equal(view.find({ type: 'Link', text: '#20' }), null)
 })
 
+type TimerGlobal = 'setInterval' | 'clearInterval' | 'setTimeout' | 'clearTimeout'
+
+/** Puts `fakes` in place of those timer globals while `body` runs. When `body` ends, even by
+ *  failing, it unmounts the views still mounted with the fakes still in place, so a view's cleanup
+ *  clears its timers in the fakes, then puts the real timers back, even if an unmount fails. */
+async function withFakeTimers<K extends TimerGlobal>(fakes: Pick<typeof globalThis, K>, body: () => Promise<void>): Promise<void> {
+  const names = Object.keys(fakes) as K[]
+  const real = Object.fromEntries(names.map((name) => [name, globalThis[name]])) as Pick<typeof globalThis, K>
+  Object.assign(globalThis, fakes)
+  try {
+    await body()
+  } finally {
+    try {
+      await unmountAll()
+    } finally {
+      Object.assign(globalThis, real)
+    }
+  }
+}
+
 /** Stands in for `setInterval` while `body` runs, so a test fires the panel's timers by hand:
  *  `tick()` runs every live interval once and waits for the panel to settle. When `body` ends, even
  *  by failing, it unmounts the views still mounted, then puts the real timers back. */
 async function withIntervals(body: (timers: { tick: (view: TestPanel) => Promise<void>; live: () => number[] }) => Promise<void>) {
-  const realSet = globalThis.setInterval
-  const realClear = globalThis.clearInterval
   const live = new Map<number, { run: () => void; ms: number }>()
   let next = 1
-  globalThis.setInterval = ((run: () => void, ms: number) => {
-    live.set(next, { run, ms })
-    return next++
-  }) as unknown as typeof setInterval
-  globalThis.clearInterval = ((id: number) => void live.delete(id)) as unknown as typeof clearInterval
-  try {
-    await body({
+  const fakes = {
+    setInterval: ((run: () => void, ms: number) => {
+      live.set(next, { run, ms })
+      return next++
+    }) as unknown as typeof setInterval,
+    clearInterval: ((id: number) => void live.delete(id)) as unknown as typeof clearInterval
+  }
+  await withFakeTimers(fakes, () =>
+    body({
       tick: async (view) => {
         for (const timer of [...live.values()]) timer.run()
         await view.settled()
       },
       live: () => [...live.values()].map((timer) => timer.ms)
     })
-  } finally {
-    // A view the body left mounted clears its intervals here, while they are still in `live`.
-    try {
-      await unmountAll()
-    } finally {
-      globalThis.setInterval = realSet
-      globalThis.clearInterval = realClear
-    }
-  }
+  )
 }
 
 const api = { id: 'github:acme/api', name: 'api', repo: 'acme/api' }
@@ -1424,7 +1436,6 @@ test('Delete turns back after a few seconds without the second click', async () 
     assert.equal(view.find({ type: 'Button', text: 'Confirm delete' }), null)
     await view.press({ type: 'Button', text: 'Delete template' })
     assert.deepEqual(storedProject(host), twoTemplates.settings.projects['github:acme/web'])
-    await view.unmount()
   })
 })
 
@@ -1734,7 +1745,8 @@ test("a failure reading Orca's worktrees still lists the tasks, with Start disab
 
 /** Stands in for `setTimeout` while `body` runs, for the timers of `ms` only, so a test fires them
  *  by hand: `fire()` runs every one still pending and waits for the panel to settle. Other timers,
- *  such as the settings save, run as usual. */
+ *  such as the settings save, run as usual. When `body` ends, even by failing, it unmounts the
+ *  views still mounted, then puts the real timers back. */
 async function withTimeouts(
   ms: number,
   body: (timers: { fire: (view: TestPanel) => Promise<void>; pending: () => number }) => Promise<void>
@@ -1743,17 +1755,19 @@ async function withTimeouts(
   const realClear = globalThis.clearTimeout
   const held = new Map<number, () => void>()
   let next = 1
-  globalThis.setTimeout = ((run: () => void, delay?: number, ...args: unknown[]) => {
-    if (delay !== ms) return realSet(run, delay, ...args)
-    held.set(next, run)
-    return next++
-  }) as unknown as typeof setTimeout
-  globalThis.clearTimeout = ((id: unknown) => {
-    if (typeof id === 'number' && held.delete(id)) return
-    realClear(id as ReturnType<typeof setTimeout>)
-  }) as unknown as typeof clearTimeout
-  try {
-    await body({
+  const fakes = {
+    setTimeout: ((run: () => void, delay?: number, ...args: unknown[]) => {
+      if (delay !== ms) return realSet(run, delay, ...args)
+      held.set(next, run)
+      return next++
+    }) as unknown as typeof setTimeout,
+    clearTimeout: ((id: unknown) => {
+      if (typeof id === 'number' && held.delete(id)) return
+      realClear(id as ReturnType<typeof setTimeout>)
+    }) as unknown as typeof clearTimeout
+  }
+  await withFakeTimers(fakes, () =>
+    body({
       fire: async (view) => {
         const runs = [...held.values()]
         held.clear()
@@ -1762,10 +1776,7 @@ async function withTimeouts(
       },
       pending: () => held.size
     })
-  } finally {
-    globalThis.setTimeout = realSet
-    globalThis.clearTimeout = realClear
-  }
+  )
 }
 
 /** How long after a Start's end the panel reads the worktrees again for its agent. */
@@ -1790,7 +1801,6 @@ test('after a Start with an agent, the card says the agent is starting until Orc
     await fire(view)
     assert.ok(view.find({ type: 'Text', text: 'Agent: claude' }))
     assert.equal(view.find({ type: 'Text', text: 'Agent starting…' }), null)
-    await view.unmount()
   })
 })
 
@@ -1828,7 +1838,6 @@ test('after a Start with an agent, no card shows the new worktree without an age
     assert.ok(startingWhileRead)
     assert.ok(view.find({ type: 'Text', text: 'Agent starting…' }))
     assert.equal(pending(), 1)
-    await view.unmount()
   })
 })
 
@@ -1846,7 +1855,6 @@ test('after a Start with an agent that Orca already reports, the card shows it a
     assert.ok(view.find({ type: 'Text', text: 'Agent: claude' }))
     assert.equal(view.find({ type: 'Text', text: 'Agent starting…' }), null)
     assert.equal(pending(), 0)
-    await view.unmount()
   })
 })
 
@@ -1863,7 +1871,6 @@ test('after a Start with an agent that left no worktree, the card shows its erro
     assert.ok(view.find({ testId: 'start:#42' }))
     assert.equal(view.find({ type: 'Text', text: 'Agent starting…' }), null)
     assert.equal(pending(), 0)
-    await view.unmount()
   })
 })
 
@@ -1879,7 +1886,6 @@ test("after a Start with an agent whose worktree Orca doesn't list yet, the card
     assert.ok(view.find({ testId: 'start:#42' }))
     assert.equal(view.find({ type: 'Text', text: 'Agent starting…' }), null)
     assert.equal(pending(), 0)
-    await view.unmount()
   })
 })
 
@@ -1914,7 +1920,6 @@ test("an earlier Start's delayed load in another project doesn't end the agent s
     await Promise.all([ended, fired])
     assert.ok(view.find({ type: 'Text', text: 'Agent starting…' }))
     assert.equal(pending(), 1)
-    await view.unmount()
   })
 })
 
@@ -1932,7 +1937,6 @@ test('after a Start with "No agent", the card shows no agent line straight away'
     assert.equal(agentShown(view, '#42'), null)
     assert.equal(view.find({ type: 'Text', text: 'Agent starting…' }), null)
     assert.equal(pending(), 0)
-    await view.unmount()
   })
 })
 
@@ -1960,7 +1964,6 @@ test('one delayed worktrees.load runs after a Start, and then the card shows wha
     // Orca still reports no agent.
     assert.equal(agentShown(view, '#42'), null)
     assert.equal(view.find({ type: 'Text', text: 'Agent starting…' }), null)
-    await view.unmount()
   })
 })
 
@@ -1982,7 +1985,6 @@ test('once a reload reports the agent, the card shows what Orca reports from the
     agent = null
     await view.press({ type: 'IconButton', label: 'Reload tasks' })
     assert.equal(agentShown(view, '#42'), null)
-    await view.unmount()
   })
 })
 
@@ -2001,7 +2003,6 @@ test("a Start's agent shows as starting only in its own project", async () => {
     await view.emit('workspace.changed', { context: { branch: 'main', displayName: 'api', terminals: [] } })
     assert.ok(view.find({ type: 'Heading', text: 'api' }))
     assert.equal(agentShown(view, '#42'), null)
-    await view.unmount()
   })
 })
 
@@ -2014,6 +2015,51 @@ test('no delayed worktrees.load runs after the panel is deactivated', async () =
     await fire(view)
     assert.equal(reads(), 1)
   })
+})
+
+test('withTimeouts unmounts a view the body left mounted while its timers are still held', async () => {
+  let pendingAfter = () => -1
+  await withTimeouts(AGENT_CHECK_MS, async ({ pending }) => {
+    await startedWithoutAgentYet()
+    assert.equal(pending(), 1)
+    pendingAfter = pending
+  })
+  assert.equal(pendingAfter(), 0)
+})
+
+test('withTimeouts unmounts and puts the real timers back when the body fails', async () => {
+  const realSet = globalThis.setTimeout
+  const realClear = globalThis.clearTimeout
+  let pendingAfter = () => -1
+  await assert.rejects(
+    withTimeouts(AGENT_CHECK_MS, async ({ pending }) => {
+      await startedWithoutAgentYet()
+      pendingAfter = pending
+      throw new Error('body failed')
+    }),
+    /body failed/
+  )
+  assert.equal(pendingAfter(), 0)
+  assert.equal(globalThis.setTimeout, realSet)
+  assert.equal(globalThis.clearTimeout, realClear)
+})
+
+test('withTimeouts puts the real timers back when an unmount fails', async () => {
+  const realSet = globalThis.setTimeout
+  const realClear = globalThis.clearTimeout
+  await assert.rejects(
+    withTimeouts(AGENT_CHECK_MS, async () => {
+      const { view } = await startedWithoutAgentYet()
+      const unmount = view.unmount
+      view.unmount = async () => {
+        await unmount.call(view)
+        throw new Error('unmount failed')
+      }
+    }),
+    /unmount failed/
+  )
+  assert.equal(globalThis.setTimeout, realSet)
+  assert.equal(globalThis.clearTimeout, realClear)
 })
 
 /** How long the panel waits after a workspace is created or removed before it reads the worktrees. */
@@ -2037,7 +2083,6 @@ test('a removed worktree reads the worktrees again once, and its card shows Star
     assert.equal(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }), null)
     assert.ok(view.find({ testId: 'start:#42' }))
     assert.ok(view.find({ testId: 'start:#7' }))
-    await view.unmount()
   })
 })
 
@@ -2055,7 +2100,6 @@ test('workspaces created and removed within the pause read the worktrees once', 
     assert.equal(pending(), 1)
     await fire(view)
     assert.equal(reads, 1)
-    await view.unmount()
   })
 })
 
@@ -2099,7 +2143,6 @@ test("a workspace event during a Start under way reads the worktrees but leaves 
     assert.equal(view.find({ type: 'Spinner', label: 'Starting #42' }), null)
     assert.ok(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }))
     assert.ok(view.find({ type: 'Text', text: 'Agent starting…' }))
-    await view.unmount()
   })
 })
 
@@ -2126,7 +2169,6 @@ test("a workspace event before a Start's task.start answers reads the worktrees 
     await Promise.all([pressed, emitted, fired])
     assert.ok(view.find({ type: 'Spinner', label: 'Starting #42' }))
     assert.equal(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }), null)
-    await view.unmount()
   })
 })
 
@@ -2144,7 +2186,6 @@ test("a Start's error stays on its card after a workspace event reads the worktr
     assert.equal(reads, 2)
     assert.ok(view.find({ type: 'Text', text: "Couldn't read Orca's default agent — pick one in the panel." }))
     assert.ok(view.find({ testId: 'start:#42' }))
-    await view.unmount()
   })
 })
 
@@ -2174,7 +2215,6 @@ test("a workspace event's read that answers after a Start's own read doesn't und
     await Promise.all([fired, ended])
     assert.ok(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }))
     assert.equal(view.find({ testId: 'start:#42' }), null)
-    await view.unmount()
   })
 })
 
@@ -2203,7 +2243,6 @@ test("a workspace event's read while a Start reads its own end shows the new wor
     await Promise.all([ended, emitted, fired])
     assert.ok(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }))
     assert.equal(view.find({ testId: 'start:#42' }), null)
-    await view.unmount()
   })
 })
 
@@ -2232,7 +2271,6 @@ test('a workspace event during a reload reads the worktrees once the reload ends
     await fire(view)
     assert.equal(reads, 1)
     assert.ok(view.find({ testId: 'start:#42' }))
-    await view.unmount()
   })
 })
 
