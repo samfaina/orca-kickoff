@@ -10,6 +10,7 @@ import {
   Box,
   Button,
   Callout,
+  Code,
   CodeView,
   Collapsible,
   EmptyState,
@@ -207,12 +208,13 @@ let viewStateFor: string | null | undefined
 const templateDraft = atom<TemplateDraft | null>(null)
 
 /** PROTOTYPE: the two variant switches. */
-type DetailVariant = 'D-A' | 'D-B' | 'D-C'
+type DetailVariant = 'D-A' | 'D-B' | 'D-C' | 'D-D'
 type EntryVariant = 'E-A' | 'E-B'
 const DETAIL_VARIANTS = [
   { value: 'D-A', label: 'D-A · aligned form' },
   { value: 'D-B', label: 'D-B · actions in the header' },
-  { value: 'D-C', label: 'D-C · Text and Preview' }
+  { value: 'D-C', label: 'D-C · Text and Preview' },
+  { value: 'D-D', label: 'D-D · D-B with help and a Delete bar' }
 ]
 const ENTRY_VARIANTS = [
   { value: 'E-A', label: 'E-A · pencil and +' },
@@ -1232,6 +1234,29 @@ function TemplateDetail({ draft, templates, projectName }: { draft: TemplateDraf
   const prefix = projectName !== '' ? `${projectName} ·` : null
   const canSave = nameProblem === null && !draft.saving
   switch (read(detailVariant)) {
+    case 'D-D':
+      // D-B, with the variables listed and described, the note about skills in a box at the end of
+      // the form, and Delete in a bar of its own under the form, always in view.
+      return (
+        <Box direction="column" gap="sm" height="100%">
+          <PrototypeBar />
+          <DetailHeader draft={draft} prefix={prefix} title={title} canSave={canSave} />
+          <Box direction="column" gap="sm" grow minHeight={0} maxHeight="100%" scroll="y">
+            <NameField draft={draft} problem={nameProblem} />
+            <TextField draft={draft} />
+            <VariableList />
+            <SaveError draft={draft} />
+            <Callout icon="info" title="Run a skill">
+              <Text size="sm">{SKILL_NOTE}</Text>
+            </Callout>
+          </Box>
+          {draft.isNew ? null : (
+            <Box direction="row" justify="end" align="center" shrink={false}>
+              <DeleteButton draft={draft} templates={templates} />
+            </Box>
+          )}
+        </Box>
+      )
     case 'D-B':
       // The title row with its actions stays in place; only the form scrolls.
       return (
@@ -1298,6 +1323,57 @@ function TemplateDetail({ draft, templates, projectName }: { draft: TemplateDraf
   }
 }
 
+/** D-B and D-D: the title row, with Cancel and Save on its right. */
+function DetailHeader({ draft, prefix, title, canSave }: { draft: TemplateDraft; prefix: string | null; title: string; canSave: boolean }) {
+  return (
+    <TitleRow prefix={prefix} title={title} level={3}>
+      <Row gap="xs" align="center">
+        {draft.saving ? <Spinner label="Saving the template" labelHidden /> : null}
+        <Button key="template-cancel" size="sm" variant="ghost" disabled={draft.saving} onPress={closeTemplate}>
+          Cancel
+        </Button>
+        <Button key="template-save" size="sm" variant="solid" disabled={!canSave} onPress={() => void saveTemplate()}>
+          Save
+        </Button>
+      </Row>
+    </TitleRow>
+  )
+}
+
+/** What each variable gives, in the order of TEMPLATE_VARIABLES. */
+const VARIABLE_HELP: Record<(typeof TEMPLATE_VARIABLES)[number], string> = {
+  task_key: 'The task key, such as WEB-12 or #42.',
+  task_title: "The task's title.",
+  task_url: "The task's link in the tracker.",
+  task_description: "The task's description as plain text, cut to 4000 characters.",
+  task_status: 'The status as the tracker shows it, such as "In Progress". "Open" on GitHub.',
+  tracker: '"github" or "jira".',
+  repo: "The project's repository (owner/name) when Orca knows it, else the project's name.",
+  branch: "The new worktree's name, such as web-12-add-dark-mode."
+}
+
+/** D-D: one row per variable, with what it gives. */
+function VariableList() {
+  return (
+    <Stack gap="xs">
+      <Text size="sm" weight="semibold">
+        Variables
+      </Text>
+      {TEMPLATE_VARIABLES.map((name) => (
+        <Text key={name} size="sm">
+          <Code>{`{{${name}}}`}</Code> {VARIABLE_HELP[name]}
+        </Text>
+      ))}
+      <Text size="sm" muted>
+        An empty text gives the task URL.
+      </Text>
+    </Stack>
+  )
+}
+
+const SKILL_NOTE =
+  'To run a Claude Code skill, start the template with its command, for example `/tdd {{task_key}}`: the rest of the template becomes its arguments. The new worktree must see the skill, so install plugins with user scope, not local, and commit project skills. Other agents have their own syntax.'
+
 function NameField({ draft, problem }: { draft: TemplateDraft; problem: string | null }) {
   return (
     <Stack gap="xs">
@@ -1336,7 +1412,7 @@ function SkillsNote() {
   return (
     <Collapsible title="Run a skill" open={read(skillsNoteOpen)} onChange={(open) => set(skillsNoteOpen, open)}>
       <Text size="sm" muted>
-        {'To run a Claude Code skill, start the template with its command, for example `/tdd {{task_key}}`: the rest of the template becomes its arguments. The new worktree must see the skill, so install plugins with user scope, not local, and commit project skills. Other agents have their own syntax.'}
+        {SKILL_NOTE}
       </Text>
     </Collapsible>
   )
@@ -1371,19 +1447,25 @@ function DeleteRow({ draft, templates }: { draft: TemplateDraft; templates: Prom
     <>
       <Separator />
       <Row gap="xs" align="center">
-        <Button
-          key="template-delete"
-          size="sm"
-          variant="ghost"
-          tone="danger"
-          icon="delete"
-          disabled={templates.length < 2 || draft.saving}
-          onPress={() => void deleteTemplate()}
-        >
-          {draft.confirmingDelete ? 'Confirm delete' : 'Delete template'}
-        </Button>
+        <DeleteButton draft={draft} templates={templates} />
       </Row>
     </>
+  )
+}
+
+function DeleteButton({ draft, templates }: { draft: TemplateDraft; templates: PromptTemplate[] }) {
+  return (
+    <Button
+      key="template-delete"
+      size="sm"
+      variant="ghost"
+      tone="danger"
+      icon="delete"
+      disabled={templates.length < 2 || draft.saving}
+      onPress={() => void deleteTemplate()}
+    >
+      {draft.confirmingDelete ? 'Confirm delete' : 'Delete template'}
+    </Button>
   )
 }
 

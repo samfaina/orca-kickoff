@@ -77,6 +77,8 @@ export default defineCheck({
   'd-b': scenario({ protoDetailVariant: 'D-B', protoOpenTemplate: 't-default' }),
   'd-c-text': scenario({ protoDetailVariant: 'D-C', protoOpenTemplate: 't-default', protoDetailTab: 'text' }),
   'd-c-preview': scenario({ protoDetailVariant: 'D-C', protoOpenTemplate: 't-default', protoDetailTab: 'preview' }),
+  'd-d': scenario({ protoDetailVariant: 'D-D', protoOpenTemplate: 't-default' }),
+  'd-d-new': scenario({ protoDetailVariant: 'D-D', protoOpenTemplate: ':new' }),
   // Project settings, where the entry variants differ.
   'e-a': scenario({ protoEntryVariant: 'E-A', protoOpenTemplate: ':settings' }),
   'e-b': scenario({ protoEntryVariant: 'E-B', protoOpenTemplate: ':settings' })
