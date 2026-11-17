@@ -1122,7 +1122,7 @@ function ReadyList({ list }: { list: ReadyTaskList }) {
           label="Search tasks"
           labelHidden
           value={text}
-          placeholder="Search key, title or label"
+          placeholder="Filter loaded tasks · Enter searches the tracker"
           onChange={changeField}
           onSubmit={(value) => void searchTracker(value.trim())}
         />
