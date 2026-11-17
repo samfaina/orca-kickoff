@@ -1142,7 +1142,7 @@ function TemplateDetail({ draft, templates, projectName }: { draft: TemplateDraf
   const nameProblem = templateNameProblem(templates, draft.name, draft.id)
   return (
     <Box direction="column" gap="sm" height="100%">
-      <TitleRow prefix={`${projectName} ·`} title={draft.isNew ? 'New template' : 'Edit template'} level={3}>
+      <TitleRow prefix={projectName !== '' ? `${projectName} ·` : null} title={draft.isNew ? 'New template' : 'Edit template'} level={3}>
         <Row gap="xs" align="center">
           {draft.saving ? <Spinner label="Saving the template" labelHidden /> : null}
           <Button key="template-cancel" size="sm" variant="ghost" disabled={draft.saving} onPress={closeTemplate}>
