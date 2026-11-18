@@ -2606,6 +2606,114 @@ test('Project settings that opened by itself stays open once a load from it, or 
   assert.ok(second.view.find(settingsTitle))
 })
 
+/** The provider settings of the web project, as `jiraStored` and `twgStored` store them. */
+type StoredProviders = { providers: { 'jira-orca'?: { jql: string | string[] }; 'jira-twg'?: { profile: string } } }
+
+/** The panel with these stored settings and a `tasks.load` that answers from the web project's
+ *  settings as stored when it is asked, and its count of loads. */
+async function showFromStored(
+  storage: Record<string, JsonValue> & { settings: { projects: { 'github:acme/web': StoredProviders } } },
+  answer: (project: StoredProviders) => TaskList
+) {
+  let loads = 0
+  let host: MockHost | null = null
+  let view: TestPanel
+  ;({ view, host } = await showWith(
+    {
+      'tasks.load': () => {
+        loads++
+        // `host` is set once the panel has mounted, after the first load.
+        return answer(host ? (storedProject(host) as StoredProviders) : storage.settings.projects['github:acme/web'])
+      },
+      'jira.sites': SITES
+    },
+    storage
+  ))
+  return { view, loads: () => loads }
+}
+
+/** The panel with a Jira (Orca connection) project whose list is `WEB-<n>` for each stored query
+ *  `project = <n>`, a failed load for a query that names no project, and its count of loads. */
+const showJiraByQuery = (jql: string) =>
+  showFromStored(jiraStored(jql, ''), (project) => {
+    const numbers = [project.providers['jira-orca']?.jql ?? []].flat().map((query) => /^project = (\d+)$/.exec(query)?.[1])
+    if (numbers.some((number) => number === undefined)) return { kind: 'error', project: web, message: 'orca failed: Error 400: JQL no válida.' }
+    return jiraReady(numbers.map((number) => task(`WEB-${number}`, { tracker: 'jira' })))
+  })
+
+test('editing a JQL query loads nothing until Done, which lists the tasks of the queries as typed, saved or not', async () => {
+  const { view, loads } = await showJiraByQuery('project = 1')
+  assert.ok(view.find({ type: 'Link', text: 'WEB-1' }))
+  await view.press(gear)
+  await view.type(jqlField('JQL'), 'project = 2', { replace: true })
+  await wait(800)
+  assert.equal(loads(), 1)
+  // A change not saved yet when Done is pressed.
+  await view.type(jqlField('JQL'), 'project = 3', { replace: true })
+  await view.press(done)
+  assert.equal(loads(), 2)
+  assert.equal(view.find(settingsTitle), null)
+  assert.ok(view.find({ type: 'Link', text: 'WEB-3' }))
+  assert.equal(view.find({ type: 'Link', text: 'WEB-1' }), null)
+  // Done again with nothing changed since loads nothing.
+  await view.press(gear)
+  await view.press(done)
+  assert.equal(loads(), 2)
+})
+
+test("Done after a change of twg's profile, a setting of the tracker beside its JQL, reloads the list once", async () => {
+  const { view, loads } = await showFromStored(twgStored({ jql: 'project = WEB', site: '', profile: 'work' }), (project) =>
+    twgReady([twgTask(project.providers['jira-twg']?.profile === 'home' ? 'WEB-2' : 'WEB-1')])
+  )
+  assert.ok(view.find({ type: 'Link', text: 'WEB-1' }))
+  await view.press(gear)
+  await view.type({ type: 'Input', label: 'Profile' }, 'home', { replace: true })
+  assert.equal(loads(), 1)
+  await view.press(done)
+  assert.equal(loads(), 2)
+  assert.ok(view.find({ type: 'Link', text: 'WEB-2' }))
+})
+
+test("changing the tracker lists the new tracker's tasks, and Done shows them without loading them again", async () => {
+  let loads = 0
+  const { view } = await showWith(
+    { 'tasks.load': () => (++loads === 1 ? jiraReady([task('WEB-1', { tracker: 'jira' })]) : twgReady([twgTask('WEB-2')])), 'jira.sites': SITES },
+    jiraStored('project = WEB', '')
+  )
+  await view.press(gear)
+  await view.select({ type: 'Select', label: 'Tracker' }, 'jira-twg')
+  await view.press(done)
+  assert.equal(loads, 2)
+  assert.ok(view.find({ type: 'Link', text: 'WEB-2' }))
+  assert.equal(view.find({ type: 'Link', text: 'WEB-1' }), null)
+})
+
+test('Done after changing only the agent or the default template, or nothing, loads nothing', async () => {
+  let loads = 0
+  const { view } = await showWith({ 'tasks.load': () => (loads++, ready([task('#42')])) }, twoTemplates)
+  await view.press(gear)
+  await view.press(done)
+  await view.press(gear)
+  await view.select({ type: 'Select', label: 'Agent' }, 'codex')
+  await view.press(done)
+  await view.press(gear)
+  await view.select({ type: 'Select', label: 'Default template' }, 't-impl')
+  await view.press(done)
+  assert.equal(loads, 1)
+  assert.ok(view.find({ type: 'Link', text: '#42' }))
+})
+
+test('Project settings that opened by itself after a failed load lists the tasks on Done once the JQL is fixed', async () => {
+  const { view, loads } = await showJiraByQuery('project = ')
+  assert.ok(view.find(settingsTitle))
+  await view.type(jqlField('JQL'), 'project = 7', { replace: true })
+  assert.equal(loads(), 1)
+  await view.press(done)
+  assert.equal(loads(), 2)
+  assert.equal(view.find(settingsTitle), null)
+  assert.ok(view.find({ type: 'Link', text: 'WEB-7' }))
+})
+
 test('after a site list failure or no connected site, reloading the tasks asks for the sites again', async () => {
   const answers = [{ kind: 'error' as const, message: 'orca failed: Orca is not running.' }, { kind: 'ready' as const, sites: [] }, SITES]
   let asked = 0
@@ -2880,7 +2988,8 @@ test('a change of the tracker in Project settings clears the tracker search', as
   await view.submit(jqlField('JQL'))
   await view.press(done)
   assert.equal(view.find({ type: 'Text', text: /^Results in/ }), null)
-  assert.deepEqual(inputs, [{ query: undefined }, { query: 'web' }, { query: 'web' }, { query: undefined }])
+  // Done reloads the list after the first change; after Ctrl+Enter it is loaded already.
+  assert.deepEqual(inputs, [{ query: undefined }, { query: 'web' }, { query: undefined }, { query: 'web' }, { query: undefined }])
 })
 
 test('a page that arrives after a reload is dropped', async () => {

@@ -36,7 +36,7 @@ Open the **Kickoff** panel from its icon (a lightning bolt) in Orca's right side
   - **Jira (Orca connection)**: one or more JQL queries, and the site when Orca is connected to more than one (Orca's default site otherwise).
   - **Jira (twg)**: one or more JQL queries, and optionally `twg`'s site and profile.
 
-  The JQL starts as `assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC`. **+** adds a query and **−** removes one. The list shows the tasks of the first query, then those of the next that the earlier ones didn't list, each in Jira's order; a blank query is skipped. A query can span several lines, and **Ctrl+Enter** (**Cmd+Enter** on macOS) in it lists the tasks. The gear in the panel's header opens Project settings again later, and **Done** goes back to the list.
+  The JQL starts as `assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC`. **+** adds a query and **−** removes one. The list shows the tasks of the first query, then those of the next that the earlier ones didn't list, each in Jira's order; a blank query is skipped. A query can span several lines, and **Ctrl+Enter** (**Cmd+Enter** on macOS) in it lists the tasks. The gear in the panel's header opens Project settings again later, and **Done** goes back to the list, loading it again when a tracker setting changed.
 
 Each task shows as a card with its key and title, then its labels, after its status on Jira, then its assignees, if any. **Start** (the play button):
 
