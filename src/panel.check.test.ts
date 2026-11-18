@@ -57,18 +57,22 @@ test('needs-config opens Project settings with a tracker to choose', async () =>
   assert.equal(shown.valueOf({ label: 'Tracker' }), ':none')
 })
 
-test('github-ready lists the issues of a GitHub project, each with Start', async () => {
+test('github-ready lists the issues of a GitHub project, each with Start, with one assignee, several or none', async () => {
   const shown = await render('github-ready')
   assert.ok(shown.find({ type: 'Heading', text: 'web' }))
   const starts = shown.findAll({ role: 'button', label: /^Start #/ })
   assert.ok(starts.length >= 3, `${starts.length} Start buttons`)
   assert.ok(starts.every((start) => !start.disabled))
   assert.equal(shown.find({ role: 'button', text: /Load more/ }), null)
+  assert.ok(shown.find({ type: 'Text', text: 'Assignee: octocat' }))
+  assert.ok(shown.find({ type: 'Text', text: 'Assignees: octocat, hubot' }))
+  assert.equal(shown.findAll({ type: 'Text', text: /^Assignees?:/ }).length, 2)
 })
 
 test('jira-started shows started tasks with their worktree and agent, one starting, and Load more', async () => {
   const shown = await render('jira-started')
   assert.ok(shown.find({ text: 'Agent: claude' }))
+  assert.ok(shown.find({ type: 'Text', text: 'Assignee: Ana Example' }))
   assert.ok(shown.find({ label: /^Starting WEB-/ }))
   assert.ok(shown.find({ role: 'button', text: /^Showing \d+ · Load more$/ }))
   // Two templates or more give each card that can start a template Select.

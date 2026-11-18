@@ -1240,14 +1240,21 @@ function agentLine(worktree: TaskWorktree, agentStarting: boolean): string | nul
   return agentStarting ? 'Agent starting…' : null
 }
 
+/** What the card says about the task's assignees, in the tracker's order, or null when it has none. */
+function assigneeLine(task: Task): string | null {
+  if (task.assignees.length === 0) return null
+  return `${task.assignees.length === 1 ? 'Assignee' : 'Assignees'}: ${task.assignees.join(', ')}`
+}
+
 /** One row per part: the key and the whole title; the worktree, or the status and labels; the
- *  agent; the template and Start, while there is no worktree. */
+ *  assignees; the agent; the template and Start, while there is no worktree. */
 function TaskCard({ task, projectId, worktrees }: { task: Task; projectId: string; worktrees: Record<string, TaskWorktree> | null }) {
   // Every GitHub task is open, so its status says nothing.
   const status = task.tracker !== 'github' ? task.status : null
   const worktree = worktrees?.[task.key] ?? null
   const isStarting = worktree === null && read(starting)[task.key] === true
   const error = read(taskErrors)[task.key]
+  const assignees = assigneeLine(task)
   const agent = worktree ? agentLine(worktree, read(agentStarting)[task.key] === projectId) : null
   return (
     <Box border radius="md" padding="sm" direction="column" gap="sm" shrink={false}>
@@ -1265,6 +1272,11 @@ function TaskCard({ task, projectId, worktrees }: { task: Task; projectId: strin
             <Badge key={label}>{label}</Badge>
           ))}
         </Box>
+      ) : null}
+      {assignees !== null ? (
+        <Text size="sm" muted>
+          {assignees}
+        </Text>
       ) : null}
       {agent !== null ? (
         <Text size="sm" muted>

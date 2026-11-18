@@ -463,13 +463,15 @@ test('a Jira card without a worktree shows its status as an accent badge before 
   ])
 })
 
+/** A started task's worktree, running `claude`. */
+const started = { worktreeId: 'r1::/src/web-42', name: 'issue-42-add-dark-mode', agent: 'claude' }
+
 test('a card with a worktree shows its key and title, then the worktree as a truncated link, then its agent', async () => {
-  const worktree = { worktreeId: 'r1::/src/web-42', name: 'issue-42-add-dark-mode', agent: 'claude' }
   const cases = [
-    { key: '#42', list: ready([task('#42', { labels: ['ui'] })], { worktrees: { '#42': worktree } }) },
+    { key: '#42', list: ready([task('#42', { labels: ['ui'] })], { worktrees: { '#42': started } }) },
     {
       key: 'WEB-12',
-      list: ready([task('WEB-12', { tracker: 'jira', status: 'In Progress', labels: ['ui'] })], { provider: 'jira-twg', worktrees: { 'WEB-12': worktree } })
+      list: ready([task('WEB-12', { tracker: 'jira', status: 'In Progress', labels: ['ui'] })], { provider: 'jira-twg', worktrees: { 'WEB-12': started } })
     }
   ]
   for (const { key, list } of cases) {
@@ -491,12 +493,62 @@ test('a card with a worktree shows its key and title, then the worktree as a tru
   }
 })
 
-/** The card's agent line: "Agent: <id>", "Agent starting…", or null when it has none. */
-function agentShown(view: TestPanel, key: string): string | null {
-  const lines = nodesIn(cardOf(view, key), (node) => node.type === 'Text' && /^(Agent|No agent)/.test(wordsOf(node)))
+/** The words of the one line of the card of `key` that `pattern` matches, or null when it has none. */
+function lineShown(view: TestPanel, key: string, pattern: RegExp): string | null {
+  const lines = nodesIn(cardOf(view, key), (node) => node.type === 'Text' && pattern.test(wordsOf(node)))
   assert.ok(lines.length <= 1)
   return lines.length === 1 ? wordsOf(lines[0]) : null
 }
+
+/** The card's assignee line: "Assignee: <name>", "Assignees: <a>, <b>", or null when it has none. */
+const assigneeShown = (view: TestPanel, key: string) => lineShown(view, key, /^Assignees?:/)
+
+/** The card's agent line: "Agent: <id>", "Agent starting…", or null when it has none. */
+const agentShown = (view: TestPanel, key: string) => lineShown(view, key, /^(Agent|No agent)/)
+
+test('a card without a worktree shows its assignee as a small muted line after its labels, before Start', async () => {
+  const view = await show(ready([task('#42', { labels: ['ui'], assignees: ['octocat'] })]))
+  const [, meta, assignee, start, ...rest] = elementsIn(cardOf(view, '#42'))
+  assert.deepEqual(badgesIn(meta), [{ text: 'ui', tone: undefined }])
+  assert.equal(assignee.type, 'Text')
+  assertProps(assignee, { size: 'sm', muted: true })
+  assert.equal(wordsOf(assignee), 'Assignee: octocat')
+  assert.equal(nodesIn(start, (node) => node.key === 'start:#42').length, 1)
+  assert.deepEqual(rest, [])
+})
+
+test('a card with several assignees names them all, in the order the tracker gives', async () => {
+  const view = await show(ready([task('#42', { assignees: ['octocat', 'hubot', 'monalisa'] })]))
+  assert.equal(assigneeShown(view, '#42'), 'Assignees: octocat, hubot, monalisa')
+})
+
+test('a card shows its assignee on GitHub and Jira, after the status and labels or after the worktree, before the agent', async () => {
+  const github = task('#42', { assignees: ['octocat'] })
+  const jira = task('WEB-12', { tracker: 'jira', status: 'In Progress', assignees: ['Ana Example'] })
+  const cases = [
+    { key: '#42', list: ready([github]), rows: ['#42 Task #42', 'Assignee: octocat', ''] },
+    { key: 'WEB-12', list: ready([jira], { provider: 'jira-twg' }), rows: ['WEB-12 Task WEB-12', 'In Progress', 'Assignee: Ana Example', ''] },
+    { key: '#42', list: ready([github], { worktrees: { '#42': started } }), rows: ['#42 Task #42', 'issue-42-add-dark-mode', 'Assignee: octocat', 'Agent: claude'] },
+    {
+      key: 'WEB-12',
+      list: ready([jira], { provider: 'jira-twg', worktrees: { 'WEB-12': started } }),
+      rows: ['WEB-12 Task WEB-12', 'issue-42-add-dark-mode', 'Assignee: Ana Example', 'Agent: claude']
+    }
+  ]
+  for (const { key, list, rows } of cases) {
+    const view = await show(list)
+    assert.deepEqual(elementsIn(cardOf(view, key)).map(wordsOf), rows)
+    await view.unmount()
+  }
+})
+
+test('a card without assignees has no assignee line, with or without a worktree', async () => {
+  for (const list of [ready([task('#42')]), ready([task('#42')], { worktrees: { '#42': started } })]) {
+    const view = await show(list)
+    assert.equal(assigneeShown(view, '#42'), null)
+    await view.unmount()
+  }
+})
 
 test('a card whose worktree runs no agent shows no agent line', async () => {
   const view = await show(ready([task('#42')], { worktrees: { '#42': { worktreeId: 'r1::/src/web-42', name: 'issue-42-add-dark-mode', agent: null } } }))
@@ -947,8 +999,6 @@ async function showWith(requests: MockRequests, storage: Record<string, JsonValu
   const host = mockHost({ capabilities: ['storage:own', 'workspace:read'], requests, storage })
   return { view: await mount(panel, { host }), host }
 }
-
-const started = { worktreeId: 'r1::/src/web-42', name: 'issue-42-add-dark-mode', agent: 'claude' }
 
 const storedProject = (host: MockHost) => {
   const settings = host.data().storage.settings as { projects: Record<string, unknown> } | undefined
