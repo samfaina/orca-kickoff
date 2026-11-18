@@ -1,5 +1,6 @@
 import { assert, mockHost, mountWorker, test } from 'orca/testing'
 import type { JsonValue } from 'orca'
+import type { OrcaWorkerApi } from 'orca/worker'
 import { AGENT_UNREADABLE, type DefaultAgent } from './agent'
 import { CliError, cliFailureMessage, type RunCli } from './cli'
 import type { StartEnded, Task } from './protocol'
@@ -45,15 +46,32 @@ function fakeRun(answers: Record<string, Answer>, calls: Call[]): RunCli {
   }
 }
 
-type StartOptions = { storage?: Record<string, JsonValue>; defaultAgent?: DefaultAgent; now?: () => number }
+type StartOptions = {
+  storage?: Record<string, JsonValue>
+  defaultAgent?: DefaultAgent
+  now?: () => number
+  /** Makes `orca.panels.post` throw this, as a post Orca refuses would. */
+  postThrows?: Error
+}
+
+/** `orca` with a `panels.post` that throws `error`. */
+function withFailingPost(orca: OrcaWorkerApi, error: Error): OrcaWorkerApi {
+  const post = () => {
+    throw error
+  }
+  return { ...orca, panels: { ...orca.panels, post } }
+}
 
 async function start(answers: Record<string, Answer>, options: StartOptions = {}) {
-  const { storage = {}, defaultAgent = { kind: 'agent', agent: 'claude' }, now = Date.now } = options
+  const { storage = {}, defaultAgent = { kind: 'agent', agent: 'claude' }, now = Date.now, postThrows } = options
   const host = mockHost({ capabilities: ['storage:own', 'workspace:read'], storage })
   const calls: Call[] = []
   let run = fakeRun(answers, calls)
   const worker = await mountWorker(
-    { default: (orca) => activateWith(orca, { run: (...args) => run(...args), readDefaultAgent: async () => defaultAgent, now }) },
+    {
+      default: (orca) =>
+        activateWith(postThrows ? withFailingPost(orca, postThrows) : orca, { run: (...args) => run(...args), readDefaultAgent: async () => defaultAgent, now })
+    },
     { host }
   )
   return { worker, calls, answer: (next: Record<string, Answer>) => (run = fakeRun(next, calls)) }
@@ -613,6 +631,19 @@ test('a worktree Orca finished after a timeout counts as started', async () => {
   answer({ ...ORCA_OK, 'orca worktree list': worktreesWith(started42) })
   assert.deepEqual(await worker.request('task.start', startWeb42), { ok: true, underWay: false })
   assert.equal(creates(calls).length, 1)
+})
+
+test('a Start whose end Orca refuses to post still ends: starts.load no longer reports it', async () => {
+  const { create, answer } = slowCreate()
+  const { worker } = await start({ ...ORCA_OK, 'orca worktree create': answer }, { postThrows: new Error('post refused') })
+  assert.deepEqual(await worker.request('task.start', startWeb42), { ok: true, underWay: true })
+  assert.deepEqual(await worker.request('starts.load', { projectId: 'github:acme/web' }), { starting: ['#42'] })
+
+  create.finish(CREATED)
+  // A rejection nobody handles would fail the test while it waits here.
+  await until(() => worker.logs.length > 0)
+  assert.deepEqual(await worker.request('starts.load', { projectId: 'github:acme/web' }), { starting: [] })
+  assert.deepEqual(worker.logs, ["Couldn't post the end of the Start of #42: post refused"])
 })
 
 test("a failed create posts a failed end with Orca's real message", async () => {
