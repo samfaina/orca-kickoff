@@ -125,6 +125,28 @@ const jiraStarted = ready(web, 'jira-twg', jiraTasks, {
   starting: ['WEB-15']
 })
 
+/** Three JQL queries through twg: the active sprint, future sprints and the backlog. */
+const SPRINT_QUERIES = [
+  'project = WEB AND sprint in openSprints()',
+  'project = WEB AND sprint in futureSprints()',
+  'project = WEB AND sprint is EMPTY'
+]
+
+/** The first page of `SPRINT_QUERIES`, which holds every task of the three: two in the active
+ *  sprint, one in a future sprint and two in the backlog, so there is no Load more. */
+const sprintTasks = ready(
+  web,
+  'jira-twg',
+  [
+    jiraTask('WEB-21', 'Add dark mode to settings', 'In Progress', 'in_progress', ['ui']),
+    jiraTask('WEB-22', 'Retry failed payments once', 'To Do', 'todo', ['payments']),
+    jiraTask('WEB-23', 'Show the order history on the account page', 'To Do', 'todo'),
+    jiraTask('WEB-30', 'Translate the error pages', 'To Do', 'todo', ['i18n']),
+    jiraTask('WEB-31', 'Remove the old checkout banner', 'To Do', 'todo')
+  ],
+  { queryCount: SPRINT_QUERIES.length }
+)
+
 /** What the worker answers when twg has no login, when the Orca CLI can't be found, and when
  *  `orca worktree list` fails. */
 const TWG_LOGGED_OUT =
@@ -158,6 +180,9 @@ export default defineCheck({
     storage: jiraSettings('jira-twg', [DEFAULT_JQL, 'project = WEB AND labels = ui\nORDER BY rank', '']),
     requests: answers({ kind: 'error', project: web, message: SECOND_JQL_INVALID })
   },
+  // Several JQL queries through twg, whose first page holds the tasks of all three, as the
+  // provider fills a page across queries: the panel lists them all, with no Load more.
+  'jira-twg-queries': { storage: jiraSettings('jira-twg', SPRINT_QUERIES), requests: answers(sprintTasks) },
   // With no project known there are no Project settings to open, so the error shows at once.
   'orca-error': {
     requests: {

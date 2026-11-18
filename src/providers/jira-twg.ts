@@ -1,10 +1,10 @@
 // Jira through Atlassian's Teamwork Graph CLI, with `twg jira workitem query`. twg pages with an
-// opaque cursor, so a page is 50 tasks of one JQL query and the panel can ask for the next one. The
-// queries are paged one after the other, each to its end.
+// opaque cursor, so a page is up to 50 tasks and the panel can ask for the next one. The JQL
+// queries are read one after the other, each to its end, and a page fills across them.
 import { unreadableOutput, type RunCli } from '../cli'
 import { adfToText } from '../adf'
 import { isRecord, parseJson, text } from '../json'
-import type { ProviderConfigs, Task } from '../protocol'
+import { appendTasks, type ProviderConfigs, type Task } from '../protocol'
 import { jiraSearchJql, jiraTask, jqlQueryFailure, requireJql } from './jira'
 import type { Provider } from './types'
 
@@ -13,11 +13,11 @@ const FIELDS = 'summary,status,assignee,labels,description'
 
 type Config = Required<ProviderConfigs>['jira-twg']
 
-/** The `twg` arguments for one page of `jql`, after twg's cursor `after`. `--site`, `--profile`
- *  and `--after` only when not blank, so twg uses its own defaults otherwise. */
-export function jiraTwgArgs(config: Config, jql: string, after = ''): string[] {
+/** The `twg` arguments for one page of at most `limit` tasks of `jql`, after twg's cursor `after`.
+ *  `--site`, `--profile` and `--after` only when not blank, so twg uses its own defaults otherwise. */
+export function jiraTwgArgs(config: Config, jql: string, after = '', limit = LIMIT): string[] {
   const args = ['jira', 'workitem', 'query', '--jql', jql, '--fields', FIELDS]
-  args.push('--limit', String(LIMIT), '--output', 'json', '--api-version', 'v2')
+  args.push('--limit', String(limit), '--output', 'json', '--api-version', 'v2')
   const site = config.site.trim()
   const profile = config.profile.trim()
   if (site !== '') args.push('--site', site)
@@ -47,31 +47,36 @@ export const jiraTwg: Provider<Config> = {
   id: 'jira-twg',
   tracker: 'jira',
   label: 'Jira (twg)',
-  /** One twg call, unless a query answers no tasks: the load then goes on with the next query, so
-   *  "Load more" never brings a page Jira left empty while another query follows. A page holds
-   *  one query's tasks, each once; the panel's append drops those an earlier query listed, which
-   *  can leave nothing new to show. A cursor belongs to its tracker search, so the next page of
-   *  one sends the same words again. */
+  /** Up to `LIMIT` tasks, in query order: when a query ends before the page is full, the same
+   *  load goes on with the next one, asking twg only for the tasks the page still needs. The load
+   *  stops at the first query with a next page, or once the page is full, with a cursor to go on
+   *  from there; the last query's end gives none. A task several queries list is on the page once,
+   *  where it first appears, and the panel's append drops those an earlier page listed, so a page
+   *  can show fewer than `LIMIT`. A cursor belongs to its tracker search, so the next page of one
+   *  sends the same words again. */
   async list(run, _project, config, request = {}) {
     const queries = requireJql(config.jql)
     let { index, after } = decodeTwgCursor(request.cursor, queries.length)
+    let tasks: Task[] = []
     for (;;) {
       const query = queries[index]
-      const { tasks, nextCursor } = await queryPage(run, config, jiraSearchJql(query.jql, request.query), after).catch((error: unknown) => {
+      const jql = jiraSearchJql(query.jql, request.query)
+      const page = await queryPage(run, config, jql, after, LIMIT - tasks.length).catch((error: unknown) => {
         throw jqlQueryFailure(queries, query, error)
       })
-      if (nextCursor !== null) return { tasks, nextCursor: encodeTwgCursor({ index, after: nextCursor }), truncated: false }
+      tasks = appendTasks(tasks, page.tasks)
+      if (page.nextCursor !== null) return { tasks, nextCursor: encodeTwgCursor({ index, after: page.nextCursor }), truncated: false }
       if (index === queries.length - 1) return { tasks, nextCursor: null, truncated: false }
-      if (tasks.length > 0) return { tasks, nextCursor: encodeTwgCursor({ index: index + 1, after: '' }), truncated: false }
+      if (tasks.length >= LIMIT) return { tasks, nextCursor: encodeTwgCursor({ index: index + 1, after: '' }), truncated: false }
       index++
       after = ''
     }
   }
 }
 
-/** One twg page of `jql`, with twg's cursor for the next one. */
-async function queryPage(run: RunCli, config: Config, jql: string, after: string): Promise<{ tasks: Task[]; nextCursor: string | null }> {
-  const answer = parseJson(await run('twg', jiraTwgArgs(config, jql, after)))
+/** One twg page of at most `limit` tasks of `jql`, with twg's cursor for the next one. */
+async function queryPage(run: RunCli, config: Config, jql: string, after: string, limit: number): Promise<{ tasks: Task[]; nextCursor: string | null }> {
+  const answer = parseJson(await run('twg', jiraTwgArgs(config, jql, after, limit)))
   if (!isRecord(answer) || !isRecord(answer.data) || !Array.isArray(answer.data.issues)) throw unreadableOutput('twg')
   return { tasks: toTasks(answer.data.issues), nextCursor: nextCursor(answer) }
 }

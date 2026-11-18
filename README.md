@@ -53,7 +53,7 @@ Creating the worktree can take a minute. Once it exists, the card shows the work
 
 The **Search tasks** field above the list filters the loaded tasks as you type, by key, title or label. **Enter** (or **Search in GitHub** / **Search in Jira**) asks the tracker instead, for the tasks of the same list that match your words, including those not loaded yet. **Clear search** goes back to the list.
 
-GitHub lists up to 100 tasks, and Orca's Jira connection up to 100 per JQL query, and both say so when there are more. With `twg`, **Load more** reads the next page, through each query in turn.
+GitHub lists up to 100 tasks, and Orca's Jira connection up to 100 per JQL query, and both say so when there are more. With `twg`, a page holds up to 50 tasks, filled from each query in turn, and **Load more** reads the next one.
 
 ## Prompt templates
 
@@ -109,7 +109,7 @@ The type check points at most of these once the id is added to `ProviderId`. A p
 
 - **The same task can be started in two projects.** Kickoff looks for a task's worktree in the active project only, so two Orca projects that read the same tracker can each start it.
 - **A renamed worktree without an Orca link isn't found.** A worktree counts as started for a task when Orca links it to the task, or, as a fallback, when its name starts with the task's key (`web-12-…`, `issue-42-…`). A worktree that has no link and was renamed is seen by neither.
-- GitHub lists at most 100 tasks, and Orca's Jira connection at most 100 per JQL query; a tracker search with them gives at most as many results: narrow the JQL on Jira, or refine the search. Only `twg` pages, through each query in turn.
+- GitHub lists at most 100 tasks, and Orca's Jira connection at most 100 per JQL query; a tracker search with them gives at most as many results: narrow the JQL on Jira, or refine the search. Only `twg` pages, 50 tasks at a time, filled from each query in turn.
 - On Windows, Kickoff gives the tools the default `APPDATA` folder, which Orca leaves out of the worker's environment. If yours is redirected elsewhere, the tools can't find their login or Orca.
 
 ## Development

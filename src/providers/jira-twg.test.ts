@@ -36,6 +36,9 @@ const response = (issues: unknown[], pageInfo?: unknown) =>
     meta: { resourceClass: 'entity', resourceType: 'jira.workitem' }
   })
 
+/** The keys of a page's tasks, in order. */
+const keys = (page: { tasks: { key: string }[] }) => page.tasks.map((task) => task.key)
+
 const BASE_ARGS = [
   'jira',
   'workitem',
@@ -126,7 +129,7 @@ test('assignee: null gives no assignees, and a named assignee gives one', async 
 test('an item without key or URL is dropped', async () => {
   const items = [issue('WEB-1', { key: undefined }), issue('WEB-2', { url: '' }), issue('WEB-3')]
   const page = await jiraTwg.list(answering(response(items)).run, notes, config)
-  assert.deepEqual(page.tasks.map((task) => task.key), ['WEB-3'])
+  assert.deepEqual(keys(page), ['WEB-3'])
 })
 
 test('the arguments include --output json, and --site, --profile and --after only when set', async () => {
@@ -177,25 +180,43 @@ test("the panel's cursor is the query's index and twg's cursor, and anything els
 
 /** A run that answers each twg query with the output given for its JQL and `--after` cursor, as
  *  `<jql>` or `<jql> after <cursor>`; an Error makes that query fail. */
-function answeringByJql(outputs: Record<string, string | Error>): { run: RunCli; queries: string[] } {
+function answeringByJql(outputs: Record<string, string | Error>): { run: RunCli; queries: string[]; limits: number[] } {
   const queries: string[] = []
+  const limits: number[] = []
   const run: RunCli = async (_tool, args) => {
     const jql = args[args.indexOf('--jql') + 1]
     const after = args.includes('--after') ? args[args.indexOf('--after') + 1] : ''
     const query = after === '' ? jql : `${jql} after ${after}`
     queries.push(query)
+    limits.push(Number(args[args.indexOf('--limit') + 1]))
     const output = outputs[query]
     if (output === undefined) throw new Error(`unexpected query: ${query}`)
     if (output instanceof Error) throw output
     return output
   }
-  return { run, queries }
+  return { run, queries, limits }
 }
 
 const several = (...jql: string[]) => ({ jql, site: '', profile: '' })
 
-test("several queries page through the first to its end, then through the next, one twg call per load", async () => {
-  const { run, queries } = answeringByJql({
+/** `count` invented issues of project `project`, numbered from `from`. */
+const issues = (project: string, count: number, from = 1) => Array.from({ length: count }, (_, i) => issue(`${project}-${from + i}`))
+
+test('several short queries fill one page, each asked for only the tasks the page still needs', async () => {
+  const { run, queries, limits } = answeringByJql({
+    'sprint in openSprints()': response(issues('NOW', 3)),
+    'sprint in futureSprints()': response(issues('NEXT', 2), { hasNextPage: false }),
+    'sprint is EMPTY': response(issues('LATER', 5))
+  })
+  const page = await jiraTwg.list(run, notes, several('sprint in openSprints()', 'sprint in futureSprints()', 'sprint is EMPTY'))
+  assert.deepEqual(keys(page), ['NOW-1', 'NOW-2', 'NOW-3', 'NEXT-1', 'NEXT-2', 'LATER-1', 'LATER-2', 'LATER-3', 'LATER-4', 'LATER-5'])
+  assert.equal(page.nextCursor, null)
+  assert.deepEqual(queries, ['sprint in openSprints()', 'sprint in futureSprints()', 'sprint is EMPTY'])
+  assert.deepEqual(limits, [50, 47, 45])
+})
+
+test('a query with a next page stops the load with its cursor, and the next load goes on from there into the next query', async () => {
+  const { run, queries, limits } = answeringByJql({
     'project = WEB': response([issue('WEB-3'), issue('WEB-1')], { hasNextPage: true, nextCursor: 'w2' }),
     'project = WEB after w2': response([issue('WEB-2')], { hasNextPage: false }),
     'labels = ui': response([issue('API-9'), issue('API-4')], { hasNextPage: true, nextCursor: 'u2' }),
@@ -206,30 +227,57 @@ test("several queries page through the first to its end, then through the next, 
   let cursor: string | undefined
   do {
     const page = await jiraTwg.list(run, notes, config, { cursor })
-    pages.push({ keys: page.tasks.map((task) => task.key), nextCursor: page.nextCursor })
+    pages.push({ keys: keys(page), nextCursor: page.nextCursor })
     cursor = page.nextCursor ?? undefined
   } while (cursor !== undefined)
   assert.deepEqual(pages, [
     { keys: ['WEB-3', 'WEB-1'], nextCursor: '0:w2' },
-    { keys: ['WEB-2'], nextCursor: '1:' },
-    { keys: ['API-9', 'API-4'], nextCursor: '1:u2' },
+    { keys: ['WEB-2', 'API-9', 'API-4'], nextCursor: '1:u2' },
     { keys: ['API-5'], nextCursor: null }
   ])
   assert.deepEqual(queries, ['project = WEB', 'project = WEB after w2', 'labels = ui', 'labels = ui after u2'])
+  assert.deepEqual(limits, [50, 50, 49, 50])
 })
 
-test('a query with no tasks is skipped within the same load, so no load answers an empty page while another query follows', async () => {
+test('a page that fills exactly at the end of a query points at the next query, and the next load starts it', async () => {
+  const { run, queries, limits } = answeringByJql({
+    'project = WEB': response(issues('WEB', 30)),
+    'project = API': response(issues('API', 20), { hasNextPage: false }),
+    'project = OPS': response(issues('OPS', 4))
+  })
+  const config = several('project = WEB', 'project = API', 'project = OPS')
+  const first = await jiraTwg.list(run, notes, config)
+  assert.deepEqual([first.tasks.length, first.nextCursor], [50, '2:'])
+  const second = await jiraTwg.list(run, notes, config, { cursor: '2:' })
+  assert.deepEqual([keys(second), second.nextCursor], [['OPS-1', 'OPS-2', 'OPS-3', 'OPS-4'], null])
+  assert.deepEqual(queries, ['project = WEB', 'project = API', 'project = OPS'])
+  assert.deepEqual(limits, [50, 20, 50])
+})
+
+test("the last query's end gives no cursor, even on a full page", async () => {
+  const { run } = answeringByJql({ 'project = WEB': response(issues('WEB', 30)), 'project = API': response(issues('API', 20)) })
+  const page = await jiraTwg.list(run, notes, several('project = WEB', 'project = API'))
+  assert.deepEqual([page.tasks.length, page.nextCursor], [50, null])
+})
+
+test('a task that several queries list is on the page once, where it first appears', async () => {
+  const { run } = answeringByJql({
+    'project = WEB': response([issue('WEB-1'), issue('WEB-2')]),
+    'labels = ui': response([issue('WEB-2'), issue('UI-1'), issue('WEB-1')])
+  })
+  const page = await jiraTwg.list(run, notes, several('project = WEB', 'labels = ui'))
+  assert.deepEqual(keys(page), ['WEB-1', 'WEB-2', 'UI-1'])
+})
+
+test('a query with no tasks adds nothing, and the load goes on with the next one', async () => {
   const { run, queries } = answeringByJql({
     'project = WEB': response([issue('WEB-1')]),
     'project = API': response([]),
     'project = OPS': response([], { hasNextPage: false }),
     'labels = ui': response([issue('UI-1')], { hasNextPage: true, nextCursor: 'u2' })
   })
-  const config = several('project = WEB', 'project = API', '', 'project = OPS', 'labels = ui')
-  const first = await jiraTwg.list(run, notes, config)
-  assert.deepEqual([first.tasks.map((task) => task.key), first.nextCursor], [['WEB-1'], '1:'])
-  const second = await jiraTwg.list(run, notes, config, { cursor: first.nextCursor ?? undefined })
-  assert.deepEqual([second.tasks.map((task) => task.key), second.nextCursor], [['UI-1'], '3:u2'])
+  const page = await jiraTwg.list(run, notes, several('project = WEB', 'project = API', '', 'project = OPS', 'labels = ui'))
+  assert.deepEqual([keys(page), page.nextCursor], [['WEB-1', 'UI-1'], '3:u2'])
   assert.deepEqual(queries, ['project = WEB', 'project = API', 'project = OPS', 'labels = ui'])
 })
 
@@ -247,17 +295,23 @@ test('a cursor in a foreign shape starts from the first query', async () => {
   assert.deepEqual(queries, ['project = WEB'])
 })
 
-test('a tracker search narrows each query, and moves to the next one as the list does', async () => {
-  const { run, queries } = answeringByJql({
+test('a tracker search narrows each query, and fills its page across them as the list does', async () => {
+  const { run, queries, limits } = answeringByJql({
     '(project = WEB) AND (text ~ "dark*") ORDER BY rank': response([issue('WEB-2')]),
-    '(labels = ui) AND (text ~ "dark*")': response([issue('UI-1')])
+    '(labels = ui) AND (text ~ "dark*")': response([issue('UI-1')], { hasNextPage: true, nextCursor: 'u2' }),
+    '(labels = ui) AND (text ~ "dark*") after u2': response([issue('UI-2')])
   })
   const config = several('project = WEB ORDER BY rank', 'labels = ui')
   const first = await jiraTwg.list(run, notes, config, { query: 'dark' })
-  assert.equal(first.nextCursor, '1:')
-  const second = await jiraTwg.list(run, notes, config, { query: 'dark', cursor: '1:' })
-  assert.deepEqual(second.tasks.map((task) => task.key), ['UI-1'])
-  assert.deepEqual(queries, ['(project = WEB) AND (text ~ "dark*") ORDER BY rank', '(labels = ui) AND (text ~ "dark*")'])
+  assert.deepEqual([keys(first), first.nextCursor], [['WEB-2', 'UI-1'], '1:u2'])
+  const second = await jiraTwg.list(run, notes, config, { query: 'dark', cursor: '1:u2' })
+  assert.deepEqual([keys(second), second.nextCursor], [['UI-2'], null])
+  assert.deepEqual(queries, [
+    '(project = WEB) AND (text ~ "dark*") ORDER BY rank',
+    '(labels = ui) AND (text ~ "dark*")',
+    '(labels = ui) AND (text ~ "dark*") after u2'
+  ])
+  assert.deepEqual(limits, [50, 49, 50])
 })
 
 test('line breaks in a query reach twg as spaces', async () => {
@@ -266,9 +320,9 @@ test('line breaks in a query reach twg as spaces', async () => {
   assert.deepEqual(queries, ['project = WEB AND labels = ui'])
 })
 
-test('with several queries, a failing one fails the list with its position in the settings', async () => {
+test('with several queries, a failing one fails the list with its position in the settings, even after another listed tasks', async () => {
   const failure = new CliError('twg failed: The JQL is not valid.')
-  const { run } = answeringByJql({ 'project = WEB': response([]), 'project = (': failure })
+  const { run } = answeringByJql({ 'project = WEB': response([issue('WEB-1')]), 'project = (': failure })
   await assert.rejects(
     jiraTwg.list(run, notes, several('', 'project = WEB', 'project = (')),
     (error: unknown) => error instanceof CliError && error.message === 'JQL query 3 failed: twg failed: The JQL is not valid.'
