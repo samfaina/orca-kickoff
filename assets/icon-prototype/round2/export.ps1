@@ -34,8 +34,8 @@ $backgrounds = [ordered]@{
   slate          = @{ set = 'slate'; colour = '#1E293B' }
   'slate-grad'   = @{ set = 'slate'; colour = '#1E293B'; stops = @('#3B4A63', '#1A2233') }
   'slate-accent' = @{ set = 'slate'; colour = '#1E293B'; stops = @('#3B4A63', '#1A2233'); accent = '#6366F1' }
-  # Mint is too light for a white play, so I-E's triangle on the mint badge is dark slate.
-  'slate-mint'   = @{ set = 'slate'; colour = '#1E293B'; stops = @('#3B4A63', '#1A2233'); accent = '#34D399'; play = '#1A2233' }
+  # Mint is too light for a white play, so I-E's triangle on the mint badge is the gradient's lighter slate.
+  'slate-mint'   = @{ set = 'slate'; colour = '#1E293B'; stops = @('#3B4A63', '#1A2233'); accent = '#34D399'; play = '#3B4A63' }
 }
 # Glyph scale, around the tile's centre.
 $scales = [ordered]@{ '100' = 1.0; '85' = 0.85; '72' = 0.72 }
