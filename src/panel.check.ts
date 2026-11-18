@@ -180,8 +180,8 @@ export default defineCheck({
     storage: jiraSettings('jira-twg', [DEFAULT_JQL, 'project = WEB AND labels = ui\nORDER BY rank', '']),
     requests: answers({ kind: 'error', project: web, message: SECOND_JQL_INVALID })
   },
-  // Several JQL queries through twg: one page fills across them, so the first load lists the
-  // tasks of all three.
+  // Several JQL queries through twg, whose first page holds the tasks of all three, as the
+  // provider fills a page across queries: the panel lists them all, with no Load more.
   'jira-twg-queries': { storage: jiraSettings('jira-twg', SPRINT_QUERIES), requests: answers(sprintTasks) },
   // With no project known there are no Project settings to open, so the error shows at once.
   'orca-error': {

@@ -559,8 +559,9 @@ Atlassian's official CLI, `twg` 1.4.4. Docs: <https://developer.atlassian.com/cl
   - `--select <paths>`, which needs `-o json`.
   - All of them work after the subcommand.
 - **Query** **[Verified]**: `twg jira workitem query --jql <jql> --fields summary,status,assignee,labels,description --limit 50 --after <cursor> --output json --api-version v2`.
-  - `-n, --limit <limit>` is the most work items to return (an alias for `--first`), and `--after` the cursor to go on from **[Verified]** (`twg jira workitem query --help`, twg 1.4.4).
-  - Kickoff fills a page of 50 across the JQL queries, in order: when a query ends before the page is full, it runs the next one with `--limit` set to the tasks the page still needs. The panel's cursor is `<index>:<twg cursor>`, for the query (counting the non-blank ones from 0) where the next page starts (`src/providers/jira-twg.ts`).
+  - `--help` describes `-n, --limit <limit>` as the most work items to return (an alias for `--first`), and `--after` as the cursor to go on from **[Verified]** (twg 1.4.4).
+  - A `--limit` below 50 returns at most that many work items, and a cursor from a call with one `--limit` works in a call with another **[Assumed]**: Kickoff relies on both and has only run them in its tests.
+  - Kickoff fills a page of 50 across the JQL queries, in order: when a query ends before the page is full, it runs the next one with `--limit` set to the tasks the page still needs. The panel's cursor is `<index>:<twg cursor>`, for the query (counting the non-blank ones from 0) where the next page starts, or `<index>:` when it starts at the beginning of that query (`src/providers/jira-twg.ts`).
 
 Successful output **[Verified]** (no `ok` key):
 

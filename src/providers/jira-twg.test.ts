@@ -36,6 +36,9 @@ const response = (issues: unknown[], pageInfo?: unknown) =>
     meta: { resourceClass: 'entity', resourceType: 'jira.workitem' }
   })
 
+/** The keys of a page's tasks, in order. */
+const keys = (page: { tasks: { key: string }[] }) => page.tasks.map((task) => task.key)
+
 const BASE_ARGS = [
   'jira',
   'workitem',
@@ -126,7 +129,7 @@ test('assignee: null gives no assignees, and a named assignee gives one', async 
 test('an item without key or URL is dropped', async () => {
   const items = [issue('WEB-1', { key: undefined }), issue('WEB-2', { url: '' }), issue('WEB-3')]
   const page = await jiraTwg.list(answering(response(items)).run, notes, config)
-  assert.deepEqual(page.tasks.map((task) => task.key), ['WEB-3'])
+  assert.deepEqual(keys(page), ['WEB-3'])
 })
 
 test('the arguments include --output json, and --site, --profile and --after only when set', async () => {
@@ -198,8 +201,6 @@ const several = (...jql: string[]) => ({ jql, site: '', profile: '' })
 
 /** `count` invented issues of project `project`, numbered from `from`. */
 const issues = (project: string, count: number, from = 1) => Array.from({ length: count }, (_, i) => issue(`${project}-${from + i}`))
-
-const keys = (page: { tasks: { key: string }[] }) => page.tasks.map((task) => task.key)
 
 test('several short queries fill one page, each asked for only the tasks the page still needs', async () => {
   const { run, queries, limits } = answeringByJql({

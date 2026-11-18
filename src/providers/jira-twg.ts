@@ -4,8 +4,8 @@
 import { unreadableOutput, type RunCli } from '../cli'
 import { adfToText } from '../adf'
 import { isRecord, parseJson, text } from '../json'
-import type { ProviderConfigs, Task } from '../protocol'
-import { jiraSearchJql, jiraTask, jqlQueryFailure, mergeQueryTasks, requireJql } from './jira'
+import { appendTasks, type ProviderConfigs, type Task } from '../protocol'
+import { jiraSearchJql, jiraTask, jqlQueryFailure, requireJql } from './jira'
 import type { Provider } from './types'
 
 const LIMIT = 50
@@ -64,7 +64,7 @@ export const jiraTwg: Provider<Config> = {
       const page = await queryPage(run, config, jql, after, LIMIT - tasks.length).catch((error: unknown) => {
         throw jqlQueryFailure(queries, query, error)
       })
-      tasks = mergeQueryTasks([tasks, page.tasks])
+      tasks = appendTasks(tasks, page.tasks)
       if (page.nextCursor !== null) return { tasks, nextCursor: encodeTwgCursor({ index, after: page.nextCursor }), truncated: false }
       if (index === queries.length - 1) return { tasks, nextCursor: null, truncated: false }
       if (tasks.length >= LIMIT) return { tasks, nextCursor: encodeTwgCursor({ index: index + 1, after: '' }), truncated: false }

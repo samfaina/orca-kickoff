@@ -117,7 +117,7 @@ test('jira-queries shows each JQL query with its Remove button, adds and removes
   assert.deepEqual(shown.errors, [])
 })
 
-test('jira-twg-queries shows the tasks of every JQL query on the first page, with no Load more', async () => {
+test('jira-twg-queries lists a first page that holds the tasks of every JQL query, with no Load more', async () => {
   const shown = await render('jira-twg-queries')
   for (const key of ['WEB-21', 'WEB-22', 'WEB-23', 'WEB-30', 'WEB-31']) assert.ok(shown.find({ role: 'button', label: `Start ${key}` }), key)
   assert.equal(shown.find({ role: 'button', text: /Load more/ }), null)
