@@ -22,7 +22,7 @@ Issues live in GitHub Issues (`samfaina/orca-kickoff`) and are managed with `gh`
 
 ### Triage labels
 
-The five default canonical labels, plus `spec` for the issue that holds a spec. See `docs/agents/triage-labels.md`.
+The five default canonical labels, plus `spec` for the issue that holds a spec, and the rule for joining issues in the same module into one about its contract. Read `docs/agents/triage-labels.md` before you triage an issue or write a brief.
 
 ### Domain docs
 
