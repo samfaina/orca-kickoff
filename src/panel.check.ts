@@ -51,7 +51,7 @@ const ready = (project: ProjectRef, provider: ProviderId, tasks: Task[], fields:
   ...fields
 })
 
-const githubTask = (number: number, title: string, labels: string[] = []): Task => ({
+const githubTask = (number: number, title: string, labels: string[] = [], assignees: string[] = []): Task => ({
   tracker: 'github',
   key: `#${number}`,
   title,
@@ -59,13 +59,14 @@ const githubTask = (number: number, title: string, labels: string[] = []): Task 
   description: '',
   status: 'Open',
   statusCategory: 'todo',
-  assignees: [],
+  assignees,
   labels
 })
 
+/** One task with a single assignee, one with several, and the rest with none. */
 const githubTasks: Task[] = [
-  githubTask(42, 'Add dark mode to settings', ['ui', 'enhancement']),
-  githubTask(41, 'Fix the login redirect after a session expires', ['bug']),
+  githubTask(42, 'Add dark mode to settings', ['ui', 'enhancement'], ['octocat']),
+  githubTask(41, 'Fix the login redirect after a session expires', ['bug'], ['octocat', 'hubot']),
   githubTask(39, 'Document the release steps'),
   githubTask(37, 'Cache the avatar images', ['performance'])
 ]

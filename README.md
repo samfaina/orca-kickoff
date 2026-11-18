@@ -38,13 +38,13 @@ Open the **Kickoff** panel from its icon (a lightning bolt) in Orca's right side
 
   The JQL starts as `assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC`. The gear in the panel's header opens Project settings again later, and **Done** goes back to the list.
 
-Each task shows as a card with its key and title, then its labels, after its status on Jira. **Start** (the play button):
+Each task shows as a card with its key and title, then its labels, after its status on Jira, then its assignees, if any. **Start** (the play button):
 
 1. creates a worktree named after the task's key and up to four words of its title, such as `web-12-add-dark-mode` for Jira's `WEB-12` "Add dark mode", or `issue-42-add-dark-mode` for GitHub's `#42`;
 2. links it to the task in Orca, so Orca shows the task on the worktree;
 3. launches the project's agent in it, with the prompt filled from the chosen template.
 
-Creating the worktree can take a minute. Once it exists, the card shows the worktree, as a link that opens it, and the agent running in it, and the task can't be started again.
+Creating the worktree can take a minute. Once it exists, the card shows the worktree, as a link that opens it, the assignees, and the agent running in it, and the task can't be started again.
 
 **Project settings** also hold, under **Start**:
 
