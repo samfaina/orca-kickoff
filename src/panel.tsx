@@ -227,6 +227,12 @@ let generation = 0
  *  list instead: before the first poll, and after every load the poll didn't ask for. */
 let lastPolledProjectId: string | null | undefined
 
+/** Rises with each change of the tracker settings, the ones that change what the list loads. */
+let trackerSettingsVersion = 0
+/** The `trackerSettingsVersion` the list shown was loaded with. Done in Project settings loads the
+ *  list again while it is behind, so the list shows the tracker settings as they are. */
+let listedTrackerSettingsVersion = 0
+
 /** Settings changes not saved yet, for one project. */
 let pending: { projectId: string; changes: ProjectChanges } | null = null
 let saveTimer: ReturnType<typeof setTimeout> | null = null
@@ -260,8 +266,11 @@ function mergeChanges(earlier: ProjectChanges, later: ProjectChanges): ProjectCh
 function changeSettings(changes: ProjectChanges): void {
   const current = read(shownSettings)
   if (!current) return
-  // A tracker search narrows the list the tracker settings give, which this changes.
-  if (changes.provider !== undefined || changes.providers !== undefined) leaveTrackerSearch()
+  if (changes.provider !== undefined || changes.providers !== undefined) {
+    trackerSettingsVersion++
+    // A tracker search narrows the list the tracker settings give, which this changes.
+    leaveTrackerSearch()
+  }
   const providers = { ...current.providers, ...changes.providers }
   set(shownSettings, { ...current, ...changes, provider: changes.provider ?? current.provider, providers })
   const earlier = pending?.projectId === current.projectId ? pending.changes : {}
@@ -400,6 +409,14 @@ function loadKeepingSettingsOpen(): void {
   void load()
 }
 
+/** Done: goes back to the list, and loads it again when the tracker settings changed since the list
+ *  shown was loaded. Editing them loads nothing by itself, so typing a JQL query asks the tracker
+ *  nothing. A change of tracker settings already left any tracker search, so this loads the list. */
+function closeSettings(): void {
+  set(settingsChoice, 'closed')
+  if (listedTrackerSettingsVersion !== trackerSettingsVersion) void load()
+}
+
 /** Changes some of a Jira provider's settings, keeping the rest. */
 function changeJiraConfig<K extends JiraProviderId>(id: K, changes: Partial<Required<ProviderConfigs>[K]>): void {
   const current = read(shownSettings)
@@ -426,7 +443,7 @@ async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
   const shownSearch = read(trackerSearch)
   if (shownSearch !== null) return searchTracker(shownSearch.query, reason)
   const mine = startLoading()
-  const { answer, askedAt, worktreesAskedAt } = await askTasks({})
+  const { answer, askedAt, worktreesAskedAt, savedTrackerSettings } = await askTasks({})
   if (mine !== generation) return
   // A change of active project drops the template detail's draft. An answer that names no project
   // because the worker didn't answer says nothing about it.
@@ -457,6 +474,7 @@ async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
   else showStarting([], 0)
   if (answer.kind === 'ready' && answer.worktrees) agentsReported(answer.project.id, answer.worktrees)
   worktreesShownAt = worktreesAskedAt
+  if (savedTrackerSettings !== null) listedTrackerSettingsVersion = savedTrackerSettings
   set(list, answer)
   set(loading, false)
 }
@@ -505,18 +523,25 @@ function startLoading(): number {
 
 /** Saves pending settings, then asks the worker for a first page, with when the Starts under way
  *  and the worktrees were asked for. A worker that doesn't answer gives an error that names no
- *  project. */
-async function askTasks(input: { query?: string }): Promise<{ answer: TaskList; askedAt: number; worktreesAskedAt: number }> {
+ *  project. `savedTrackerSettings` is the `trackerSettingsVersion` the request asked with, or null
+ *  when the save failed. */
+async function askTasks(
+  input: { query?: string }
+): Promise<{ answer: TaskList; askedAt: number; worktreesAskedAt: number; savedTrackerSettings: number | null }> {
   let askedAt = 0
   let worktreesAskedAt = 0
+  let savedTrackerSettings: number | null = null
   try {
+    // A change made while the save is under way isn't in it.
+    const version = trackerSettingsVersion
     await flushSettings()
+    savedTrackerSettings = version
     askedAt = ++startClock
     worktreesAskedAt = ++worktreesClock
-    return { answer: await plugin.request('tasks.load', input, { timeoutMs: LOAD_TIMEOUT_MS }), askedAt, worktreesAskedAt }
+    return { answer: await plugin.request('tasks.load', input, { timeoutMs: LOAD_TIMEOUT_MS }), askedAt, worktreesAskedAt, savedTrackerSettings }
   } catch (error) {
     const message = `Kickoff's worker didn't answer (${errorCode(error)}). Reload to try again.`
-    return { answer: { kind: 'error', project: null, message }, askedAt, worktreesAskedAt }
+    return { answer: { kind: 'error', project: null, message }, askedAt, worktreesAskedAt, savedTrackerSettings }
   }
 }
 
@@ -930,7 +955,7 @@ function SettingsView({ projectName, shown }: { projectName: string; shown: Show
   return (
     <Stack gap="sm">
       <TitleRow prefix={`${projectName} ·`} title="Project settings" level={3}>
-        <Button key="settings-done" size="sm" variant="solid" onPress={() => set(settingsChoice, 'closed')}>
+        <Button key="settings-done" size="sm" variant="solid" onPress={closeSettings}>
           Done
         </Button>
       </TitleRow>
