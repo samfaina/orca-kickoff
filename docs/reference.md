@@ -28,6 +28,7 @@ Update this file when a fact is confirmed or disproved. All example data is inve
   "version": "0.1.0",
   "description": "...",
   "license": "MIT",
+  "icon": "assets/icon.png",
   "engines": { "orca": ">=1.4.255" },
   "execution": "trusted-worker",
   "pluginApi": 1,
@@ -61,6 +62,23 @@ Capabilities and the Orca version they need **[Verified]**:
 | `storage:own` | 1.4.245 |
 | `secrets:own` (system keychain) | 1.4.245 |
 | `settings:own` | 1.4.160 |
+
+### Plugin icon
+
+- `icon` (since 1.4.160) is the image Orca shows beside the plugin's name: a square, static PNG or WEBP, at least 128×128, at most 256 KB **[Verified]** (`orca skills get orca-plugin-authoring --reference manifest`, Orca 1.4.261). It is separate from a panel's `icon`, which names one of Orca's built-in icons (`zap`, `play`, `branch`, ...).
+- Orca draws it on the plugin's page in Settings → Plugins (`PluginDetailPage`, from the entry's `images.icon`) **[Verified]** by reading the renderer of Orca 1.4.261. The maintainer saw Kickoff's icon inside Orca with the plugin loaded from a development folder (issue #71).
+- Kickoff's icon is `assets/icon.png`, 512×512, exported from `assets/icon.svg`. It is a white task card with thin strokes and a mint (`#34D399`) play button, at 85% of the tile, on a rounded square with a slate gradient from `#3B4A63` at the top left to `#1A2233`. The play triangle and the ring around the button are filled with that same gradient, so they show the tile's colour at that spot. It is drawn by hand, with no image generator and no icon set. The gradient makes the PNG about 120 KB, under the 256 KB limit. It was chosen in issue #71; every variant is on the `prototype/icon` branch, the final round under `assets/icon-prototype/round2/`.
+- The fallback, if the card's lines and play button blur together at 20–32 px beside the name, is I-B in the same style: a branch forking off a trunk and ending in a mint play triangle. Its source is `assets/icon-prototype/round2/out/b-thin-slate-mint-85.svg` on `prototype/icon`, with a 512×512 PNG next to it. To switch, copy that SVG over `assets/icon.svg` and export it again as below.
+- Microsoft Edge in headless mode exports an SVG to a PNG of an exact size on Windows, with the corners outside the rounded square left transparent **[Verified]** with Edge on Windows 11 (issue #71). `--force-device-scale-factor=1` keeps Windows display scaling out of the size, `--default-background-color=00000000` makes the background transparent, and a separate `--user-data-dir` keeps an Edge window that is already open from taking the call. In PowerShell, from the repository root:
+
+  ```powershell
+  $edge = "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"
+  $svg = ([Uri](Resolve-Path assets/icon.svg).Path).AbsoluteUri
+  Start-Process $edge -Wait -ArgumentList '--headless', '--disable-gpu', '--hide-scrollbars',
+    '--force-device-scale-factor=1', "--user-data-dir=$env:TEMP\kickoff-icon-export",
+    '--window-size=512,512', '--default-background-color=00000000',
+    "--screenshot=$PWD\assets\icon.png", $svg
+  ```
 
 ### Worker API
 
