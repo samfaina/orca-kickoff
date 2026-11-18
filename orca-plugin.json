@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "kickoff",
   "name": "Kickoff",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Lists open tasks from Jira or GitHub and starts each one in its own linked worktree, with an agent and per-project prompt templates.",
   "license": "MIT",
   "icon": "assets/icon.png",
