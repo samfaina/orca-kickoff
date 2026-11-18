@@ -22,6 +22,8 @@ orca plugin install samfaina/orca-kickoff
 
 Kickoff runs a worker with your account's access, so Orca asks you to approve it: the first command fails with `approval_required` and prints the same command with `--approve <fingerprint>` to run next. Orca installs the plugin as `samfaina.kickoff`.
 
+With no version, Orca installs the newest [release](https://github.com/samfaina/orca-kickoff/releases); `samfaina/orca-kickoff@v0.1.0` installs a given one. `orca plugin update samfaina.kickoff` moves to the newest release.
+
 Kickoff looks each tool up on your `PATH`, then at its usual install folder. If one lives elsewhere, set `ORCA_CLI_COMMAND`, `GH_CLI_COMMAND` or `TWG_CLI_COMMAND` to its full path.
 
 ## Usage
