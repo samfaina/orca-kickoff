@@ -2,6 +2,7 @@ import { afterEach, assert, hostError, mockHost, mount as mountUntracked, test, 
 import type { JsonValue } from 'orca'
 import type { Task, TaskList, TaskWorktree } from './protocol'
 import * as panel from './panel'
+import { SAVE_DELAY_MS } from './settings-save'
 
 /** The views the running test mounted and hasn't unmounted. A view left mounted keeps the panel's
  *  poll, a real `setInterval`, running, and then `orca plugin test` never exits. */
@@ -1646,9 +1647,6 @@ test('a pending Project settings change survives a failed template write, and th
   assert.equal(project.agent, 'codex')
   assert.deepEqual(project.templates.map((template) => template.name), ['Implement', 'Triage', 'Review'])
 })
-
-/** How long Project settings wait after a change before they save themselves. */
-const SAVE_DELAY_MS = 600
 
 /** A host with the two templates stored and these worker answers. Each settings write calls
  *  `write` first and lands once it ends: a promise it answers holds the write, a throw fails it.
