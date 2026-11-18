@@ -34,8 +34,9 @@ $backgrounds = [ordered]@{
   slate          = @{ set = 'slate'; colour = '#1E293B' }
   'slate-grad'   = @{ set = 'slate'; colour = '#1E293B'; stops = @('#3B4A63', '#1A2233') }
   'slate-accent' = @{ set = 'slate'; colour = '#1E293B'; stops = @('#3B4A63', '#1A2233'); accent = '#6366F1' }
-  # Mint is too light for a white play, so I-E's triangle on the mint badge is the gradient's darker slate.
-  'slate-mint'   = @{ set = 'slate'; colour = '#1E293B'; stops = @('#3B4A63', '#1A2233'); accent = '#34D399'; play = '#1A2233' }
+  # Mint is too light for a white play, so I-E's triangle on the mint badge is cut out: it shows the tile's
+  # gradient at that spot.
+  'slate-mint'   = @{ set = 'slate'; colour = '#1E293B'; stops = @('#3B4A63', '#1A2233'); accent = '#34D399'; play = 'tile' }
 }
 # Glyph scale, around the tile's centre.
 $scales = [ordered]@{ '100' = 1.0; '85' = 0.85; '72' = 0.72 }
@@ -96,7 +97,7 @@ foreach ($shape in $shapes.Keys) {
         $accent = $backgrounds[$bg].accent
         # The ring in I-E takes the tile's colour, gradient included, so the cut matches. The play inside the
         # badge is cut out in the tile's colour too, or white on an accent badge.
-        $play = if ($backgrounds[$bg].play) { $backgrounds[$bg].play } elseif ($accent) { '#FFFFFF' } else { $glyphFill }
+        $play = if ($backgrounds[$bg].play -eq 'tile') { $glyphFill } elseif ($backgrounds[$bg].play) { $backgrounds[$bg].play } elseif ($accent) { '#FFFFFF' } else { $glyphFill }
         $glyph = $shapes[$shape].glyph.Replace('{line}', $w.line).Replace('{card}', $w.card).Replace('{text}', $w.text).Replace('{ring}', $w.ring).Replace('{bg}', $glyphFill).Replace('{play}', $play).Replace('{accent}', $(if ($accent) { $accent } else { '#FFFFFF' }))
         $svg = @"
 <!-- PROTOTYPE (#71), throwaway. Round 2: I-$($shape.ToUpper()), $stroke stroke, background $bg, glyph at $scale%. -->
