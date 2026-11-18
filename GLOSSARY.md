@@ -36,6 +36,10 @@ _Avoid_: State
 Narrowing the tasks already loaded in the panel to those whose task key, title or a label contains what the user typed. It never asks the tracker.
 _Avoid_: Search, local search
 
+**JQL query**:
+One of the Jira queries, in order, that make up a Jira project's list of tasks. The list shows the tasks of the first, then those of the next, each task once, where it first appears.
+_Avoid_: Filter (that is the panel's own narrowing, and in Jira a saved filter), search
+
 **Tracker search**:
 Asking the tracker for the tasks of the project's own list that match the user's words, including tasks not loaded yet. It only narrows that list: it never finds tasks outside it.
 _Avoid_: Search (alone), remote search, query
