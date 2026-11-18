@@ -1650,31 +1650,45 @@ test('a pending Project settings change survives a failed template write, and th
 /** How long Project settings wait after a change before they save themselves. */
 const SAVE_DELAY_MS = 600
 
-/** A host with the two templates stored, whose settings writes wait until `write` is released. Its
- *  log says when each write starts and ends, and when the worker is asked for the list. */
-function heldWritesHost(write: ReturnType<typeof held>) {
-  const log: string[] = []
+/** A host with the two templates stored and these worker answers. Each settings write calls
+ *  `write` first and lands once it ends: a promise it answers holds the write, a throw fails it.
+ *  `project()` gives the web project's stored settings. */
+function settingsHost(requests: MockRequests, write: () => void | Promise<void>) {
   let data: JsonValue = twoTemplates.settings
   const host = mockHost({
     capabilities: ['storage:own', 'workspace:read'],
-    requests: {
-      'tasks.load': () => {
-        log.push('tasks.load')
-        return ready([task('#42')])
-      }
-    },
+    requests,
     results: {
       'storage.get': () => ({ value: data }),
-      'storage.set': async (params: { key: string; value: JsonValue }) => {
-        log.push('write starts')
-        await write.released
-        data = params.value
-        log.push('write ends')
-        return { ok: true }
+      'storage.set': (params: { key: string; value: JsonValue }) => {
+        const land = () => {
+          data = params.value
+          return { ok: true }
+        }
+        const writing = write()
+        return writing instanceof Promise ? writing.then(land) : land()
       }
     }
   })
   const project = () => (data as { projects: Record<string, { agent?: string; defaultTemplateId?: string }> }).projects['github:acme/web']
+  return { host, project }
+}
+
+/** A host with the two templates stored, whose settings writes wait until `write` is released. Its
+ *  log says when each write starts and ends, and when the worker is asked for the list. */
+function heldWritesHost(write: ReturnType<typeof held>) {
+  const log: string[] = []
+  const requests: MockRequests = {
+    'tasks.load': () => {
+      log.push('tasks.load')
+      return ready([task('#42')])
+    }
+  }
+  const { host, project } = settingsHost(requests, async () => {
+    log.push('write starts')
+    await write.released
+    log.push('write ends')
+  })
   return { host, log, project }
 }
 
@@ -1720,6 +1734,109 @@ test('a second change saved while the first is still writing keeps both in stora
     await Promise.all([first, selecting, second])
     assert.equal(project().agent, 'codex')
     assert.equal(project().defaultTemplateId, 't-impl')
+  })
+})
+
+// `orca plugin test` fails the running test with the reason of any promise rejection that nothing
+// handles, so these tests need no watch of their own for one.
+
+/** A host with the two templates stored, whose settings writes fail while `failing()` says so. */
+const failingWritesHost = (failing: () => boolean) =>
+  settingsHost({ 'tasks.load': ready([task('#42')]) }, () => {
+    if (failing()) throw hostError('quota_exceeded', 'Storage is full')
+  })
+
+const SAVE_FAILED = "Couldn't save Project settings (quota_exceeded). Kickoff tries again with your next change."
+
+/** The danger Callout that says the timed save failed, or null. */
+function saveFailedNotice(view: TestPanel) {
+  const callout = view.find({ type: 'Callout', text: SAVE_FAILED })
+  return callout?.props.tone === 'danger' ? callout : null
+}
+
+/** Whether a settings write reached the host. */
+const wroteSettings = (host: MockHost) => host.calls.some((call) => call.method === 'storage.set')
+
+test('a failed timed save of Project settings shows a danger notice, and rejects nothing', async () => {
+  await withTimeouts(SAVE_DELAY_MS, async ({ fire }) => {
+    const { host } = failingWritesHost(() => true)
+    const view = await mount(panel, { host })
+    await view.press(gear)
+    await view.select({ type: 'Select', label: 'Agent' }, 'codex')
+    assert.equal(saveFailedNotice(view), null)
+    await fire(view)
+    assert.equal(saveFailedNotice(view)?.props.icon, 'error')
+    assert.deepEqual(view.errors, [])
+  })
+})
+
+test('after a failed timed save, the next one stores the failed change and the later one, and the notice goes away', async () => {
+  await withTimeouts(SAVE_DELAY_MS, async ({ fire }) => {
+    let failing = true
+    const { host, project } = failingWritesHost(() => failing)
+    const view = await mount(panel, { host })
+    await view.press(gear)
+    await view.select({ type: 'Select', label: 'Agent' }, 'codex')
+    await fire(view)
+    assert.ok(saveFailedNotice(view))
+    failing = false
+    await view.select({ type: 'Select', label: 'Default template' }, 't-impl')
+    assert.ok(saveFailedNotice(view))
+    await fire(view)
+    assert.equal(project().agent, 'codex')
+    assert.equal(project().defaultTemplateId, 't-impl')
+    assert.equal(saveFailedNotice(view), null)
+  })
+})
+
+test('the notice of a failed timed save shows in Project settings, then in the list after Done', async () => {
+  await withTimeouts(SAVE_DELAY_MS, async ({ fire }) => {
+    const { host } = failingWritesHost(() => true)
+    const view = await mount(panel, { host })
+    await view.press(gear)
+    await view.select({ type: 'Select', label: 'Agent' }, 'codex')
+    await fire(view)
+    assert.ok(view.find({ type: 'Heading', text: 'Project settings' }))
+    assert.ok(saveFailedNotice(view))
+    await view.press(done)
+    assert.equal(view.find({ type: 'Heading', text: 'Project settings' }), null)
+    assert.ok(view.find({ testId: 'start:#42' }))
+    assert.ok(saveFailedNotice(view))
+  })
+})
+
+test('the save before a Reload ends the notice of a failed timed save once it succeeds', async () => {
+  await withTimeouts(SAVE_DELAY_MS, async ({ fire }) => {
+    let failing = true
+    const { host, project } = failingWritesHost(() => failing)
+    const view = await mount(panel, { host })
+    await view.press(gear)
+    await view.select({ type: 'Select', label: 'Agent' }, 'codex')
+    await fire(view)
+    await view.press(done)
+    failing = false
+    await view.press({ type: 'IconButton', label: 'Reload tasks' })
+    assert.equal(project().agent, 'codex')
+    assert.equal(saveFailedNotice(view), null)
+  })
+})
+
+test('closing the panel right after a change whose save fails throws nothing, and a panel opened after it saves nothing', async () => {
+  await withTimeouts(SAVE_DELAY_MS, async ({ pending }) => {
+    const { host } = failingWritesHost(() => true)
+    const view = await mount(panel, { host })
+    await view.press(gear)
+    await view.select({ type: 'Select', label: 'Agent' }, 'codex')
+    assert.equal(pending(), 1)
+    await view.unmount()
+    // The save runs on after `unmount()` ends.
+    await until(() => wroteSettings(host), 'tried the save on close')
+    await turn()
+    assert.deepEqual(view.errors, [])
+
+    const next = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
+    await next.view.press({ type: 'IconButton', label: 'Reload tasks' })
+    assert.equal(wroteSettings(next.host), false)
   })
 })
 

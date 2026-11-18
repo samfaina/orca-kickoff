@@ -240,12 +240,29 @@ let saveTimer: ReturnType<typeof setTimeout> | null = null
 /** Every read-modify-write of the settings in storage runs through it, one at a time, so none reads
  *  them before the previous write has finished. */
 const settingsWrites = serialQueue()
+/** What the panel says after a timed save of Project settings failed, or null. */
+const settingsSaveError = atom<string | null>(null)
 
 /** Saves pending settings changes now, after every settings write asked for before. The worker
- *  reads settings from storage, so this runs before every request that depends on them. */
-function flushSettings(): Promise<void> {
+ *  reads settings from storage, so this runs before every request that depends on them. A failed
+ *  write keeps the changes pending for the next save, unless `keepOnFailure` is false. */
+function flushSettings({ keepOnFailure = true } = {}): Promise<void> {
   cancelSaveTimer()
-  return settingsWrites(savePending)
+  return settingsWrites(() => savePending(keepOnFailure))
+}
+
+/** The save a change times. A failure shows in the panel instead of rejecting, and the changes stay
+ *  pending for the next save. */
+function saveOnTimer(): void {
+  flushSettings().catch((error: unknown) => {
+    set(settingsSaveError, `Couldn't save Project settings (${errorCode(error)}). Kickoff tries again with your next change.`)
+  })
+}
+
+/** The save when the panel closes, of a change made less than `SAVE_DELAY_MS` before. A failure
+ *  drops those changes: no panel is left to show it or to save them again. */
+function saveOnUnload(): void {
+  flushSettings({ keepOnFailure: false }).catch(() => {})
 }
 
 /** Stops the timer of a pending save, for a save that runs sooner. */
@@ -254,17 +271,19 @@ function cancelSaveTimer(): void {
   saveTimer = null
 }
 
-/** Saves pending settings changes. Only through `settingsWrites`. */
-async function savePending(): Promise<void> {
+/** Saves pending settings changes, which ends the notice of a failed timed save. A failed write
+ *  puts them back in `pending`, under the changes made meanwhile, while `keepOnFailure`. Only
+ *  through `settingsWrites`. */
+async function savePending(keepOnFailure = true): Promise<void> {
   const toSave = pending
   pending = null
   if (!toSave) return
   try {
     await writeProjectChanges(toSave.projectId, () => toSave.changes)
+    set(settingsSaveError, null)
   } catch (error) {
-    // Kept for the next save, under the changes made meanwhile.
     const meanwhile = pending as typeof toSave | null
-    if (meanwhile === null || meanwhile.projectId === toSave.projectId) {
+    if (keepOnFailure && (meanwhile === null || meanwhile.projectId === toSave.projectId)) {
       pending = { projectId: toSave.projectId, changes: mergeChanges(toSave.changes, meanwhile?.changes ?? {}) }
     }
     throw error
@@ -298,7 +317,7 @@ function changeSettings(changes: ProjectChanges): void {
   const earlier = pending?.projectId === current.projectId ? pending.changes : {}
   pending = { projectId: current.projectId, changes: mergeChanges(earlier, changes) }
   cancelSaveTimer()
-  saveTimer = setTimeout(() => void flushSettings(), SAVE_DELAY_MS)
+  saveTimer = setTimeout(saveOnTimer, SAVE_DELAY_MS)
 }
 
 /** Shows the stored settings of `project`, unless they are already shown. */
@@ -875,7 +894,7 @@ export function setup(ctx: PanelContext): void {
   ctx.subscriptions.push(on('workspace.removed', refreshWorktreesLater))
   ctx.subscriptions.push({ dispose: cancelWorktreesRefresh })
   ctx.subscriptions.push(plugin.on('start.ended', onStartEnded))
-  ctx.subscriptions.push({ dispose: () => void flushSettings() })
+  ctx.subscriptions.push({ dispose: saveOnUnload })
   ctx.subscriptions.push({ dispose: cancelAgentChecks })
 
   // Orca sends no workspace.changed between two worktrees with the same branch and name, such
@@ -892,6 +911,7 @@ export function setup(ctx: PanelContext): void {
   viewStateFor = undefined
   set(fieldText, '')
   set(trackerSearch, null)
+  set(settingsSaveError, null)
   // Closing the panel drops the template detail's draft.
   ctx.subscriptions.push({ dispose: closeTemplate })
   let polling = false
@@ -936,6 +956,7 @@ export default function Panel() {
   return (
     <Box direction="column" gap="sm" height="100%">
       <Header projectName={project?.name ?? null} gear={settings !== null} />
+      <SettingsSaveError />
       {current ? <Body list={current} /> : <Spinner label="Loading tasks" />}
     </Box>
   )
@@ -982,6 +1003,7 @@ function SettingsView({ projectName, shown }: { projectName: string; shown: Show
           Done
         </Button>
       </TitleRow>
+      <SettingsSaveError />
       <Text size="sm" weight="semibold">
         Tracker
       </Text>
@@ -1171,6 +1193,17 @@ function Body({ list }: { list: TaskList }) {
     case 'ready':
       return <ReadyList list={list} />
   }
+}
+
+/** The failure of the last timed save of Project settings, until a save of them succeeds. */
+function SettingsSaveError() {
+  const message = read(settingsSaveError)
+  if (message === null) return null
+  return (
+    <Callout tone="danger" icon="error">
+      <Text>{message}</Text>
+    </Callout>
+  )
 }
 
 /** A failed load of the list or of a tracker search. */
