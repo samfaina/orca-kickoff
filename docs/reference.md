@@ -547,6 +547,15 @@ On Windows all three tools are `.exe` and on PATH **[Verified]**:
 - Logged out (no stored login, no `GH_TOKEN`): exit 4, empty stdout, and stderr starting `To get started with GitHub CLI, please run:  gh auth login`, then a line about `GH_TOKEN` **[Verified]**.
 - For GitHub Enterprise, `--repo` takes `<host>/<owner>/<repo>` **[Assumed]**; it is the documented `gh` form, but not run here.
 
+### Recent work, for triage
+
+Used by the triage rule in `docs/agents/triage-labels.md`. **[Verified]** with `gh` 2.103.3 on this repository (issue #101):
+
+- `gh issue list --state closed --search "closed:>=YYYY-MM-DD"` returns only the issues closed on or after that date.
+- `gh pr list --state merged --search "merged:>=YYYY-MM-DD" --json number,title,body,files` returns the merged PRs with `files[].path`, the files each PR changed.
+- `closingIssuesReferences` can be empty for a PR whose body ends with `Closes #<n>`: PR #103 returns `[]` and closes #100. Reading `Closes #<n>` out of `body` finds the issue.
+- Windows PowerShell 5.1 strips the double quotes inside a single-quoted argument to a native program, so a `--jq` filter with a string in it breaks: `gh` exits 1 with `unknown argument "#([0-9]+))[0]])}"`. The same command works in Git Bash.
+
 ## Teamwork Graph CLI (twg)
 
 Atlassian's official CLI, `twg` 1.4.4. Docs: <https://developer.atlassian.com/cloud/twg-cli/>. Code: <https://github.com/atlassian/twg-cli> (Apache 2.0).
