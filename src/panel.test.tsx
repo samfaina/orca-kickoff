@@ -2439,13 +2439,13 @@ test("the JQL and site save themselves as a list, keeping the other providers' s
 
 const jqlField = (label: string) => ({ type: 'Textarea', label })
 const removeQuery = (label: string) => ({ type: 'IconButton', label: `Remove ${label}` })
-const addQuery = { type: 'IconButton', label: 'Add query' }
+const addJql = { type: 'Button', text: 'Add JQL' }
 
 /** The JQL fields shown, as [label, value, rows], in order. */
 const jqlFields = (view: TestPanel) =>
   view.findAll({ type: 'Textarea', label: /^JQL/ }).map((field) => [field.label, view.valueOf(field), field.props.rows])
 
-test('each JQL query is a three-row field, "JQL" then "JQL 2"…, with Remove beside each while more than one is left and Add query below', async () => {
+test('each JQL query is a three-row field, "JQL" then "JQL 2"…, with Remove beside each while more than one is left and Add JQL below', async () => {
   const { view, host } = await showWith({ 'tasks.load': jiraReady(), 'jira.sites': SITES }, jiraStored(['project = WEB', '', 'labels = ui'], ''))
   await view.press(gear)
   assert.deepEqual(jqlFields(view), [
@@ -2454,11 +2454,17 @@ test('each JQL query is a three-row field, "JQL" then "JQL 2"…, with Remove be
     ['JQL 3', 'labels = ui', 3]
   ])
   for (const label of ['JQL', 'JQL 2', 'JQL 3']) {
-    assert.equal(view.find(removeQuery(label))?.props.tooltip, 'Remove query')
-    assert.equal(view.find(removeQuery(label))?.props.icon, 'remove')
+    // Remove is a red trash can, as the template's Delete is.
+    const remove = view.find(removeQuery(label))
+    assert.ok(remove)
+    assertProps(remove, { tooltip: 'Remove query', icon: 'delete', tone: 'danger' })
   }
-  assert.equal(view.find(addQuery)?.props.icon, 'add')
-  assert.equal(view.find(addQuery)?.props.tooltip, 'Add query')
+  // Add JQL is the "add" icon and its text, coloured as Done is.
+  const add = view.find(addJql)
+  const doneProps = view.find(done)?.props
+  assert.ok(add && doneProps)
+  assertProps(add, { icon: 'add', variant: doneProps.variant, tone: doneProps.tone, size: doneProps.size })
+  assert.equal(add.props.variant, 'solid')
   assert.ok(view.find({ type: 'Text', text: 'Ctrl+Enter (Cmd+Enter on macOS) lists the tasks.' })?.props.muted)
 
   await view.press(removeQuery('JQL 2'))
@@ -2470,7 +2476,7 @@ test('each JQL query is a three-row field, "JQL" then "JQL 2"…, with Remove be
   assert.deepEqual(jqlFields(view), [['JQL', 'labels = ui', 3]])
   assert.equal(view.find(removeQuery('JQL')), null)
 
-  await view.press(addQuery)
+  await view.press(addJql)
   await view.type(jqlField('JQL 2'), 'project = API')
   assert.deepEqual(jqlFields(view), [
     ['JQL', 'labels = ui', 3],
@@ -2481,6 +2487,28 @@ test('each JQL query is a three-row field, "JQL" then "JQL 2"…, with Remove be
     jql: ['labels = ui', 'project = API'],
     siteId: ''
   })
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.warnings, [])
+})
+
+test('each JQL label sits above its query, and Remove is centred beside the query, not the label', async () => {
+  const { view } = await showWith({ 'tasks.load': jiraReady(), 'jira.sites': SITES }, jiraStored(['project = WEB', 'labels = ui'], ''))
+  await view.press(gear)
+  const fields = nodesIn(view.tree(), (node) => node.type === 'Field')
+  assert.deepEqual(
+    fields.map((field) => field.props?.label),
+    ['JQL', 'JQL 2']
+  )
+  for (const field of fields) {
+    const [row, ...extra] = elementsIn(field)
+    assert.deepEqual(extra, [])
+    assertProps(row, { direction: 'row', align: 'center' })
+    const [query, remove] = elementsIn(row).map((box) => elementsIn(box)[0])
+    assert.equal(query?.type, 'Textarea')
+    assertProps(query, { label: field.props?.label, labelHidden: true })
+    assert.equal(remove?.type, 'IconButton')
+    assertProps(remove, { label: `Remove ${field.props?.label}` })
+  }
   assert.deepEqual(view.errors, [])
   assert.deepEqual(view.warnings, [])
 })
@@ -2501,7 +2529,7 @@ test('Ctrl+Enter in any JQL field lists the tasks with the queries as typed', as
     jiraStored('project = WEB', '')
   ))
   await view.press(gear)
-  await view.press(addQuery)
+  await view.press(addJql)
   await view.type(jqlField('JQL 2'), 'labels = ui\nAND status = Open')
   await view.submit(jqlField('JQL 2'))
   await view.submit(jqlField('JQL'))

@@ -10,6 +10,7 @@ import {
   CodeView,
   Collapsible,
   EmptyState,
+  Field,
   Heading,
   IconButton,
   Input,
@@ -991,7 +992,7 @@ function JiraOrcaSettings({ providers }: { providers: ProviderConfigs }) {
 }
 
 /** The JQL queries of a Jira provider, each with its Remove button while more than one is left,
- *  then Add query. Ctrl+Enter (Cmd+Enter on macOS) in any of them lists the tasks. */
+ *  then Add JQL. Ctrl+Enter (Cmd+Enter on macOS) in any of them lists the tasks. */
 function JqlQueries({ provider, jql }: { provider: JiraProviderId; jql: string[] }) {
   // Settings stored with no query at all still show one field to type into.
   const queries = jql.length > 0 ? jql : ['']
@@ -1000,35 +1001,42 @@ function JqlQueries({ provider, jql }: { provider: JiraProviderId; jql: string[]
     <Stack gap="sm">
       {queries.map((query, index) => {
         const label = index === 0 ? 'JQL' : `JQL ${index + 1}`
+        // The label is the Field's, above the row, so Remove centres on the query's box alone.
         return (
-          <Box key={`jql-${index}`} direction="row" align="start" gap="xs">
-            <Box grow minWidth={0}>
-              <Textarea
-                label={label}
-                rows={3}
-                value={query}
-                placeholder={index === 0 ? DEFAULT_JQL : undefined}
-                onChange={(value) => change(queries.map((other, at) => (at === index ? value : other)))}
-                onSubmit={loadKeepingSettingsOpen}
-              />
-            </Box>
-            {queries.length > 1 ? (
-              <Box shrink={false}>
-                <IconButton
-                  icon="remove"
-                  label={`Remove ${label}`}
-                  tooltip="Remove query"
-                  size="sm"
-                  variant="ghost"
-                  onPress={() => change(queries.filter((_, at) => at !== index))}
+          <Field key={`jql-${index}`} label={label}>
+            <Box direction="row" align="center" gap="xs">
+              <Box grow minWidth={0}>
+                <Textarea
+                  label={label}
+                  labelHidden
+                  rows={3}
+                  value={query}
+                  placeholder={index === 0 ? DEFAULT_JQL : undefined}
+                  onChange={(value) => change(queries.map((other, at) => (at === index ? value : other)))}
+                  onSubmit={loadKeepingSettingsOpen}
                 />
               </Box>
-            ) : null}
-          </Box>
+              {queries.length > 1 ? (
+                <Box shrink={false}>
+                  <IconButton
+                    icon="delete"
+                    label={`Remove ${label}`}
+                    tooltip="Remove query"
+                    size="sm"
+                    variant="ghost"
+                    tone="danger"
+                    onPress={() => change(queries.filter((_, at) => at !== index))}
+                  />
+                </Box>
+              ) : null}
+            </Box>
+          </Field>
         )
       })}
       <Row gap="none" align="center">
-        <IconButton icon="add" label="Add query" tooltip="Add query" size="sm" variant="ghost" onPress={() => change([...queries, ''])} />
+        <Button key="jql-add" icon="add" size="sm" variant="solid" onPress={() => change([...queries, ''])}>
+          Add JQL
+        </Button>
       </Row>
       <Text size="sm" muted>
         Ctrl+Enter (Cmd+Enter on macOS) lists the tasks.

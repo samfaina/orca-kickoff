@@ -227,6 +227,7 @@ Components **[Verified]**:
 
 - The multi-line text field is `Textarea` (catalog 2, since Orca 1.4.247), with the same `label`, `labelHidden`, `value`, `defaultValue`, `placeholder`, `maxLength`, `invalid`, `disabled` and `onChange` as `Input`, plus `rows?: number`, the visible lines, from 2 to 20. Its `onSubmit?: (value: string) => void` runs on Cmd+Enter on macOS and Ctrl+Enter elsewhere, so Enter alone adds a line **[Verified]** (generated types of Orca 1.4.263). In `orca/testing`, `TestPanel.submit` on a `Textarea` calls its `onSubmit` **[Verified]** with the panel tests. That Orca submits on those keys and not on Enter was not seen inside Orca **[Assumed]**.
 - `Field` (`label`, `description?`, `error?`, `required?`) wraps a control with help text or an error.
+- Kickoff's JQL queries put each query's label on a `Field` around a `Box direction="row" align="center"` that holds the `Textarea` (`labelHidden`, still labelled for the tests and screen readers) and its Remove button, so the button centres on the query's box rather than on box and label together (issue #87). That the `Field` label looks like a `Textarea`'s own label, and that the button draws centred on the box, was not seen inside Orca **[Assumed]**.
 - Limits per render: 5000 nodes, 16 KiB per text, 500 options per `Select`.
 
 Layout and sizing, from the generated types and `references/components.md` of `orca skills get orca-plugin-authoring`, Orca 1.4.261 **[Verified]**:
@@ -241,6 +242,7 @@ Layout and sizing, from the generated types and `references/components.md` of `o
 - `Table`: columns (`width`, `minWidth`, `hideBelow: 'sm' | 'md'` for under 360 px or 480 px, `sortable`), rows of plain cells (`string`, `number`, `boolean`, `null` or a relative time), `selectionMode`, `onRowAction` (Enter or a double click), `sort` and `onSortChange` (the plugin sorts), and `hasMore` with `onLoadMore`, called when scrolling near the last row. Rows scroll inside the table and only those in view are drawn. Cells can't hold components, so a row can't have its own button or `Select`, and there is no built-in filter.
 - `ListItem` takes `title`, `description`, `icon`, `current`, `disabled` and `onPress`; with `onPress` the whole row is the press target and can't hold other controls.
 - `IconButton` with `variant="outline"` and `tone="accent"` draws its icon and border in the text color, with no accent **[Verified]** (seen by the maintainer, Orca 1.4.261).
+- `IconButton` with `variant="ghost"` and `tone="danger"` draws its icon in red, as Kickoff's remove-query trash button does **[Verified]** (seen by the maintainer, Orca 1.4.263, issue #87).
 - There is no menu, popover, dialog or split button. Tooltips exist only as the `tooltip` prop of `Button` and `IconButton`.
 - `orca plugin shot <key> --width <px>` draws the panel at a given width, to check narrow layouts.
 - A plugin panel's tab shows only the panel's icon, with its title as a tooltip **[Verified]** (seen by the maintainer).

@@ -90,7 +90,7 @@ test('tracker-error opens Project settings on the tracker that failed', async ()
   const shown = await render('tracker-error')
   assert.ok(shown.find({ type: 'Heading', text: 'Project settings' }))
   assert.equal(shown.valueOf({ label: 'Tracker' }), 'jira-twg')
-  assert.ok(shown.find({ label: 'JQL' }))
+  assert.ok(shown.find({ type: 'Textarea', label: 'JQL' }))
 })
 
 test('jira-queries shows each JQL query with its Remove button, adds and removes queries, and Ctrl+Enter lists the tasks', async () => {
@@ -105,7 +105,7 @@ test('jira-queries shows each JQL query with its Remove button, adds and removes
   await shown.press({ type: 'IconButton', label: 'Remove JQL' })
   assert.deepEqual(labels(), ['JQL'])
   assert.deepEqual(removable(), [])
-  await shown.press({ type: 'IconButton', label: 'Add query' })
+  await shown.press({ type: 'Button', text: 'Add JQL' })
   assert.deepEqual(labels(), ['JQL', 'JQL 2'])
   assert.deepEqual(removable(), ['Remove JQL', 'Remove JQL 2'])
 
