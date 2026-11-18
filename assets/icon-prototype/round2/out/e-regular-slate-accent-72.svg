@@ -1,0 +1,13 @@
+﻿<!-- PROTOTYPE (#71), throwaway. Round 2: I-E, regular stroke, background slate-accent, glyph at 72%. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs><linearGradient id="bg" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="512" y2="512"><stop offset="0" stop-color="#3B4A63"/><stop offset="1" stop-color="#1A2233"/></linearGradient><linearGradient id="bgGlyph" gradientUnits="userSpaceOnUse" x1="-94.5555555555555" y1="-91.5555555555555" x2="616.555555555556" y2="619.555555555556"><stop offset="0" stop-color="#3B4A63"/><stop offset="1" stop-color="#1A2233"/></linearGradient></defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <g transform="translate(256 256) scale(0.72) translate(-261 -264)">
+    <rect x="86" y="92" width="256" height="310" rx="44" fill="none" stroke="#FFFFFF" stroke-width="40"/>
+    <g stroke="#FFFFFF" stroke-width="36" stroke-linecap="round">
+      <line x1="152" y1="180" x2="276" y2="180"/>
+      <line x1="152" y1="250" x2="230" y2="250"/>
+    </g>
+    <circle cx="352" cy="352" r="104" fill="#6366F1" stroke="url(#bgGlyph)" stroke-width="36" paint-order="stroke"/>
+    <polygon points="322,300 410,352 322,404" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="20" stroke-linejoin="round"/>  </g>
+</svg>

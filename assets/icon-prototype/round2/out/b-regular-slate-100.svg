@@ -1,0 +1,10 @@
+﻿<!-- PROTOTYPE (#71), throwaway. Round 2: I-B, regular stroke, background slate, glyph at 100%. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#1E293B"/>
+  <g transform="translate(256 256) scale(1) translate(-288 -256)">
+    <g fill="none" stroke="#FFFFFF" stroke-width="44" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="160" y1="110" x2="160" y2="402"/>
+      <path d="M160,372 C160,270 220,236 286,236"/>
+    </g>
+    <polygon points="300,150 420,236 300,322" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="36" stroke-linejoin="round"/>  </g>
+</svg>

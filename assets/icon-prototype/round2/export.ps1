@@ -1,4 +1,4 @@
-# PROTOTYPE (#71), throwaway. Round 2: I-B and I-E in indigo, with regular and thin strokes, the glyph at
+﻿# PROTOTYPE (#71), throwaway. Round 2: I-B and I-E in indigo, with regular and thin strokes, the glyph at
 # three sizes on three backgrounds. Writes one SVG per combination, exports each to a 512x512 PNG with Edge
 # headless, then renders one preview sheet per shape and stroke:
 #   out/preview-<shape>-<stroke>.png   (shape b or e, stroke regular or thin)
@@ -25,11 +25,15 @@ function Export-Shot([string]$url, [string]$target, [int]$width, [int]$height, [
   if ($p.ExitCode -ne 0) { throw "Edge exited with $($p.ExitCode) for $url" }
 }
 
-# Backgrounds: flat indigo, a slight diagonal gradient, and a stronger one. Light at the top left.
+# Backgrounds, in two sets that each get their own preview sheet. A gradient is diagonal, light at the top left.
+# `accent` colours the play (I-B's triangle, I-E's badge); without it the play is white.
 $backgrounds = [ordered]@{
-  flat   = $null
-  soft   = @('#5B54F0', '#443CD6')
-  strong = @('#7A70F7', '#3F35C9')
+  flat           = @{ set = 'indigo'; colour = '#4F46E5' }
+  soft           = @{ set = 'indigo'; colour = '#4F46E5'; stops = @('#5B54F0', '#443CD6') }
+  strong         = @{ set = 'indigo'; colour = '#4F46E5'; stops = @('#7A70F7', '#3F35C9') }
+  slate          = @{ set = 'slate'; colour = '#1E293B' }
+  'slate-grad'   = @{ set = 'slate'; colour = '#1E293B'; stops = @('#3B4A63', '#1A2233') }
+  'slate-accent' = @{ set = 'slate'; colour = '#1E293B'; stops = @('#3B4A63', '#1A2233'); accent = '#6366F1' }
 }
 # Glyph scale, around the tile's centre.
 $scales = [ordered]@{ '100' = 1.0; '85' = 0.85; '72' = 0.72 }
@@ -48,7 +52,7 @@ $shapes = [ordered]@{
       <line x1="160" y1="110" x2="160" y2="402"/>
       <path d="M160,372 C160,270 220,236 286,236"/>
     </g>
-    <polygon points="300,150 420,236 300,322" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="36" stroke-linejoin="round"/>
+    <polygon points="300,150 420,236 300,322" fill="{accent}" stroke="{accent}" stroke-width="36" stroke-linejoin="round"/>
 '@
   }
   e = @{
@@ -59,8 +63,8 @@ $shapes = [ordered]@{
       <line x1="152" y1="180" x2="276" y2="180"/>
       <line x1="152" y1="250" x2="230" y2="250"/>
     </g>
-    <circle cx="352" cy="352" r="104" fill="#FFFFFF" stroke="{bg}" stroke-width="{ring}" paint-order="stroke"/>
-    <polygon points="322,300 410,352 322,404" fill="{bg}" stroke="{bg}" stroke-width="20" stroke-linejoin="round"/>
+    <circle cx="352" cy="352" r="104" fill="{accent}" stroke="{bg}" stroke-width="{ring}" paint-order="stroke"/>
+    <polygon points="322,300 410,352 322,404" fill="{play}" stroke="{play}" stroke-width="20" stroke-linejoin="round"/>
 '@
   }
 }
@@ -69,7 +73,7 @@ foreach ($shape in $shapes.Keys) {
   foreach ($stroke in $strokes.Keys) {
     foreach ($bg in $backgrounds.Keys) {
       foreach ($scale in $scales.Keys) {
-        $stops = $backgrounds[$bg]
+        $stops = $backgrounds[$bg].stops
         $s = $scales[$scale]
         if ($stops) {
           # The tile's gradient runs from (0,0) to (512,512). Inside the scaled glyph group the same gradient
@@ -83,12 +87,15 @@ foreach ($shape in $shapes.Keys) {
           $glyphFill = 'url(#bgGlyph)'
         } else {
           $defs = ''
-          $fill = '#4F46E5'
+          $fill = $backgrounds[$bg].colour
           $glyphFill = $fill
         }
         $w = $strokes[$stroke]
-        # The ring and the play triangle in I-E take the tile's colour, gradient included, so the cut matches.
-        $glyph = $shapes[$shape].glyph.Replace('{line}', $w.line).Replace('{card}', $w.card).Replace('{text}', $w.text).Replace('{ring}', $w.ring).Replace('{bg}', $glyphFill)
+        $accent = $backgrounds[$bg].accent
+        # The ring in I-E takes the tile's colour, gradient included, so the cut matches. The play inside the
+        # badge is cut out in the tile's colour too, or white on an accent badge.
+        $play = if ($accent) { '#FFFFFF' } else { $glyphFill }
+        $glyph = $shapes[$shape].glyph.Replace('{line}', $w.line).Replace('{card}', $w.card).Replace('{text}', $w.text).Replace('{ring}', $w.ring).Replace('{bg}', $glyphFill).Replace('{play}', $play).Replace('{accent}', $(if ($accent) { $accent } else { '#FFFFFF' }))
         $svg = @"
 <!-- PROTOTYPE (#71), throwaway. Round 2: I-$($shape.ToUpper()), $stroke stroke, background $bg, glyph at $scale%. -->
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
@@ -109,7 +116,8 @@ $glyph  </g>
 $preview = ([Uri](Join-Path $dir 'preview.html')).AbsoluteUri
 foreach ($shape in $shapes.Keys) {
   foreach ($stroke in $strokes.Keys) {
-    Export-Shot "$preview`?shape=$shape&stroke=$stroke" (Join-Path $out "preview-$shape-$stroke.png") 820 1440 'FFFFFFFF'
+    Export-Shot "$preview`?shape=$shape&stroke=$stroke&set=indigo" (Join-Path $out "preview-$shape-$stroke.png") 860 1440 'FFFFFFFF'
+    Export-Shot "$preview`?shape=$shape&stroke=$stroke&set=slate" (Join-Path $out "preview-$shape-$stroke-slate.png") 860 1440 'FFFFFFFF'
   }
 }
 
