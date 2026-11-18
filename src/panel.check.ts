@@ -175,7 +175,7 @@ export default defineCheck({
     requests: answers({ kind: 'error', project: web, message: TWG_LOGGED_OUT })
   },
   // Several JQL queries, the second one invalid: Project settings opens by itself on them, each
-  // with its Remove button, and Add query below.
+  // with its Remove button, and Add JQL below.
   'jira-queries': {
     storage: jiraSettings('jira-twg', [DEFAULT_JQL, 'project = WEB AND labels = ui\nORDER BY rank', '']),
     requests: answers({ kind: 'error', project: web, message: SECOND_JQL_INVALID })
