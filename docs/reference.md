@@ -273,15 +273,18 @@ Icons seen: `rocket`, `play`, `refresh`, `branch`, `close`, `check`.
   - `TestPanel` has `find`, `findAll`, `press`, `type`, `toggle`, `select`, `emit`, `post`, `errors`, `refusals`, `persisted` and more.
   - `TestPanel.tree()` gives the drawn tree as plain `TreeSnapshot` data (`type`, `key`, `props`, `children`), handlers as `[handler]`. The panel tests read a card's rows and the scroll layout from it, since `find` gives only the innermost match **[Verified]** with Orca 1.4.261.
   - `TestWorker` has `request`, `emit`, `hooks.fire`, `logs`, `posts` and `deactivate`.
-- On Windows, `orca plugin test` and `orca plugin check` fail when the plugin folder is on a different drive from Orca's install (for example the plugin on `I:` and Orca under `C:\Users\...`). Every test file fails with `orca-testing.mjs: cannot import "./orca-runtime.mjs": no such file in the plugin`, and `check` reports the same error as a panel issue while still exiting 0. The scaffolded `worker-panel` template fails the same way on `I:` and passes on `C:`. A directory junction on `C:` does not help, because Orca resolves the real path. Workaround: copy `orca-plugin.json`, `tsconfig.json`, `src/` and `.orca/` to a folder on Orca's drive and run the commands there. In PowerShell, from the repository root, with `%TEMP%` on Orca's drive:
+- On Windows, `orca plugin test` and `orca plugin check` fail when the plugin folder is on a different drive from Orca's install (for example the plugin on `I:` and Orca under `C:\Users\...`). Every test file fails with `orca-testing.mjs: cannot import "./orca-runtime.mjs": no such file in the plugin`, and `check` reports the same error as a panel issue while still exiting 0. The scaffolded `worker-panel` template fails the same way on `I:` and passes on `C:`. A directory junction on `C:` does not help, because Orca resolves the real path. Workaround: copy `orca-plugin.json`, `tsconfig.json`, `src/`, `assets/` and `.orca/` to a folder on Orca's drive and run the commands there. In PowerShell, from the repository root, with `%TEMP%` on Orca's drive:
 
   ```powershell
   $d = "$env:TEMP\kickoff-check"
   robocopy . $d orca-plugin.json tsconfig.json /NJH /NJS /NFL /NDL
   robocopy src "$d\src" /MIR /NJH /NJS /NFL /NDL
+  robocopy assets "$d\assets" /MIR /NJH /NJS /NFL /NDL
   robocopy .orca "$d\.orca" /MIR /NJH /NJS /NFL /NDL
   Push-Location $d; orca plugin test .; orca plugin check .; Pop-Location
   ```
+
+  The copy needs every file `orca-plugin.json` names. Outside `src/` that is today only `assets/`, which holds the `icon` and `cover.path`; a new manifest path outside these folders needs its own line here. Without `assets/`, `orca plugin check .` in the copy exits 2 with `icon assets/icon.png: ENOENT: no such file or directory`; with it, `check` and `test` both exit 0 **[Verified]** with Orca 1.4.263 (issue #79).
 
   `orca plugin validate` is not affected **[Verified]** with Orca 1.4.255, and `orca plugin test` still fails the same way with Orca 1.4.259 (issue #31). `orca plugin shot --scenario` fails the same way, with "could not read src/panel.check.ts: … cannot import "./orca-runtime.mjs"", and works from the copy **[Verified]** with Orca 1.4.261 (issue #47). The cause is in `orca-test-hooks.mjs`: it treats a file as part of the plugin when `path.relative(root, file)` doesn't start with `..`, and across drives that call answers an absolute path, so Orca's own `orca-testing.mjs` goes through the plugin's import rules **[Verified]** by reading `orca-test-hooks.mjs` of Orca 1.4.259.
 - A panel mounted with `mount` uses the test's own timer globals: a test that replaces `globalThis.setInterval` and `clearInterval` before `mount` receives the panel's intervals and can fire them by hand. `setVisible(false)` makes `read(ctx.visible)` false, and `unmount()` disposes `ctx.subscriptions` **[Verified]**. `orca/testing` has no fake clock **[Verified]** (its generated types).
