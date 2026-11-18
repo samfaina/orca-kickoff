@@ -1,0 +1,28 @@
+<!-- Kickoff's plugin icon: a task card with a mint play button, "start this task", on a slate gradient.
+     Source of assets/icon.png (see docs/reference.md, Plugin icon). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <!-- The tile's gradient, light at the top left. -->
+    <linearGradient id="tile" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="512" y2="512">
+      <stop offset="0" stop-color="#3B4A63"/>
+      <stop offset="1" stop-color="#1A2233"/>
+    </linearGradient>
+    <!-- The same gradient in the glyph group's coordinates, so the ring and the play cut out of the badge
+         show the tile's colour at that spot: the tile's corners mapped through the group's transform. -->
+    <linearGradient id="tileInGlyph" gradientUnits="userSpaceOnUse" x1="-40.18" y1="-37.18" x2="562.18" y2="565.18">
+      <stop offset="0" stop-color="#3B4A63"/>
+      <stop offset="1" stop-color="#1A2233"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#tile)"/>
+  <!-- The glyph at 85%, centred on the tile. -->
+  <g transform="translate(256 256) scale(0.85) translate(-261 -264)">
+    <rect x="86" y="92" width="256" height="310" rx="44" fill="none" stroke="#FFFFFF" stroke-width="28"/>
+    <g stroke="#FFFFFF" stroke-width="26" stroke-linecap="round">
+      <line x1="152" y1="180" x2="276" y2="180"/>
+      <line x1="152" y1="250" x2="230" y2="250"/>
+    </g>
+    <circle cx="352" cy="352" r="104" fill="#34D399" stroke="url(#tileInGlyph)" stroke-width="28" paint-order="stroke"/>
+    <polygon points="322,300 410,352 322,404" fill="url(#tileInGlyph)" stroke="url(#tileInGlyph)" stroke-width="20" stroke-linejoin="round"/>
+  </g>
+</svg>
