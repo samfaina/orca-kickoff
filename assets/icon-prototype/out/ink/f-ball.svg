@@ -1,0 +1,11 @@
+﻿<!-- PROTOTYPE (#71), throwaway. I-F, a new idea: the kickoff itself, a ball flying off with speed lines. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#18181B"/>
+  <g stroke="#FFFFFF" stroke-width="36" stroke-linecap="round">
+    <line x1="72" y1="196" x2="150" y2="196"/>
+    <line x1="56" y1="270" x2="160" y2="270"/>
+    <line x1="88" y1="344" x2="150" y2="344"/>
+  </g>
+  <circle cx="318" cy="270" r="124" fill="#FFFFFF"/>
+  <polygon points="318,226 360,256 344,306 292,306 276,256" fill="#18181B" stroke="#18181B" stroke-width="12" stroke-linejoin="round"/>
+</svg>

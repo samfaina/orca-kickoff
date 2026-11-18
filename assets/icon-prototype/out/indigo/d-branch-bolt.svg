@@ -1,0 +1,12 @@
+﻿<!-- PROTOTYPE (#71), throwaway. I-D, I-B's branch ending in I-A's bolt. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#4F46E5"/>
+  <g fill="none" stroke="#FFFFFF" stroke-width="44" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="140" y1="110" x2="140" y2="402"/>
+    <path d="M140,372 C140,300 190,268 250,262"/>
+  </g>
+  <g transform="translate(336 236) scale(0.64) translate(-256 -256)">
+    <polygon points="282,72 118,292 244,292 226,440 394,212 268,212"
+             fill="#FFFFFF" stroke="#FFFFFF" stroke-width="40" stroke-linejoin="round"/>
+  </g>
+</svg>

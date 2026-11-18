@@ -1,0 +1,6 @@
+﻿<!-- PROTOTYPE (#71), throwaway. I-A, the bolt: a lightning bolt on a rounded square, to match the panel's `zap` tab icon. Drawn by hand, not copied from an icon set. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#EA580C"/>
+  <polygon points="282,72 118,292 244,292 226,440 394,212 268,212"
+           fill="#FFFFFF" stroke="#FFFFFF" stroke-width="28" stroke-linejoin="round"/>
+</svg>

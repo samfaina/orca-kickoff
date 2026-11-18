@@ -1,0 +1,12 @@
+﻿<!-- PROTOTYPE (#71), throwaway. I-E, I-C's task card with a play button instead of a check: "start this task". -->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#FF006D"/>
+  <rect x="86" y="92" width="256" height="310" rx="44" fill="none" stroke="#FFFFFF" stroke-width="40"/>
+  <g stroke="#FFFFFF" stroke-width="36" stroke-linecap="round">
+    <line x1="152" y1="180" x2="276" y2="180"/>
+    <line x1="152" y1="250" x2="230" y2="250"/>
+  </g>
+  <!-- the play badge, with a tile-coloured ring that cuts the card's corner -->
+  <circle cx="352" cy="352" r="104" fill="#FFFFFF" stroke="#FF006D" stroke-width="36" paint-order="stroke"/>
+  <polygon points="322,300 410,352 322,404" fill="#FF006D" stroke="#FF006D" stroke-width="20" stroke-linejoin="round"/>
+</svg>

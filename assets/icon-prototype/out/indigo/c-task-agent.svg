@@ -1,0 +1,11 @@
+﻿<!-- PROTOTYPE (#71), throwaway. I-C, task to agent: a checked task card with a bolt breaking out of its corner. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#4F46E5"/>
+  <rect x="86" y="150" width="250" height="270" rx="44" fill="none" stroke="#FFFFFF" stroke-width="40"/>
+  <polyline points="150,290 196,336 276,250" fill="none" stroke="#FFFFFF" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- the bolt, with a tile-coloured outline that cuts the card's corner -->
+  <polygon points="356,56 258,192 334,192 322,290 428,148 352,148"
+           fill="#FFFFFF" stroke="#4F46E5" stroke-width="60" stroke-linejoin="round" paint-order="stroke"/>
+  <polygon points="356,56 258,192 334,192 322,290 428,148 352,148"
+           fill="#FFFFFF" stroke="#FFFFFF" stroke-width="16" stroke-linejoin="round"/>
+</svg>

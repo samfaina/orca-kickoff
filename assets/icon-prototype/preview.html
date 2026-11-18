@@ -1,0 +1,59 @@
+﻿<!doctype html>
+<!-- PROTOTYPE (#71), throwaway. Shows the exported 512 px PNGs scaled down by the browser, as Orca would show them.
+     ?colour=orange|indigo|green|ink|pink|violet : every variant in that colour at 128 and 32 px, on light and dark.
+     ?colour=all                     : every variant in every colour at 64 and 32 px. Run export.ps1 first. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Kickoff icon variants</title>
+<style>
+  body { margin: 0; font: 14px/1.4 "Segoe UI", system-ui, sans-serif; background: #fff; color: #111; }
+  table { border-collapse: collapse; margin: 8px 16px; }
+  th { font-weight: 600; text-align: left; padding: 8px 12px; white-space: nowrap; }
+  td { padding: 12px; vertical-align: middle; }
+  .light { background: #f5f5f5; color: #111; }
+  .dark { background: #1e1e1e; color: #eee; }
+  .row { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+  .pair { display: flex; align-items: center; gap: 12px; }
+  img { display: block; }
+</style>
+</head>
+<body>
+<table><thead id="head"></thead><tbody id="rows"></tbody></table>
+<script>
+  const variants = [
+    ['a-bolt', 'I-A, bolt'],
+    ['b-worktree', 'I-B, worktree'],
+    ['c-task-agent', 'I-C, task to agent'],
+    ['d-branch-bolt', 'I-D, branch to bolt'],
+    ['e-card-play', 'I-E, card with play'],
+    ['f-ball', 'I-F, kickoff ball'],
+    ['g-monogram', 'I-G, K monogram'],
+  ];
+  const colours = ['orange', 'indigo', 'green', 'ink', 'pink', 'violet'];
+  const colour = new URLSearchParams(location.search).get('colour') ?? 'orange';
+  const head = document.getElementById('head');
+  const rows = document.getElementById('rows');
+
+  if (colour === 'all') {
+    head.innerHTML = '<tr><th>Variant</th>' + colours.map(c =>
+      `<th class="light">${c}, light</th><th class="dark">${c}, dark</th>`).join('') + '</tr>';
+    rows.innerHTML = variants.map(([file, label]) => `<tr><th>${label}</th>` + colours.map(c => {
+      const src = `out/${c}/${file}.png`;
+      return ['light', 'dark'].map(theme =>
+        `<td class="${theme}"><div class="pair"><img src="${src}" width="64" height="64"><img src="${src}" width="32" height="32"></div></td>`).join('');
+    }).join('') + '</tr>').join('');
+  } else {
+    head.innerHTML = `<tr><th>${colour}</th>` + ['light', 'dark'].map(theme =>
+      `<th class="${theme}">128</th><th class="${theme}">32</th><th class="${theme}">Beside the name</th>`).join('') + '</tr>';
+    rows.innerHTML = variants.map(([file, label]) => {
+      const src = `out/${colour}/${file}.png`;
+      return `<tr><th>${label}</th>` + ['light', 'dark'].map(theme => `
+        <td class="${theme}"><img src="${src}" width="128" height="128"></td>
+        <td class="${theme}"><img src="${src}" width="32" height="32"></td>
+        <td class="${theme}"><div class="row"><img src="${src}" width="20" height="20">Kickoff</div></td>`).join('') + '</tr>';
+    }).join('');
+  }
+</script>
+</body>
+</html>
