@@ -1,6 +1,7 @@
 <!doctype html>
-<!-- PROTOTYPE (#71), throwaway. Round 2: I-B in indigo, the glyph at 100, 85 and 72% on a flat, a soft-gradient and
-     a strong-gradient background, at 128, 32 and 20 px beside the name, on light and dark. Run export.ps1 first. -->
+<!-- PROTOTYPE (#71), throwaway. Round 2: one shape and stroke (?shape=b|e&stroke=regular|thin), the glyph at 100, 85
+     and 72% on a flat, a soft-gradient and a strong-gradient background, at 128, 32 and 20 px beside the name, on
+     light and dark. Run export.ps1 first. -->
 <html>
 <head>
 <meta charset="utf-8">
@@ -19,12 +20,15 @@
 <body>
 <table><thead id="head"></thead><tbody id="rows"></tbody></table>
 <script>
+  const params = new URLSearchParams(location.search);
+  const shape = params.get('shape') ?? 'b';
+  const stroke = params.get('stroke') ?? 'regular';
   const backgrounds = ['flat', 'soft', 'strong'];
   const scales = ['100', '85', '72'];
-  document.getElementById('head').innerHTML = '<tr><th></th>' + ['light', 'dark'].map(theme =>
+  document.getElementById('head').innerHTML = `<tr><th>I-${shape.toUpperCase()}, ${stroke}</th>` + ['light', 'dark'].map(theme =>
     `<th class="${theme}">128</th><th class="${theme}">32</th><th class="${theme}">Beside the name</th>`).join('') + '</tr>';
   document.getElementById('rows').innerHTML = backgrounds.flatMap(bg => scales.map(scale => {
-    const src = `out/b-${bg}-${scale}.png`;
+    const src = `out/${shape}-${stroke}-${bg}-${scale}.png`;
     return `<tr><th>${bg}, ${scale}%</th>` + ['light', 'dark'].map(theme => `
       <td class="${theme}"><img src="${src}" width="128" height="128"></td>
       <td class="${theme}"><img src="${src}" width="32" height="32"></td>
