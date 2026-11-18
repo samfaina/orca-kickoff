@@ -207,7 +207,7 @@ let viewStateFor: string | null | undefined
 type TrackerSearch =
   | { query: string; kind: 'loading' }
   | { query: string; kind: 'error'; message: string }
-  | ({ query: string; kind: 'ready' } & TaskPage)
+  | ({ query: string; kind: 'ready'; queryCount: number } & TaskPage)
 
 /** The tracker search shown, or null while the loaded list is. */
 const trackerSearch = atom<TrackerSearch | null>(null)
@@ -488,7 +488,7 @@ async function searchTracker(query: string, reason: 'poll' | 'other' = 'other'):
   if (answer.worktrees) agentsReported(answer.project.id, answer.worktrees)
   worktreesShownAt = worktreesAskedAt
   set(list, { ...current, worktrees: answer.worktrees, worktreesError: answer.worktreesError, warning: answer.warning })
-  set(trackerSearch, { query, kind: 'ready', tasks: answer.tasks, nextCursor: answer.nextCursor, truncated: answer.truncated })
+  set(trackerSearch, { query, kind: 'ready', tasks: answer.tasks, nextCursor: answer.nextCursor, truncated: answer.truncated, queryCount: answer.queryCount })
   set(loading, false)
 }
 
@@ -547,8 +547,9 @@ function changeField(value: string): void {
 /** Asks for the next page of the list, or of the tracker search shown, and appends its tasks,
  *  skipping keys already listed. A page that arrives after a reload or after the tracker search changed
  *  is dropped; one for another project means the project changed, so the list is loaded again.
- *  Pending settings are not saved first: the cursor belongs to the query that listed the first
- *  page, and a tracker search sends its words again with it. */
+ *  Pending settings are not saved first: the cursor belongs to the list, or the tracker search,
+ *  that listed the first page, with the JQL queries saved then, and a tracker search sends its
+ *  words again with it. */
 async function loadMore(): Promise<void> {
   const current = read(list)
   const found = read(trackerSearch)
@@ -967,7 +968,7 @@ function JiraOrcaSettings({ providers }: { providers: ProviderConfigs }) {
   }
   return (
     <Stack gap="sm">
-      <JqlInput provider="jira-orca" jql={config.jql} />
+      <JqlQueries provider="jira-orca" jql={config.jql} />
       <Select
         label="Site"
         value={config.siteId || DEFAULT_SITE}
@@ -989,16 +990,50 @@ function JiraOrcaSettings({ providers }: { providers: ProviderConfigs }) {
   )
 }
 
-/** The JQL of a Jira provider. Enter lists the tasks with it. */
-function JqlInput({ provider, jql }: { provider: JiraProviderId; jql: string }) {
+/** The JQL queries of a Jira provider, each with its Remove button while more than one is left,
+ *  then Add query. Ctrl+Enter (Cmd+Enter on macOS) in any of them lists the tasks. */
+function JqlQueries({ provider, jql }: { provider: JiraProviderId; jql: string[] }) {
+  // Settings stored with no query at all still show one field to type into.
+  const queries = jql.length > 0 ? jql : ['']
+  const change = (next: string[]) => changeJiraConfig(provider, { jql: next })
   return (
-    <Input
-      label="JQL"
-      value={jql}
-      placeholder={DEFAULT_JQL}
-      onChange={(value) => changeJiraConfig(provider, { jql: value })}
-      onSubmit={loadKeepingSettingsOpen}
-    />
+    <Stack gap="sm">
+      {queries.map((query, index) => {
+        const label = index === 0 ? 'JQL' : `JQL ${index + 1}`
+        return (
+          <Box key={`jql-${index}`} direction="row" align="start" gap="xs">
+            <Box grow minWidth={0}>
+              <Textarea
+                label={label}
+                rows={3}
+                value={query}
+                placeholder={index === 0 ? DEFAULT_JQL : undefined}
+                onChange={(value) => change(queries.map((other, at) => (at === index ? value : other)))}
+                onSubmit={loadKeepingSettingsOpen}
+              />
+            </Box>
+            {queries.length > 1 ? (
+              <Box shrink={false}>
+                <IconButton
+                  icon="remove"
+                  label={`Remove ${label}`}
+                  tooltip="Remove query"
+                  size="sm"
+                  variant="ghost"
+                  onPress={() => change(queries.filter((_, at) => at !== index))}
+                />
+              </Box>
+            ) : null}
+          </Box>
+        )
+      })}
+      <Row gap="none" align="center">
+        <IconButton icon="add" label="Add query" tooltip="Add query" size="sm" variant="ghost" onPress={() => change([...queries, ''])} />
+      </Row>
+      <Text size="sm" muted>
+        Ctrl+Enter (Cmd+Enter on macOS) lists the tasks.
+      </Text>
+    </Stack>
   )
 }
 
@@ -1006,7 +1041,7 @@ function JiraTwgSettings({ providers }: { providers: ProviderConfigs }) {
   const config = providerConfig({ providers }, 'jira-twg')
   return (
     <Stack gap="sm">
-      <JqlInput provider="jira-twg" jql={config.jql} />
+      <JqlQueries provider="jira-twg" jql={config.jql} />
       <Input
         label="Site"
         value={config.site}
@@ -1179,11 +1214,17 @@ function LoadedTasks({ list, filter }: { list: ReadyTaskList; filter: string }) 
       {list.nextCursor !== null ? <LoadMore count={list.tasks.length} /> : null}
       {list.truncated ? (
         <Text size="sm" muted>
-          {list.provider === 'github' ? "Showing the first 100 of your repository's issues." : 'Showing the first 100 tasks — narrow your JQL.'}
+          {truncationNotice(list)}
         </Text>
       ) : null}
     </>
   )
+}
+
+/** What a truncated list says: a Jira list from several JQL queries has the first 100 tasks of each. */
+function truncationNotice(list: ReadyTaskList): string {
+  if (list.provider === 'github') return "Showing the first 100 of your repository's issues."
+  return list.queryCount > 1 ? 'Showing the first 100 tasks of each query — narrow your JQL.' : 'Showing the first 100 tasks — narrow your JQL.'
 }
 
 /** A tracker search's results, unfiltered: a result may match on its description, which the
@@ -1208,7 +1249,7 @@ function SearchResults({ found, list, tracker }: { found: TrackerSearch; list: R
           {found.nextCursor !== null ? <LoadMore count={found.tasks.length} /> : null}
           {found.truncated ? (
             <Text size="sm" muted>
-              Showing the first 100 results — refine your search
+              {found.queryCount > 1 ? 'Showing the first 100 results of each query — refine your search' : 'Showing the first 100 results — refine your search'}
             </Text>
           ) : null}
         </>

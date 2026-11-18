@@ -33,10 +33,10 @@ Open the **Kickoff** panel from its icon (a lightning bolt) in Orca's right side
 - **A project with a GitHub repository** lists its open issues with no setup.
 - **Any other project** opens **Project settings** by itself. Choose a tracker:
   - **GitHub**, for a project whose repository Orca knows.
-  - **Jira (Orca connection)**: a JQL query, and the site when Orca is connected to more than one (Orca's default site otherwise).
-  - **Jira (twg)**: a JQL query, and optionally `twg`'s site and profile.
+  - **Jira (Orca connection)**: one or more JQL queries, and the site when Orca is connected to more than one (Orca's default site otherwise).
+  - **Jira (twg)**: one or more JQL queries, and optionally `twg`'s site and profile.
 
-  The JQL starts as `assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC`. The gear in the panel's header opens Project settings again later, and **Done** goes back to the list.
+  The JQL starts as `assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC`. **+** adds a query and **−** removes one. The list shows the tasks of the first query, then those of the next that the earlier ones didn't list, each in Jira's order; a blank query is skipped. A query can span several lines, and **Ctrl+Enter** (**Cmd+Enter** on macOS) in it lists the tasks. The gear in the panel's header opens Project settings again later, and **Done** goes back to the list.
 
 Each task shows as a card with its key and title, then its labels, after its status on Jira, then its assignees, if any. **Start** (the play button):
 
@@ -53,7 +53,7 @@ Creating the worktree can take a minute. Once it exists, the card shows the work
 
 The **Search tasks** field above the list filters the loaded tasks as you type, by key, title or label. **Enter** (or **Search in GitHub** / **Search in Jira**) asks the tracker instead, for the tasks of the same list that match your words, including those not loaded yet. **Clear search** goes back to the list.
 
-GitHub and Orca's Jira connection list up to 100 tasks, and say so when there are more. With `twg`, **Load more** reads the next page.
+GitHub lists up to 100 tasks, and Orca's Jira connection up to 100 per JQL query, and both say so when there are more. With `twg`, **Load more** reads the next page, through each query in turn.
 
 ## Prompt templates
 
@@ -109,7 +109,7 @@ The type check points at most of these once the id is added to `ProviderId`. A p
 
 - **The same task can be started in two projects.** Kickoff looks for a task's worktree in the active project only, so two Orca projects that read the same tracker can each start it.
 - **A renamed worktree without an Orca link isn't found.** A worktree counts as started for a task when Orca links it to the task, or, as a fallback, when its name starts with the task's key (`web-12-…`, `issue-42-…`). A worktree that has no link and was renamed is seen by neither.
-- GitHub and Orca's Jira connection list at most 100 tasks, and a tracker search with them at most 100 results: narrow the JQL on Jira, or refine the search. Only `twg` pages.
+- GitHub lists at most 100 tasks, and Orca's Jira connection at most 100 per JQL query; a tracker search with them gives at most as many results: narrow the JQL on Jira, or refine the search. Only `twg` pages, through each query in turn.
 - On Windows, Kickoff gives the tools the default `APPDATA` folder, which Orca leaves out of the worker's environment. If yours is redirected elsewhere, the tools can't find their login or Orca.
 
 ## Development

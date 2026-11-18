@@ -225,6 +225,7 @@ Components **[Verified]**:
     onChange?: (value: string) => void; onSubmit?: (value: string) => void }
   ```
 
+- The multi-line text field is `Textarea` (catalog 2, since Orca 1.4.247), with the same `label`, `labelHidden`, `value`, `defaultValue`, `placeholder`, `maxLength`, `invalid`, `disabled` and `onChange` as `Input`, plus `rows?: number`, the visible lines, from 2 to 20. Its `onSubmit?: (value: string) => void` runs on Cmd+Enter on macOS and Ctrl+Enter elsewhere, so Enter alone adds a line **[Verified]** (generated types of Orca 1.4.263). In `orca/testing`, `TestPanel.submit` on a `Textarea` calls its `onSubmit` **[Verified]** with the panel tests. That Orca submits on those keys and not on Enter was not seen inside Orca **[Assumed]**.
 - `Field` (`label`, `description?`, `error?`, `required?`) wraps a control with help text or an error.
 - Limits per render: 5000 nodes, 16 KiB per text, 500 options per `Select`.
 

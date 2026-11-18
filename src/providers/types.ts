@@ -6,7 +6,8 @@ import type { ProjectRef, ProviderId, Task, TrackerId } from '../protocol'
 export type TaskPage = { tasks: Task[]; nextCursor: string | null; truncated: boolean }
 
 /** Which page to list. `query` makes it a tracker search: the user's plain words, never tracker
- *  syntax. A cursor belongs to the query that listed the page before it. */
+ *  syntax. A cursor belongs to the list, or the tracker search with the same words, that listed
+ *  the page before it. */
 export type PageRequest = { cursor?: string; query?: string }
 
 export interface Provider<Config> {

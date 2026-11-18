@@ -93,6 +93,30 @@ test('tracker-error opens Project settings on the tracker that failed', async ()
   assert.ok(shown.find({ label: 'JQL' }))
 })
 
+test('jira-queries shows each JQL query with its Remove button, adds and removes queries, and Ctrl+Enter lists the tasks', async () => {
+  const shown = await render('jira-queries')
+  const labels = () => shown.findAll({ type: 'Textarea', label: /^JQL/ }).map((field) => field.label)
+  const removable = () => shown.findAll({ type: 'IconButton', label: /^Remove JQL/ }).map((button) => button.label)
+  assert.deepEqual(labels(), ['JQL', 'JQL 2', 'JQL 3'])
+  assert.deepEqual(removable(), ['Remove JQL', 'Remove JQL 2', 'Remove JQL 3'])
+  assert.equal(shown.valueOf({ type: 'Textarea', label: 'JQL 2' }), 'project = WEB AND labels = ui\nORDER BY rank')
+
+  await shown.press({ type: 'IconButton', label: 'Remove JQL 3' })
+  await shown.press({ type: 'IconButton', label: 'Remove JQL' })
+  assert.deepEqual(labels(), ['JQL'])
+  assert.deepEqual(removable(), [])
+  await shown.press({ type: 'IconButton', label: 'Add query' })
+  assert.deepEqual(labels(), ['JQL', 'JQL 2'])
+  assert.deepEqual(removable(), ['Remove JQL', 'Remove JQL 2'])
+
+  const loads = () => shown.host.calls.filter((call) => JSON.stringify(call.params ?? null).includes('tasks.load')).length
+  const before = loads()
+  await shown.submit({ type: 'Textarea', label: 'JQL 2' })
+  assert.equal(loads(), before + 1)
+  assert.ok(shown.find({ type: 'Heading', text: 'Project settings' }))
+  assert.deepEqual(shown.errors, [])
+})
+
 test('orca-error shows the message of an Orca CLI that fails before any project is known', async () => {
   const shown = await render('orca-error')
   assert.ok(shown.find({ text: /^Couldn't load tasks/ }))
