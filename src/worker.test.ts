@@ -54,24 +54,23 @@ type StartOptions = {
   postThrows?: Error
 }
 
+/** `orca` with a `panels.post` that throws `error`. */
+function withFailingPost(orca: OrcaWorkerApi, error: Error): OrcaWorkerApi {
+  const post = () => {
+    throw error
+  }
+  return { ...orca, panels: { ...orca.panels, post } }
+}
+
 async function start(answers: Record<string, Answer>, options: StartOptions = {}) {
   const { storage = {}, defaultAgent = { kind: 'agent', agent: 'claude' }, now = Date.now, postThrows } = options
   const host = mockHost({ capabilities: ['storage:own', 'workspace:read'], storage })
   const calls: Call[] = []
   let run = fakeRun(answers, calls)
-  const failingPost = (orca: OrcaWorkerApi): OrcaWorkerApi => ({
-    ...orca,
-    panels: {
-      ...orca.panels,
-      post: () => {
-        throw postThrows
-      }
-    }
-  })
   const worker = await mountWorker(
     {
       default: (orca) =>
-        activateWith(postThrows ? failingPost(orca) : orca, { run: (...args) => run(...args), readDefaultAgent: async () => defaultAgent, now })
+        activateWith(postThrows ? withFailingPost(orca, postThrows) : orca, { run: (...args) => run(...args), readDefaultAgent: async () => defaultAgent, now })
     },
     { host }
   )
