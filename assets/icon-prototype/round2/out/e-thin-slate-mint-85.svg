@@ -9,5 +9,5 @@
       <line x1="152" y1="250" x2="230" y2="250"/>
     </g>
     <circle cx="352" cy="352" r="104" fill="#34D399" stroke="url(#bgGlyph)" stroke-width="28" paint-order="stroke"/>
-    <polygon points="322,300 410,352 322,404" fill="#3B4A63" stroke="#3B4A63" stroke-width="20" stroke-linejoin="round"/>  </g>
+    <polygon points="322,300 410,352 322,404" fill="#1A2233" stroke="#1A2233" stroke-width="20" stroke-linejoin="round"/>  </g>
 </svg>
