@@ -23,7 +23,7 @@
   const params = new URLSearchParams(location.search);
   const shape = params.get('shape') ?? 'b';
   const stroke = params.get('stroke') ?? 'regular';
-  const backgrounds = params.get('set') === 'slate' ? ['slate', 'slate-grad', 'slate-accent'] : ['flat', 'soft', 'strong'];
+  const backgrounds = params.get('set') === 'slate' ? ['slate', 'slate-grad', 'slate-accent', 'slate-mint'] : ['flat', 'soft', 'strong'];
   const scales = ['100', '85', '72'];
   document.getElementById('head').innerHTML = `<tr><th>I-${shape.toUpperCase()}, ${stroke}</th>` + ['light', 'dark'].map(theme =>
     `<th class="${theme}">128</th><th class="${theme}">32</th><th class="${theme}">Beside the name</th>`).join('') + '</tr>';

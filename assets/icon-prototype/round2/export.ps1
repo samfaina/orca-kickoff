@@ -34,6 +34,8 @@ $backgrounds = [ordered]@{
   slate          = @{ set = 'slate'; colour = '#1E293B' }
   'slate-grad'   = @{ set = 'slate'; colour = '#1E293B'; stops = @('#3B4A63', '#1A2233') }
   'slate-accent' = @{ set = 'slate'; colour = '#1E293B'; stops = @('#3B4A63', '#1A2233'); accent = '#6366F1' }
+  # Mint is too light for a white play, so I-E's triangle on the mint badge is dark slate.
+  'slate-mint'   = @{ set = 'slate'; colour = '#1E293B'; stops = @('#3B4A63', '#1A2233'); accent = '#34D399'; play = '#1A2233' }
 }
 # Glyph scale, around the tile's centre.
 $scales = [ordered]@{ '100' = 1.0; '85' = 0.85; '72' = 0.72 }
@@ -94,7 +96,7 @@ foreach ($shape in $shapes.Keys) {
         $accent = $backgrounds[$bg].accent
         # The ring in I-E takes the tile's colour, gradient included, so the cut matches. The play inside the
         # badge is cut out in the tile's colour too, or white on an accent badge.
-        $play = if ($accent) { '#FFFFFF' } else { $glyphFill }
+        $play = if ($backgrounds[$bg].play) { $backgrounds[$bg].play } elseif ($accent) { '#FFFFFF' } else { $glyphFill }
         $glyph = $shapes[$shape].glyph.Replace('{line}', $w.line).Replace('{card}', $w.card).Replace('{text}', $w.text).Replace('{ring}', $w.ring).Replace('{bg}', $glyphFill).Replace('{play}', $play).Replace('{accent}', $(if ($accent) { $accent } else { '#FFFFFF' }))
         $svg = @"
 <!-- PROTOTYPE (#71), throwaway. Round 2: I-$($shape.ToUpper()), $stroke stroke, background $bg, glyph at $scale%. -->
@@ -117,7 +119,7 @@ $preview = ([Uri](Join-Path $dir 'preview.html')).AbsoluteUri
 foreach ($shape in $shapes.Keys) {
   foreach ($stroke in $strokes.Keys) {
     Export-Shot "$preview`?shape=$shape&stroke=$stroke&set=indigo" (Join-Path $out "preview-$shape-$stroke.png") 860 1440 'FFFFFFFF'
-    Export-Shot "$preview`?shape=$shape&stroke=$stroke&set=slate" (Join-Path $out "preview-$shape-$stroke-slate.png") 860 1440 'FFFFFFFF'
+    Export-Shot "$preview`?shape=$shape&stroke=$stroke&set=slate" (Join-Path $out "preview-$shape-$stroke-slate.png") 860 1880 'FFFFFFFF'
   }
 }
 
