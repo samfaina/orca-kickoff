@@ -24,6 +24,10 @@ _Avoid_: Issue, work item, ticket (except inside a single provider, where the tr
 The identifier a tracker gives a task and users recognise: `#42` in GitHub, `WEB-12` in Jira.
 _Avoid_: Task id, number
 
+**Assignee**:
+A person the tracker says a task is assigned to, by the name the tracker shows for them: the login on GitHub, the display name on Jira. A GitHub task can have several; a Jira task has at most one. A task can have none.
+_Avoid_: Owner, responsible
+
 **Status category**:
 The tracker-independent stage of a task: to do, in progress or done. Unlike the status name, it does not change with the tracker's language or workflow.
 _Avoid_: State
