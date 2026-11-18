@@ -37,7 +37,6 @@ import {
   appendTasks,
   chooseProvider,
   DEFAULT_JQL,
-  jqlQueries,
   projectProvider,
   projectSettings,
   providerConfig,
@@ -208,7 +207,7 @@ let viewStateFor: string | null | undefined
 type TrackerSearch =
   | { query: string; kind: 'loading' }
   | { query: string; kind: 'error'; message: string }
-  | ({ query: string; kind: 'ready' } & TaskPage)
+  | ({ query: string; kind: 'ready'; queryCount: number } & TaskPage)
 
 /** The tracker search shown, or null while the loaded list is. */
 const trackerSearch = atom<TrackerSearch | null>(null)
@@ -489,7 +488,7 @@ async function searchTracker(query: string, reason: 'poll' | 'other' = 'other'):
   if (answer.worktrees) agentsReported(answer.project.id, answer.worktrees)
   worktreesShownAt = worktreesAskedAt
   set(list, { ...current, worktrees: answer.worktrees, worktreesError: answer.worktreesError, warning: answer.warning })
-  set(trackerSearch, { query, kind: 'ready', tasks: answer.tasks, nextCursor: answer.nextCursor, truncated: answer.truncated })
+  set(trackerSearch, { query, kind: 'ready', tasks: answer.tasks, nextCursor: answer.nextCursor, truncated: answer.truncated, queryCount: answer.queryCount })
   set(loading, false)
 }
 
@@ -548,8 +547,9 @@ function changeField(value: string): void {
 /** Asks for the next page of the list, or of the tracker search shown, and appends its tasks,
  *  skipping keys already listed. A page that arrives after a reload or after the tracker search changed
  *  is dropped; one for another project means the project changed, so the list is loaded again.
- *  Pending settings are not saved first: the cursor belongs to the query that listed the first
- *  page, and a tracker search sends its words again with it. */
+ *  Pending settings are not saved first: the cursor belongs to the list, or the tracker search,
+ *  that listed the first page, with the JQL queries saved then, and a tracker search sends its
+ *  words again with it. */
 async function loadMore(): Promise<void> {
   const current = read(list)
   const found = read(trackerSearch)
@@ -1221,13 +1221,10 @@ function LoadedTasks({ list, filter }: { list: ReadyTaskList; filter: string }) 
   )
 }
 
-/** What a truncated list says: a Jira list that runs several JQL queries has the first 100 tasks
- *  of each, counted from the project's settings as shown. */
+/** What a truncated list says: a Jira list from several JQL queries has the first 100 tasks of each. */
 function truncationNotice(list: ReadyTaskList): string {
   if (list.provider === 'github') return "Showing the first 100 of your repository's issues."
-  const shown = read(shownSettings)
-  const queries = shown?.projectId === list.project.id ? jqlQueries(providerConfig({ providers: shown.providers }, list.provider).jql).length : 1
-  return queries > 1 ? 'Showing the first 100 tasks of each query — narrow your JQL.' : 'Showing the first 100 tasks — narrow your JQL.'
+  return list.queryCount > 1 ? 'Showing the first 100 tasks of each query — narrow your JQL.' : 'Showing the first 100 tasks — narrow your JQL.'
 }
 
 /** A tracker search's results, unfiltered: a result may match on its description, which the
@@ -1252,7 +1249,7 @@ function SearchResults({ found, list, tracker }: { found: TrackerSearch; list: R
           {found.nextCursor !== null ? <LoadMore count={found.tasks.length} /> : null}
           {found.truncated ? (
             <Text size="sm" muted>
-              Showing the first 100 results — refine your search
+              {found.queryCount > 1 ? 'Showing the first 100 results of each query — refine your search' : 'Showing the first 100 results — refine your search'}
             </Text>
           ) : null}
         </>

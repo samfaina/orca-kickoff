@@ -44,6 +44,7 @@ const ready = (project: ProjectRef, provider: ProviderId, tasks: Task[], fields:
   tasks,
   nextCursor: null,
   truncated: false,
+  queryCount: 1,
   worktrees: {},
   worktreesError: null,
   starting: [],

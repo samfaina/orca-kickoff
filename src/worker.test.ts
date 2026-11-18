@@ -110,6 +110,7 @@ test('a project with a GitHub repo lists its open issues with no configuration',
     ],
     nextCursor: null,
     truncated: false,
+    queryCount: 1,
     worktrees: {},
     worktreesError: null,
     starting: [],
@@ -308,6 +309,20 @@ test("a project on Jira (Orca connection) lists the JQL's tasks, with task workt
   })
   const search = calls.find((call) => call.args[0] === 'jira')
   assert.deepEqual(search?.args, ['jira', 'search', 'project = WEB', '--limit', '100', '--json', '--site', 'site-2'])
+})
+
+test('a Jira list says how many JQL queries listed it: the non-blank ones', async () => {
+  const settings = {
+    version: 1,
+    projects: { 'github:acme/web': { provider: 'jira-orca', providers: { 'jira-orca': { jql: ['project = WEB', ' ', 'labels = ui'], siteId: '' } } } }
+  }
+  const { worker } = await start({ ...ORCA_OK, 'orca jira search': JIRA_SEARCH }, { storage: { settings } })
+  const list = await worker.request('tasks.load', {})
+  assert.ok(list.kind === 'ready')
+  assert.equal(list.queryCount, 2)
+  const found = await worker.request('tasks.load', { query: 'dark' })
+  assert.ok(found.kind === 'ready')
+  assert.equal(found.queryCount, 2)
 })
 
 test('an invalid second JQL query fails the whole list, saying which one', async () => {

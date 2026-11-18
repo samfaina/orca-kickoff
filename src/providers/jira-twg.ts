@@ -5,7 +5,7 @@ import { unreadableOutput, type RunCli } from '../cli'
 import { adfToText } from '../adf'
 import { isRecord, parseJson, text } from '../json'
 import type { ProviderConfigs, Task } from '../protocol'
-import { jiraSearchJql, jiraTask, jqlQueryFailure, mergeQueryTasks, requireJql } from './jira'
+import { jiraSearchJql, jiraTask, jqlQueryFailure, requireJql } from './jira'
 import type { Provider } from './types'
 
 const LIMIT = 50
@@ -31,7 +31,7 @@ export function jiraTwgArgs(config: Config, jql: string, after = ''): string[] {
 export type TwgPosition = { index: number; after: string }
 
 /** The cursor the panel gets for a position, `<index>:<twg cursor>`. It stays opaque to the panel. */
-export function encodeTwgCursor(index: number, after: string): string {
+export function encodeTwgCursor({ index, after }: TwgPosition): string {
   return `${index}:${after}`
 }
 
@@ -48,20 +48,21 @@ export const jiraTwg: Provider<Config> = {
   tracker: 'jira',
   label: 'Jira (twg)',
   /** One twg call, unless a query answers no tasks: the load then goes on with the next query, so
-   *  "Load more" never brings an empty page. A cursor belongs to its tracker search, so the next
-   *  page of one sends the same words again. */
+   *  "Load more" never brings a page Jira left empty while another query follows. A page holds
+   *  one query's tasks, each once; the panel's append drops those an earlier query listed, which
+   *  can leave nothing new to show. A cursor belongs to its tracker search, so the next page of
+   *  one sends the same words again. */
   async list(run, _project, config, request = {}) {
     const queries = requireJql(config.jql)
     let { index, after } = decodeTwgCursor(request.cursor, queries.length)
     for (;;) {
       const query = queries[index]
-      const page = await queryPage(run, config, jiraSearchJql(query.jql, request.query), after).catch((error: unknown) => {
+      const { tasks, nextCursor } = await queryPage(run, config, jiraSearchJql(query.jql, request.query), after).catch((error: unknown) => {
         throw jqlQueryFailure(queries, query, error)
       })
-      const tasks = mergeQueryTasks([page.tasks])
-      if (page.nextCursor !== null) return { tasks, nextCursor: encodeTwgCursor(index, page.nextCursor), truncated: false }
+      if (nextCursor !== null) return { tasks, nextCursor: encodeTwgCursor({ index, after: nextCursor }), truncated: false }
       if (index === queries.length - 1) return { tasks, nextCursor: null, truncated: false }
-      if (tasks.length > 0) return { tasks, nextCursor: encodeTwgCursor(index + 1, ''), truncated: false }
+      if (tasks.length > 0) return { tasks, nextCursor: encodeTwgCursor({ index: index + 1, after: '' }), truncated: false }
       index++
       after = ''
     }

@@ -36,7 +36,7 @@ Open the **Kickoff** panel from its icon (a lightning bolt) in Orca's right side
   - **Jira (Orca connection)**: one or more JQL queries, and the site when Orca is connected to more than one (Orca's default site otherwise).
   - **Jira (twg)**: one or more JQL queries, and optionally `twg`'s site and profile.
 
-  The JQL starts as `assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC`. **+** adds a query and **−** removes one. The list shows the tasks of the first query, then those of the next that the earlier ones didn't list, each in Jira's order; empty queries are skipped. A query can span several lines, and **Ctrl+Enter** (**Cmd+Enter** on macOS) in it lists the tasks. The gear in the panel's header opens Project settings again later, and **Done** goes back to the list.
+  The JQL starts as `assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC`. **+** adds a query and **−** removes one. The list shows the tasks of the first query, then those of the next that the earlier ones didn't list, each in Jira's order; a blank query is skipped. A query can span several lines, and **Ctrl+Enter** (**Cmd+Enter** on macOS) in it lists the tasks. The gear in the panel's header opens Project settings again later, and **Done** goes back to the list.
 
 Each task shows as a card with its key and title, then its labels, after its status on Jira, then its assignees, if any. **Start** (the play button):
 
@@ -53,7 +53,7 @@ Creating the worktree can take a minute. Once it exists, the card shows the work
 
 The **Search tasks** field above the list filters the loaded tasks as you type, by key, title or label. **Enter** (or **Search in GitHub** / **Search in Jira**) asks the tracker instead, for the tasks of the same list that match your words, including those not loaded yet. **Clear search** goes back to the list.
 
-GitHub and Orca's Jira connection list up to 100 tasks, and say so when there are more. With `twg`, **Load more** reads the next page.
+GitHub lists up to 100 tasks, and Orca's Jira connection up to 100 per JQL query, and both say so when there are more. With `twg`, **Load more** reads the next page, through each query in turn.
 
 ## Prompt templates
 

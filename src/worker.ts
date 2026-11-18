@@ -25,6 +25,7 @@ import {
 import {
   projectProvider,
   projectSettings,
+  queryCount,
   readSettings,
   SETTINGS_KEY,
   trackerOf,
@@ -117,6 +118,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
         project,
         provider: providerId,
         ...page,
+        queryCount: queryCount(settings, providerId),
         worktrees: state ? findTaskWorktrees(trackerOf(providerId), project.id, state.worktrees, state.statuses) : null,
         worktreesError: state ? null : active.orcaError,
         starting: startsUnderWay(project.id),

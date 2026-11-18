@@ -52,6 +52,7 @@ const ready = (tasks: Task[], fields: Partial<Extract<TaskList, { kind: 'ready' 
   tasks,
   nextCursor: null,
   truncated: false,
+  queryCount: 1,
   worktrees: {},
   worktreesError: null,
   starting: [],
@@ -2511,14 +2512,25 @@ test('Ctrl+Enter in any JQL field lists the tasks with the queries as typed', as
   assert.ok(view.find(settingsTitle))
 })
 
-test('a truncated Jira list with several queries says the first 100 of each are shown', async () => {
-  const truncated = { 'tasks.load': ready([task('WEB-1', { tracker: 'jira' })], { provider: 'jira-orca', truncated: true }), 'jira.sites': SITES }
-  const several = await showWith(truncated, jiraStored(['project = WEB', 'labels = ui'], ''))
+test('a truncated Jira list from several queries says the first 100 of each are shown, whatever the settings say since', async () => {
+  const truncated = (queryCount: number) => ({
+    'tasks.load': ready([task('WEB-1', { tracker: 'jira' })], { provider: 'jira-orca', truncated: true, queryCount }),
+    'jira.sites': SITES
+  })
+  const several = await showWith(truncated(2), jiraStored(['project = WEB'], ''))
   assert.ok(several.view.find({ type: 'Text', text: 'Showing the first 100 tasks of each query — narrow your JQL.' }))
   await several.view.unmount()
 
-  const oneLeft = await showWith(truncated, jiraStored(['project = WEB', ' '], ''))
-  assert.ok(oneLeft.view.find({ type: 'Text', text: 'Showing the first 100 tasks — narrow your JQL.' }))
+  const one = await showWith(truncated(1), jiraStored(['project = WEB', 'labels = ui'], ''))
+  assert.ok(one.view.find({ type: 'Text', text: 'Showing the first 100 tasks — narrow your JQL.' }))
+})
+
+test('100 tracker search results from several queries say the first 100 of each are shown', async () => {
+  const list = ready([task('WEB-1', { tracker: 'jira' })], { provider: 'jira-orca', queryCount: 2 })
+  const { view } = await showSearching(list, () => ready([task('WEB-90', { tracker: 'jira' })], { provider: 'jira-orca', truncated: true, queryCount: 2 }))
+  await view.type(searchField, 'dark')
+  await view.submit(searchField)
+  assert.ok(view.find({ type: 'Text', text: 'Showing the first 100 results of each query — refine your search' }))
 })
 
 test("a stored site that isn't connected any more stays selectable, and a site list failure is shown", async () => {

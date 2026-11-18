@@ -123,22 +123,22 @@ function readProviderConfigs(raw: unknown): ProviderConfigs {
   const configs: ProviderConfigs = {}
   if (!isRecord(raw)) return configs
   if (isRecord(raw.github)) configs.github = {}
-  const orca = raw['jira-orca']
-  const orcaJql = isRecord(orca) ? readJql(orca.jql) : null
-  if (isRecord(orca) && orcaJql && strings(orca, 'siteId')) configs['jira-orca'] = { jql: orcaJql, siteId: orca.siteId }
-  const twg = raw['jira-twg']
-  const twgJql = isRecord(twg) ? readJql(twg.jql) : null
-  if (isRecord(twg) && twgJql && strings(twg, 'site', 'profile')) {
-    configs['jira-twg'] = { jql: twgJql, site: twg.site, profile: twg.profile }
+  const orca = readJiraConfig(raw['jira-orca'])
+  if (orca && strings(orca.stored, 'siteId')) configs['jira-orca'] = { jql: orca.jql, siteId: orca.stored.siteId }
+  const twg = readJiraConfig(raw['jira-twg'])
+  if (twg && strings(twg.stored, 'site', 'profile')) {
+    configs['jira-twg'] = { jql: twg.jql, site: twg.stored.site, profile: twg.stored.profile }
   }
   return configs
 }
 
-/** A Jira provider's stored JQL queries, or null when they are of an unexpected shape. Before a
- *  project could have several, it stored one string, which is read as a list of one. */
-function readJql(raw: unknown): string[] | null {
-  if (typeof raw === 'string') return [raw]
-  if (Array.isArray(raw) && raw.every((jql) => typeof jql === 'string')) return [...raw]
+/** A Jira provider's stored configuration with its JQL queries read, or null when it isn't a
+ *  record or its JQL is of an unexpected shape. Before a project could have several queries, it
+ *  stored one string, which is read as a list of one. */
+function readJiraConfig(raw: unknown): { stored: Record<string, unknown>; jql: string[] } | null {
+  if (!isRecord(raw)) return null
+  if (typeof raw.jql === 'string') return { stored: raw, jql: [raw.jql] }
+  if (Array.isArray(raw.jql) && raw.jql.every((jql) => typeof jql === 'string')) return { stored: raw, jql: [...raw.jql] }
   return null
 }
 
@@ -184,6 +184,12 @@ export function jqlQueries(jql: readonly string[]): JqlQuery[] {
     const normalized = query.replace(/\r\n|\r|\n/g, ' ').trim()
     return normalized === '' ? [] : [{ jql: normalized, position: index + 1 }]
   })
+}
+
+/** How many queries a provider runs to list the project's tasks: its non-blank JQL queries on
+ *  Jira, one on GitHub. */
+export function queryCount(settings: ProjectSettings, id: ProviderId): number {
+  return id === 'github' ? 1 : jqlQueries(providerConfig(settings, id).jql).length
 }
 
 /** Chooses a provider, keeping every provider's configuration and filling in the chosen one's
@@ -232,6 +238,9 @@ export type TaskList =
       tasks: Task[]
       nextCursor: string | null
       truncated: boolean
+      /** How many queries listed the tasks: the non-blank JQL queries on Jira, 1 on GitHub. A
+       *  truncated list's notice says whether it has the first 100 of each. */
+      queryCount: number
       /** null when Orca's worktrees couldn't be read. */
       worktrees: Record<string, TaskWorktree> | null
       worktreesError: string | null

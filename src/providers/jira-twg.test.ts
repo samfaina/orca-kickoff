@@ -165,8 +165,8 @@ test("a blank JQL doesn't run a tracker search either", async () => {
 })
 
 test("the panel's cursor is the query's index and twg's cursor, and anything else starts from the first query", () => {
-  assert.equal(encodeTwgCursor(0, 'cursor-2'), '0:cursor-2')
-  assert.equal(encodeTwgCursor(2, ''), '2:')
+  assert.equal(encodeTwgCursor({ index: 0, after: 'cursor-2' }), '0:cursor-2')
+  assert.equal(encodeTwgCursor({ index: 2, after: '' }), '2:')
   assert.deepEqual(decodeTwgCursor('1:abc:def==', 3), { index: 1, after: 'abc:def==' })
   assert.deepEqual(decodeTwgCursor('2:', 3), { index: 2, after: '' })
   const first = { index: 0, after: '' }
