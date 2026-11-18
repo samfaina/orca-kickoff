@@ -44,7 +44,6 @@ import {
   readSettings,
   SETTINGS_KEY,
   trackerOf,
-  withProjectChanges,
   type JiraProviderId,
   type JiraSitesResult,
   type ProjectChanges,
@@ -60,8 +59,8 @@ import {
   type TaskWorktree
 } from './protocol'
 import type { TaskPage } from './providers/types'
-import { serialQueue } from './queue'
 import { matchesSearch } from './search'
+import { settingsSaver } from './settings-save'
 import {
   defaultTemplate,
   INITIAL_TEMPLATE_TEXT,
@@ -79,8 +78,6 @@ const LOAD_TIMEOUT_MS = 90_000
 /** `task.start` answers after its quick checks, two Orca queries of at most 20 s each; the create
  *  goes on in the worker, which posts `start.ended` when it ends. */
 const START_TIMEOUT_MS = 60_000
-/** Project settings save themselves after this pause. */
-const SAVE_DELAY_MS = 600
 /** How long Delete waits for its second click, as "Confirm delete". */
 const CONFIRM_DELETE_MS = 4_000
 /** How often the panel asks for the active project while it is visible. */
@@ -234,75 +231,27 @@ let trackerSettingsVersion = 0
  *  list again while it is behind, so the list shows the tracker settings as they are. */
 let listedTrackerSettingsVersion = 0
 
-/** Settings changes not saved yet, for one project. */
-let pending: { projectId: string; changes: ProjectChanges } | null = null
-let saveTimer: ReturnType<typeof setTimeout> | null = null
-/** Every read-modify-write of the settings in storage runs through it, one at a time, so none reads
- *  them before the previous write has finished. */
-const settingsWrites = serialQueue()
-/** What the panel says after a timed save of Project settings failed, or null. */
+/** What the panel says after a timed save of Project settings failed, until a later save of the
+ *  pending changes succeeds, or null. */
 const settingsSaveError = atom<string | null>(null)
 
-/** Saves pending settings changes now, after every settings write asked for before. The worker
- *  reads settings from storage, so this runs before every request that depends on them. A failed
- *  write keeps the changes pending for the next save, unless `keepOnFailure` is false. */
-function flushSettings({ keepOnFailure = true } = {}): Promise<void> {
-  cancelSaveTimer()
-  return settingsWrites(() => savePending(keepOnFailure))
-}
-
-/** The save a change times. A failure shows in the panel instead of rejecting, and the changes stay
- *  pending for the next save. */
-function saveOnTimer(): void {
-  flushSettings().catch((error: unknown) => {
+/** Every save of Project settings goes through it, and every read-modify-write of them in storage.
+ *  The worker reads settings from storage, so a request that depends on them saves first. */
+const settingsSave = settingsSaver({
+  storage: {
+    get: (key) => storage.get(key),
+    set: (key, value) => storage.set(key, value as unknown as JsonValue)
+  },
+  // The globals are read on each call, so the tests' timers stand in for them.
+  timers: {
+    setTimeout: (run, ms) => setTimeout(run, ms),
+    clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>)
+  },
+  onSaved: () => set(settingsSaveError, null),
+  onTimedSaveFailed: (error) => {
     set(settingsSaveError, `Couldn't save Project settings (${errorCode(error)}). Kickoff tries again with your next change.`)
-  })
-}
-
-/** The save when the panel closes, of a change made less than `SAVE_DELAY_MS` before. A failure
- *  drops those changes: no panel is left to show it or to save them again. */
-function saveOnUnload(): void {
-  flushSettings({ keepOnFailure: false }).catch(() => {})
-}
-
-/** Stops the timer of a pending save, for a save that runs sooner. */
-function cancelSaveTimer(): void {
-  if (saveTimer !== null) clearTimeout(saveTimer)
-  saveTimer = null
-}
-
-/** Saves pending settings changes, which ends the notice of a failed timed save. A failed write
- *  puts them back in `pending`, under the changes made meanwhile, while `keepOnFailure`. Only
- *  through `settingsWrites`. */
-async function savePending(keepOnFailure = true): Promise<void> {
-  const toSave = pending
-  pending = null
-  if (!toSave) return
-  try {
-    await writeProjectChanges(toSave.projectId, () => toSave.changes)
-    set(settingsSaveError, null)
-  } catch (error) {
-    const meanwhile = pending as typeof toSave | null
-    if (keepOnFailure && (meanwhile === null || meanwhile.projectId === toSave.projectId)) {
-      pending = { projectId: toSave.projectId, changes: mergeChanges(toSave.changes, meanwhile?.changes ?? {}) }
-    }
-    throw error
   }
-}
-
-/** Reads the settings in storage, and writes back the changes `compute` gives for the project's
- *  settings, unless it gives none. Answers those changes. Only through `settingsWrites`. */
-async function writeProjectChanges<T extends ProjectChanges>(projectId: string, compute: (project: ProjectSettings) => T | null): Promise<T | null> {
-  const settings = readSettings(await storage.get(SETTINGS_KEY))
-  const changes = compute(projectSettings(settings, projectId))
-  if (changes) await storage.set(SETTINGS_KEY, withProjectChanges(settings, projectId, changes) as unknown as JsonValue)
-  return changes
-}
-
-/** `earlier` changes with `later` ones on top, keeping the providers either changed. */
-function mergeChanges(earlier: ProjectChanges, later: ProjectChanges): ProjectChanges {
-  return { ...earlier, ...later, providers: { ...earlier.providers, ...later.providers } }
-}
+})
 
 function changeSettings(changes: ProjectChanges): void {
   const current = read(shownSettings)
@@ -314,10 +263,7 @@ function changeSettings(changes: ProjectChanges): void {
   }
   const providers = { ...current.providers, ...changes.providers }
   set(shownSettings, { ...current, ...changes, provider: changes.provider ?? current.provider, providers })
-  const earlier = pending?.projectId === current.projectId ? pending.changes : {}
-  pending = { projectId: current.projectId, changes: mergeChanges(earlier, changes) }
-  cancelSaveTimer()
-  saveTimer = setTimeout(saveOnTimer, SAVE_DELAY_MS)
+  settingsSave.change(current.projectId, changes)
 }
 
 /** Shows the stored settings of `project`, unless they are already shown. */
@@ -416,13 +362,9 @@ function cancelConfirmDelete(): void {
  *  the change applies to what the person sees. */
 async function writeTemplates(draft: TemplateDraft, change: (project: ProjectSettings) => TemplateChanges | null): Promise<void> {
   changeDraft(draft, { saving: true, error: null, confirmingDelete: false })
-  cancelSaveTimer()
   let changes: TemplateChanges | null
   try {
-    changes = await settingsWrites(async () => {
-      await savePending()
-      return writeProjectChanges(draft.projectId, change)
-    })
+    changes = await settingsSave.writeProject(draft.projectId, change)
   } catch (error) {
     changeDraft(draft, { saving: false, error: `Couldn't save the template (${errorCode(error)}). Try again.` })
     return
@@ -564,26 +506,27 @@ function startLoading(): number {
 }
 
 /** Saves pending settings, then asks the worker for a first page, with when the Starts under way
- *  and the worktrees were asked for. A worker that doesn't answer gives an error that names no
- *  project. `savedTrackerSettings` is the `trackerSettingsVersion` the request asked with, or null
- *  when the save failed. */
+ *  and the worktrees were asked for. A failed save, which asks the worker nothing, and a worker
+ *  that doesn't answer give an error that names no project. `savedTrackerSettings` is the
+ *  `trackerSettingsVersion` the request asked with, or null when the save failed. */
 async function askTasks(
   input: { query?: string }
 ): Promise<{ answer: TaskList; askedAt: number; worktreesAskedAt: number; savedTrackerSettings: number | null }> {
-  let askedAt = 0
-  let worktreesAskedAt = 0
-  let savedTrackerSettings: number | null = null
+  // A change made while the save is under way isn't in it.
+  const version = trackerSettingsVersion
   try {
-    // A change made while the save is under way isn't in it.
-    const version = trackerSettingsVersion
-    await flushSettings()
-    savedTrackerSettings = version
-    askedAt = ++startClock
-    worktreesAskedAt = ++worktreesClock
-    return { answer: await plugin.request('tasks.load', input, { timeoutMs: LOAD_TIMEOUT_MS }), askedAt, worktreesAskedAt, savedTrackerSettings }
+    await settingsSave.saveNow()
+  } catch (error) {
+    const message = `Couldn't save Project settings (${errorCode(error)}). Reload to try again.`
+    return { answer: { kind: 'error', project: null, message }, askedAt: 0, worktreesAskedAt: 0, savedTrackerSettings: null }
+  }
+  const askedAt = ++startClock
+  const worktreesAskedAt = ++worktreesClock
+  try {
+    return { answer: await plugin.request('tasks.load', input, { timeoutMs: LOAD_TIMEOUT_MS }), askedAt, worktreesAskedAt, savedTrackerSettings: version }
   } catch (error) {
     const message = `Kickoff's worker didn't answer (${errorCode(error)}). Reload to try again.`
-    return { answer: { kind: 'error', project: null, message }, askedAt, worktreesAskedAt, savedTrackerSettings }
+    return { answer: { kind: 'error', project: null, message }, askedAt, worktreesAskedAt, savedTrackerSettings: version }
   }
 }
 
@@ -741,16 +684,7 @@ async function startTask(task: Task): Promise<void> {
   requested.add(task.key)
   update(starting, (keys): Record<string, true> => ({ ...keys, [task.key]: true as const }))
   setTaskError(task.key, null)
-  let answer: StartResult
-  try {
-    await flushSettings()
-    const shown = await settingsShownFor(projectId)
-    answer = shown.ok
-      ? await plugin.request('task.start', { projectId, task, templateId: chosenTemplateId(shown.settings, task.key) }, { timeoutMs: START_TIMEOUT_MS })
-      : shown
-  } catch (thrown) {
-    answer = { ok: false, message: `Kickoff's worker didn't answer (${errorCode(thrown)}). Reload the tasks to see whether ${task.key} started.` }
-  }
+  const answer = await askStart(projectId, task)
   requested.delete(task.key)
   const early = endedEarly.get(task.key)
   endedEarly.delete(task.key)
@@ -762,6 +696,23 @@ async function startTask(task: Task): Promise<void> {
   }
   // The task already had its worktree: this Start launched no agent.
   await finishStart(projectId, task.key, answer.ok ? null : answer.message, null)
+}
+
+/** Saves pending settings, then asks the worker to start the task with its chosen template. A
+ *  failed save asks the worker nothing, so the task didn't start. */
+async function askStart(projectId: string, task: Task): Promise<StartResult> {
+  try {
+    await settingsSave.saveNow()
+  } catch (error) {
+    return { ok: false, message: `Couldn't save Project settings (${errorCode(error)}), so ${task.key} didn't start. Try again.` }
+  }
+  try {
+    const shown = await settingsShownFor(projectId)
+    if (!shown.ok) return shown
+    return await plugin.request('task.start', { projectId, task, templateId: chosenTemplateId(shown.settings, task.key) }, { timeoutMs: START_TIMEOUT_MS })
+  } catch (error) {
+    return { ok: false, message: `Kickoff's worker didn't answer (${errorCode(error)}). Reload the tasks to see whether ${task.key} started.` }
+  }
 }
 
 /** The listed project's settings as shown, read again when a load couldn't read them, or why they
@@ -894,7 +845,7 @@ export function setup(ctx: PanelContext): void {
   ctx.subscriptions.push(on('workspace.removed', refreshWorktreesLater))
   ctx.subscriptions.push({ dispose: cancelWorktreesRefresh })
   ctx.subscriptions.push(plugin.on('start.ended', onStartEnded))
-  ctx.subscriptions.push({ dispose: saveOnUnload })
+  ctx.subscriptions.push({ dispose: settingsSave.unload })
   ctx.subscriptions.push({ dispose: cancelAgentChecks })
 
   // Orca sends no workspace.changed between two worktrees with the same branch and name, such

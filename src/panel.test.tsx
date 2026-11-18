@@ -2,6 +2,7 @@ import { afterEach, assert, hostError, mockHost, mount as mountUntracked, test, 
 import type { JsonValue } from 'orca'
 import type { Task, TaskList, TaskWorktree } from './protocol'
 import * as panel from './panel'
+import { SAVE_DELAY_MS } from './settings-save'
 
 /** The views the running test mounted and hasn't unmounted. A view left mounted keeps the panel's
  *  poll, a real `setInterval`, running, and then `orca plugin test` never exits. */
@@ -1647,9 +1648,6 @@ test('a pending Project settings change survives a failed template write, and th
   assert.deepEqual(project.templates.map((template) => template.name), ['Implement', 'Triage', 'Review'])
 })
 
-/** How long Project settings wait after a change before they save themselves. */
-const SAVE_DELAY_MS = 600
-
 /** A host with the two templates stored and these worker answers. Each settings write calls
  *  `write` first and lands once it ends: a promise it answers holds the write, a throw fails it.
  *  `project()` gives the web project's stored settings. */
@@ -1837,6 +1835,45 @@ test('closing the panel right after a change whose save fails throws nothing, an
     const next = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
     await next.view.press({ type: 'IconButton', label: 'Reload tasks' })
     assert.equal(wroteSettings(next.host), false)
+  })
+})
+
+test("a load whose save of Project settings fails says so, not that Kickoff's worker didn't answer", async () => {
+  await withTimeouts(SAVE_DELAY_MS, async () => {
+    let failing = false
+    const { host } = failingWritesHost(() => failing)
+    const view = await mount(panel, { host })
+    await view.press(gear)
+    await view.select({ type: 'Select', label: 'Agent' }, 'codex')
+    await view.press(done)
+    failing = true
+    await view.press({ type: 'IconButton', label: 'Reload tasks' })
+    assert.ok(view.find({ type: 'Text', text: "Couldn't save Project settings (quota_exceeded). Reload to try again." }))
+    assert.equal(view.find({ type: 'Text', text: /worker didn't answer/ }), null)
+  })
+})
+
+test('a Start whose save of Project settings fails asks the worker nothing and says that the task didn\'t start', async () => {
+  await withTimeouts(SAVE_DELAY_MS, async () => {
+    let starts = 0
+    const { host } = settingsHost(
+      {
+        'tasks.load': ready([task('#42')]),
+        'task.start': () => (starts++, { ok: true, underWay: true }),
+        'worktrees.load': { kind: 'ready', worktrees: {} }
+      },
+      () => {
+        throw hostError('quota_exceeded', 'Storage is full')
+      }
+    )
+    const view = await mount(panel, { host })
+    await view.press(gear)
+    await view.select({ type: 'Select', label: 'Agent' }, 'codex')
+    await view.press(done)
+    await view.press({ testId: 'start:#42' })
+    assert.equal(starts, 0)
+    assert.ok(view.find({ type: 'Text', text: "Couldn't save Project settings (quota_exceeded), so #42 didn't start. Try again." }))
+    assert.ok(view.find({ testId: 'start:#42' }))
   })
 })
 
