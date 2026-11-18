@@ -91,17 +91,17 @@ const jiraTasks: Task[] = [
   jiraTask('WEB-18', 'Translate the error pages', 'To Do', 'todo', ['i18n', 'ui'])
 ]
 
-/** The stored settings of `web` reading Jira through `provider`, with two prompt templates so the
- *  cards that can start offer a choice. */
-const jiraSettings = (provider: JiraProviderId) => ({
+/** The stored settings of `web` reading Jira through `provider` with the `jql` queries, with two
+ *  prompt templates so the cards that can start offer a choice. */
+const jiraSettings = (provider: JiraProviderId, jql: string[] = [DEFAULT_JQL]) => ({
   settings: {
     version: 1,
     projects: {
       [web.id]: {
         provider,
         providers: {
-          'jira-orca': { jql: DEFAULT_JQL, siteId: '' },
-          'jira-twg': { jql: DEFAULT_JQL, site: 'example.atlassian.net', profile: '' }
+          'jira-orca': { jql, siteId: '' },
+          'jira-twg': { jql, site: 'example.atlassian.net', profile: '' }
         },
         templates: [
           { id: INITIAL_TEMPLATE_ID, name: INITIAL_TEMPLATE_NAME, text: INITIAL_TEMPLATE_TEXT },
@@ -131,6 +131,8 @@ const TWG_LOGGED_OUT =
 const ORCA_MISSING =
   "Couldn't find the Orca CLI. It comes with Orca: reinstall or update Orca, and connect Jira in Orca's settings if you read Jira through Orca. Or set ORCA_CLI_COMMAND to the full path of the CLI."
 const ORCA_SLOW = "orca didn't answer in time."
+/** What the worker answers when the second of several JQL queries is invalid. */
+const SECOND_JQL_INVALID = "JQL query 2 failed: twg failed: The value 'WEB' does not exist for the field 'project'."
 
 export default defineCheck({
   'no-project': { requests: answers({ kind: 'no-project' }) },
@@ -148,6 +150,12 @@ export default defineCheck({
   'tracker-error': {
     storage: jiraSettings('jira-twg'),
     requests: answers({ kind: 'error', project: web, message: TWG_LOGGED_OUT })
+  },
+  // Several JQL queries, the second one invalid: Project settings opens by itself on them, each
+  // with its Remove button, and Add query below.
+  'jira-queries': {
+    storage: jiraSettings('jira-twg', [DEFAULT_JQL, 'project = WEB AND labels = ui\nORDER BY rank', '']),
+    requests: answers({ kind: 'error', project: web, message: SECOND_JQL_INVALID })
   },
   // With no project known there are no Project settings to open, so the error shows at once.
   'orca-error': {

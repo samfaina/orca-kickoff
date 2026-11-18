@@ -37,6 +37,7 @@ import {
   appendTasks,
   chooseProvider,
   DEFAULT_JQL,
+  jqlQueries,
   projectProvider,
   projectSettings,
   providerConfig,
@@ -967,7 +968,7 @@ function JiraOrcaSettings({ providers }: { providers: ProviderConfigs }) {
   }
   return (
     <Stack gap="sm">
-      <JqlInput provider="jira-orca" jql={config.jql} />
+      <JqlQueries provider="jira-orca" jql={config.jql} />
       <Select
         label="Site"
         value={config.siteId || DEFAULT_SITE}
@@ -989,16 +990,50 @@ function JiraOrcaSettings({ providers }: { providers: ProviderConfigs }) {
   )
 }
 
-/** The JQL of a Jira provider. Enter lists the tasks with it. */
-function JqlInput({ provider, jql }: { provider: JiraProviderId; jql: string }) {
+/** The JQL queries of a Jira provider, each with its Remove button while more than one is left,
+ *  then Add query. Ctrl+Enter (Cmd+Enter on macOS) in any of them lists the tasks. */
+function JqlQueries({ provider, jql }: { provider: JiraProviderId; jql: string[] }) {
+  // Settings stored with no query at all still show one field to type into.
+  const queries = jql.length > 0 ? jql : ['']
+  const change = (next: string[]) => changeJiraConfig(provider, { jql: next })
   return (
-    <Input
-      label="JQL"
-      value={jql}
-      placeholder={DEFAULT_JQL}
-      onChange={(value) => changeJiraConfig(provider, { jql: value })}
-      onSubmit={loadKeepingSettingsOpen}
-    />
+    <Stack gap="sm">
+      {queries.map((query, index) => {
+        const label = index === 0 ? 'JQL' : `JQL ${index + 1}`
+        return (
+          <Box key={`jql-${index}`} direction="row" align="start" gap="xs">
+            <Box grow minWidth={0}>
+              <Textarea
+                label={label}
+                rows={3}
+                value={query}
+                placeholder={index === 0 ? DEFAULT_JQL : undefined}
+                onChange={(value) => change(queries.map((other, at) => (at === index ? value : other)))}
+                onSubmit={loadKeepingSettingsOpen}
+              />
+            </Box>
+            {queries.length > 1 ? (
+              <Box shrink={false}>
+                <IconButton
+                  icon="remove"
+                  label={`Remove ${label}`}
+                  tooltip="Remove query"
+                  size="sm"
+                  variant="ghost"
+                  onPress={() => change(queries.filter((_, at) => at !== index))}
+                />
+              </Box>
+            ) : null}
+          </Box>
+        )
+      })}
+      <Row gap="none" align="center">
+        <IconButton icon="add" label="Add query" tooltip="Add query" size="sm" variant="ghost" onPress={() => change([...queries, ''])} />
+      </Row>
+      <Text size="sm" muted>
+        Ctrl+Enter (Cmd+Enter on macOS) lists the tasks.
+      </Text>
+    </Stack>
   )
 }
 
@@ -1006,7 +1041,7 @@ function JiraTwgSettings({ providers }: { providers: ProviderConfigs }) {
   const config = providerConfig({ providers }, 'jira-twg')
   return (
     <Stack gap="sm">
-      <JqlInput provider="jira-twg" jql={config.jql} />
+      <JqlQueries provider="jira-twg" jql={config.jql} />
       <Input
         label="Site"
         value={config.site}
@@ -1179,11 +1214,20 @@ function LoadedTasks({ list, filter }: { list: ReadyTaskList; filter: string }) 
       {list.nextCursor !== null ? <LoadMore count={list.tasks.length} /> : null}
       {list.truncated ? (
         <Text size="sm" muted>
-          {list.provider === 'github' ? "Showing the first 100 of your repository's issues." : 'Showing the first 100 tasks — narrow your JQL.'}
+          {truncationNotice(list)}
         </Text>
       ) : null}
     </>
   )
+}
+
+/** What a truncated list says: a Jira list that runs several JQL queries has the first 100 tasks
+ *  of each, counted from the project's settings as shown. */
+function truncationNotice(list: ReadyTaskList): string {
+  if (list.provider === 'github') return "Showing the first 100 of your repository's issues."
+  const shown = read(shownSettings)
+  const queries = shown?.projectId === list.project.id ? jqlQueries(providerConfig({ providers: shown.providers }, list.provider).jql).length : 1
+  return queries > 1 ? 'Showing the first 100 tasks of each query — narrow your JQL.' : 'Showing the first 100 tasks — narrow your JQL.'
 }
 
 /** A tracker search's results, unfiltered: a result may match on its description, which the

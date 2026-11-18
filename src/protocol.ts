@@ -34,13 +34,15 @@ export type ProjectRef = {
   repo: string | null
 }
 
-/** Each provider's configuration, kept separately so switching provider and back loses nothing. */
+/** Each provider's configuration, kept separately so switching provider and back loses nothing.
+ *  A Jira provider's `jql` is its JQL queries, in order, as the settings show them: blank ones
+ *  are kept, so the person can type into a new one, and never run. */
 export type ProviderConfigs = {
   github?: {}
   /** siteId '' = Orca's default site. */
-  'jira-orca'?: { jql: string; siteId: string }
+  'jira-orca'?: { jql: string[]; siteId: string }
   /** '' = twg's default. */
-  'jira-twg'?: { jql: string; site: string; profile: string }
+  'jira-twg'?: { jql: string[]; site: string; profile: string }
 }
 
 /** 'orca-default', 'none', or any other string as an Orca agent id. */
@@ -122,12 +124,22 @@ function readProviderConfigs(raw: unknown): ProviderConfigs {
   if (!isRecord(raw)) return configs
   if (isRecord(raw.github)) configs.github = {}
   const orca = raw['jira-orca']
-  if (isRecord(orca) && strings(orca, 'jql', 'siteId')) configs['jira-orca'] = { jql: orca.jql, siteId: orca.siteId }
+  const orcaJql = isRecord(orca) ? readJql(orca.jql) : null
+  if (isRecord(orca) && orcaJql && strings(orca, 'siteId')) configs['jira-orca'] = { jql: orcaJql, siteId: orca.siteId }
   const twg = raw['jira-twg']
-  if (isRecord(twg) && strings(twg, 'jql', 'site', 'profile')) {
-    configs['jira-twg'] = { jql: twg.jql, site: twg.site, profile: twg.profile }
+  const twgJql = isRecord(twg) ? readJql(twg.jql) : null
+  if (isRecord(twg) && twgJql && strings(twg, 'site', 'profile')) {
+    configs['jira-twg'] = { jql: twgJql, site: twg.site, profile: twg.profile }
   }
   return configs
+}
+
+/** A Jira provider's stored JQL queries, or null when they are of an unexpected shape. Before a
+ *  project could have several, it stored one string, which is read as a list of one. */
+function readJql(raw: unknown): string[] | null {
+  if (typeof raw === 'string') return [raw]
+  if (Array.isArray(raw) && raw.every((jql) => typeof jql === 'string')) return [...raw]
+  return null
 }
 
 function strings<K extends string>(record: Record<string, unknown>, ...keys: K[]): record is Record<K, string> {
@@ -150,16 +162,28 @@ export function trackerOf(provider: ProviderId): TrackerId {
 }
 
 /** A provider's stored configuration, or its defaults when none is stored. A Jira provider's
- *  default JQL is the other Jira provider's, or DEFAULT_JQL. */
+ *  default JQL queries are the other Jira provider's, all of them, or DEFAULT_JQL alone. */
 export function providerConfig<K extends ProviderId>(settings: ProjectSettings, id: K): Required<ProviderConfigs>[K] {
   const { providers } = settings
   const defaults: Required<ProviderConfigs> = {
     github: {},
-    'jira-orca': { jql: providers['jira-twg']?.jql ?? DEFAULT_JQL, siteId: '' },
-    'jira-twg': { jql: providers['jira-orca']?.jql ?? DEFAULT_JQL, site: '', profile: '' }
+    'jira-orca': { jql: [...(providers['jira-twg']?.jql ?? [DEFAULT_JQL])], siteId: '' },
+    'jira-twg': { jql: [...(providers['jira-orca']?.jql ?? [DEFAULT_JQL])], site: '', profile: '' }
   }
   const configs: Required<ProviderConfigs> = { ...defaults, ...providers }
   return configs[id]
+}
+
+/** One JQL query to run: trimmed, each line break a space, and its position from 1 among the
+ *  queries as the settings show them, blank ones included. */
+export type JqlQuery = { jql: string; position: number }
+
+/** The JQL queries that run, in order: the non-blank ones. What is stored doesn't change. */
+export function jqlQueries(jql: readonly string[]): JqlQuery[] {
+  return jql.flatMap((query, index) => {
+    const normalized = query.replace(/\r\n|\r|\n/g, ' ').trim()
+    return normalized === '' ? [] : [{ jql: normalized, position: index + 1 }]
+  })
 }
 
 /** Chooses a provider, keeping every provider's configuration and filling in the chosen one's

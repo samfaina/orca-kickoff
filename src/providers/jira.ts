@@ -1,8 +1,9 @@
 // What both Jira providers share: the task shape, the status category, the rule that a blank
-// JQL never runs and the JQL of a tracker search.
-import { CliError } from '../cli'
+// JQL never runs, how the tasks and failures of several JQL queries make one list, and the JQL of
+// a tracker search.
+import { cleanMessage, CliError } from '../cli'
 import { isRecord, text } from '../json'
-import { DEFAULT_JQL, type Task } from '../protocol'
+import { appendTasks, DEFAULT_JQL, jqlQueries, type JqlQuery, type Task } from '../protocol'
 import { searchWords } from './types'
 
 /** The fields of one Jira issue, as each provider finds them in its tool's output. */
@@ -53,11 +54,25 @@ export function jiraStatusCategory(key: unknown): Task['statusCategory'] {
   }
 }
 
-/** The JQL to run, trimmed. A blank one throws, asking for one, so the tool never runs without it. */
-export function requireJql(jql: string): string {
-  const trimmed = jql.trim()
-  if (!trimmed) throw new CliError(`Enter a JQL query to list Jira tasks, for example: ${DEFAULT_JQL}`)
-  return trimmed
+/** The JQL queries to run (see `jqlQueries`). With none that isn't blank it throws, asking for one,
+ *  so the tool never runs without one. */
+export function requireJql(jql: readonly string[]): JqlQuery[] {
+  const queries = jqlQueries(jql)
+  if (queries.length === 0) throw new CliError(`Enter a JQL query to list Jira tasks, for example: ${DEFAULT_JQL}`)
+  return queries
+}
+
+/** `error`, from running `query`, as the failure of the whole list. With more than one query it
+ *  says which one failed, by its position in the settings; with one, it is `error` unchanged. */
+export function jqlQueryFailure(queries: readonly JqlQuery[], query: JqlQuery, error: unknown): unknown {
+  if (queries.length < 2) return error
+  const message = error instanceof CliError ? error.message : cleanMessage(error instanceof Error ? error.message : String(error))
+  return new CliError(`JQL query ${query.position} failed: ${message}`, error instanceof CliError && error.timedOut)
+}
+
+/** The tasks of each query's page, in query order, each task once, where it first appears. */
+export function mergeQueryTasks(pages: readonly Task[][]): Task[] {
+  return pages.reduce<Task[]>((tasks, page) => appendTasks(tasks, page), [])
 }
 
 /** The JQL that narrows the user's `jql` to the tasks matching the words of `query`, or `jql`
