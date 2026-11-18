@@ -1840,6 +1840,45 @@ test('closing the panel right after a change whose save fails throws nothing, an
   })
 })
 
+test("a load whose save of Project settings fails says so, not that Kickoff's worker didn't answer", async () => {
+  await withTimeouts(SAVE_DELAY_MS, async () => {
+    let failing = false
+    const { host } = failingWritesHost(() => failing)
+    const view = await mount(panel, { host })
+    await view.press(gear)
+    await view.select({ type: 'Select', label: 'Agent' }, 'codex')
+    await view.press(done)
+    failing = true
+    await view.press({ type: 'IconButton', label: 'Reload tasks' })
+    assert.ok(view.find({ type: 'Text', text: "Couldn't save Project settings (quota_exceeded). Reload to try again." }))
+    assert.equal(view.find({ type: 'Text', text: /worker didn't answer/ }), null)
+  })
+})
+
+test('a Start whose save of Project settings fails asks the worker nothing and says that the task didn\'t start', async () => {
+  await withTimeouts(SAVE_DELAY_MS, async () => {
+    let starts = 0
+    const { host } = settingsHost(
+      {
+        'tasks.load': ready([task('#42')]),
+        'task.start': () => (starts++, { ok: true, underWay: true }),
+        'worktrees.load': { kind: 'ready', worktrees: {} }
+      },
+      () => {
+        throw hostError('quota_exceeded', 'Storage is full')
+      }
+    )
+    const view = await mount(panel, { host })
+    await view.press(gear)
+    await view.select({ type: 'Select', label: 'Agent' }, 'codex')
+    await view.press(done)
+    await view.press({ testId: 'start:#42' })
+    assert.equal(starts, 0)
+    assert.ok(view.find({ type: 'Text', text: "Couldn't save Project settings (quota_exceeded), so #42 didn't start. Try again." }))
+    assert.ok(view.find({ testId: 'start:#42' }))
+  })
+})
+
 test('a started task opens its worktree in Orca from the link', async () => {
   const opened: unknown[] = []
   const { view } = await showWith({
