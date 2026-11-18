@@ -60,6 +60,7 @@ import {
   type TaskWorktree
 } from './protocol'
 import type { TaskPage } from './providers/types'
+import { serialQueue } from './queue'
 import { matchesSearch } from './search'
 import {
   defaultTemplate,
@@ -236,12 +237,25 @@ let listedTrackerSettingsVersion = 0
 /** Settings changes not saved yet, for one project. */
 let pending: { projectId: string; changes: ProjectChanges } | null = null
 let saveTimer: ReturnType<typeof setTimeout> | null = null
+/** Every read-modify-write of the settings in storage runs through it, one at a time, so none reads
+ *  them before the previous write has finished. */
+const settingsWrites = serialQueue()
 
-/** Saves pending settings changes now. The worker reads settings from storage, so this runs
- *  before every request that depends on them. */
-async function flushSettings(): Promise<void> {
+/** Saves pending settings changes now, after every settings write asked for before. The worker
+ *  reads settings from storage, so this runs before every request that depends on them. */
+function flushSettings(): Promise<void> {
+  cancelSaveTimer()
+  return settingsWrites(savePending)
+}
+
+/** Stops the timer of a pending save, for a save that runs sooner. */
+function cancelSaveTimer(): void {
   if (saveTimer !== null) clearTimeout(saveTimer)
   saveTimer = null
+}
+
+/** Saves pending settings changes. Only through `settingsWrites`. */
+async function savePending(): Promise<void> {
   const toSave = pending
   pending = null
   if (!toSave) return
@@ -275,7 +289,7 @@ function changeSettings(changes: ProjectChanges): void {
   set(shownSettings, { ...current, ...changes, provider: changes.provider ?? current.provider, providers })
   const earlier = pending?.projectId === current.projectId ? pending.changes : {}
   pending = { projectId: current.projectId, changes: mergeChanges(earlier, changes) }
-  if (saveTimer !== null) clearTimeout(saveTimer)
+  cancelSaveTimer()
   saveTimer = setTimeout(() => void flushSettings(), SAVE_DELAY_MS)
 }
 
@@ -375,12 +389,16 @@ function cancelConfirmDelete(): void {
  *  the change applies to what the person sees. */
 async function writeTemplates(draft: TemplateDraft, change: (project: ProjectSettings) => TemplateChanges | null): Promise<void> {
   changeDraft(draft, { saving: true, error: null, confirmingDelete: false })
+  cancelSaveTimer()
   let changes: TemplateChanges | null
   try {
-    await flushSettings()
-    const settings = readSettings(await storage.get(SETTINGS_KEY))
-    changes = change(projectSettings(settings, draft.projectId))
-    if (changes) await storage.set(SETTINGS_KEY, withProjectChanges(settings, draft.projectId, changes) as unknown as JsonValue)
+    changes = await settingsWrites(async () => {
+      await savePending()
+      const settings = readSettings(await storage.get(SETTINGS_KEY))
+      const changes = change(projectSettings(settings, draft.projectId))
+      if (changes) await storage.set(SETTINGS_KEY, withProjectChanges(settings, draft.projectId, changes) as unknown as JsonValue)
+      return changes
+    })
   } catch (error) {
     changeDraft(draft, { saving: false, error: `Couldn't save the template (${errorCode(error)}). Try again.` })
     return
