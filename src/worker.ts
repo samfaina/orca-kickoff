@@ -187,14 +187,22 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
       if (!prompt.ok) return prompt
       const args = worktreeCreateArgs({ projectId, name, task, agent: agent.agent, prompt: prompt.prompt })
       creating.set(id, { projectId, taskKey: task.key })
-      void createWorktree(id, task.key, args).then((result) => {
-        creating.delete(id)
-        const end: StartEnded = { projectId, taskKey: task.key, agent: agent.agent, ...result }
-        orca.panels.post('start.ended', end)
-      })
+      void endStart(id, args, { projectId, taskKey: task.key, agent: agent.agent })
       return { ok: true, underWay: true }
     } catch (error) {
       return { ok: false, message: messageOf(error) }
+    }
+  }
+
+  /** Waits for the create, drops the Start from those under way, and posts how it ended. Never
+   *  rejects: a post that throws is logged, and the panel learns the end from `starts.load`. */
+  async function endStart(id: string, args: string[], start: Omit<StartEnded, 'ok' | 'message'>): Promise<void> {
+    const result = await createWorktree(id, start.taskKey, args)
+    creating.delete(id)
+    try {
+      orca.panels.post('start.ended', { ...start, ...result })
+    } catch (error) {
+      orca.log(`Couldn't post the end of the Start of ${start.taskKey}: ${messageOf(error)}`)
     }
   }
 

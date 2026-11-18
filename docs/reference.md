@@ -175,6 +175,8 @@ On Windows with Orca 1.4.255, read from inside a running trusted worker **[Verif
 
 So Kickoff runs every tool from the home folder and puts back `APPDATA` and `LOCALAPPDATA` with their default values when they are missing (`childProcessSetup` in `src/cli.ts`). If a user's `APPDATA` is redirected elsewhere, that default is wrong and the tools fail as above; Kickoff does not handle it. On macOS and Linux the worker environment has not been read **[Assumed]**.
 
+- `plugin-host-entry.js` handles `uncaughtException` and `unhandledRejection` by reporting the error to Orca and exiting with code 1 **[Verified]** (installed code of Orca 1.4.263, issue #102). So a rejection nobody handles in the worker ends the worker process, with every Start under way in it. What Orca does next, such as starting the worker again on the next request, was not checked **[Assumed]**.
+
 ### Errors from worker to panel
 
 - Documented contract **[Verified]**: an error thrown in a handler whose `code` is a host error code (`invalid_params`, `conflict`, ...) reaches the panel with that code; any other becomes `action_failed`. The panel can also see `unknown_method`, `timeout` and `unavailable`.
@@ -185,6 +187,7 @@ So Kickoff runs every tool from the home folder and puts back `APPDATA` and `LOC
 ### Posts from worker to panel
 
 - `orca.panels.post(event, payload, { panel? })` sends to every open panel of the plugin, or to one (`panel` from a request's context). It is fire and forget, returns `void`, and allows at most 256 KiB per post and 200 posts per 10 s **[Verified]** (generated types and Orca's authoring guide).
+- `post` can throw: in the worker it checks the event name against `^[A-Za-z0-9_.:-]{1,128}$` and throws when the name doesn't match, then hands the message to Node's `process.send` at once **[Verified]** (installed code of Orca 1.4.263, `plugin-host-entry.js` and `plugin-panel-bridge-protocol.js`, issue #102). Neither the generated types nor the authoring guide says so. The worker checks neither limit, so a post past the size or rate limit doesn't throw there; whether Orca then drops it, and whether it tells the worker, was not checked **[Assumed]**. A payload `JSON.stringify` can't serialise would throw from `process.send` **[Assumed]**, from Node's documented IPC serialisation, not tried. So Kickoff's worker catches a throw from posting `start.ended` and logs it; the panel learns the end from its poll of `starts.load`.
 - A panel hears posts with `plugin.on(event, handler)`, imported from `orca` with `plugin`, which returns a `Disposable` to push to `ctx.subscriptions` **[Verified]** (generated types).
 - Event names and payloads are typed by declaring them in `PluginPanelEvents`, next to `PluginRequests` **[Verified]**.
 - In tests, `TestWorker.posts` lists what the worker posted, in order, and `TestPanel.post(event, payload)` delivers a post to the panel's `plugin.on` handlers **[Verified]**.
