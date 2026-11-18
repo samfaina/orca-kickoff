@@ -1,0 +1,152 @@
+<!doctype html>
+<!-- Kickoff's plugin cover, the source of assets/cover.png (1600x1000; see docs/reference.md, Plugin cover).
+     Variant C-A of issue #72: the name and line on a slate gradient, Kickoff's panel on the right with the
+     template menu open, and a curved arrow from the underlined "prompt templates" to that menu.
+     Every task, key and name is invented. Drawn by hand: no image generator, no icon set. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Kickoff cover</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  html, body { width: 1600px; height: 1000px; overflow: hidden; }
+  body {
+    position: relative;
+    font-family: "Segoe UI Variable Display", "Segoe UI", Inter, system-ui, sans-serif;
+    line-height: 1.4;
+    background: linear-gradient(135deg, #3B4A63 0%, #1A2233 70%);
+    color: #F8FAFC;
+    --mint: #34D399;
+  }
+
+  /* The name and the line. */
+  .left { position: absolute; left: 110px; top: 0; bottom: 0; width: 760px; display: flex; flex-direction: column; justify-content: center; gap: 44px; }
+  .brand { display: flex; align-items: center; gap: 36px; }
+  .brand img { display: block; }
+  .name { font-size: 150px; font-weight: 700; letter-spacing: -0.02em; line-height: 1; }
+  .line { font-size: 52px; color: #A9B4C6; font-weight: 500; line-height: 1.22; }
+  .line b { color: #E2E8F0; font-weight: 600; }
+
+  /* Kickoff's panel in Orca's dark theme, at Orca's CSS pixels, enlarged by zoom. */
+  .frame { position: absolute; left: 950px; top: 80px; border-radius: 26px 26px 0 0; overflow: hidden; box-shadow: 0 40px 90px rgba(0,0,0,.45), 0 0 0 1px rgba(255,255,255,.08); }
+  .panel {
+    --p-bg: #1C1C24; --p-fg: #E6E6EC; --p-muted: #9A9AA8; --p-border: #34343F; --p-link: #7DD3D0;
+    --p-badge: #8FD0CE; --p-badge-fg: #10202A; --p-chip: #33333D; --p-input: #24242D;
+    zoom: 1.7; width: 320px; height: 560px; overflow: hidden;
+    background: var(--p-bg); color: var(--p-fg); font-size: 14px; padding: 12px; display: flex; flex-direction: column; gap: 8px;
+  }
+  .panel > * { flex-shrink: 0; }
+  .p-head { display: flex; align-items: center; justify-content: space-between; height: 28px; }
+  .p-head .t { font-size: 15px; color: var(--p-muted); }
+  .p-head .t b { color: var(--p-fg); }
+  .p-head .icons { display: flex; gap: 14px; }
+  .p-head svg { width: 17px; height: 17px; }
+  .p-input { border: 1px solid var(--p-border); background: var(--p-input); border-radius: 7px; padding: 6px 11px; color: var(--p-muted); white-space: nowrap; overflow: hidden; }
+  .card { border: 1px solid var(--p-border); border-radius: 8px; padding: 9px; display: flex; flex-direction: column; gap: 8px; }
+  .key, .wt { color: var(--p-link); }
+  .wt, .muted { font-size: 13px; }
+  .muted { color: var(--p-muted); }
+  .badges { display: flex; gap: 5px; flex-wrap: wrap; }
+  .badge { border-radius: 6px; padding: 1px 7px; font-size: 12.5px; background: var(--p-chip); }
+  .badge.accent { background: var(--p-badge); color: var(--p-badge-fg); }
+  .spin { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--p-muted); }
+  .spin svg { width: 15px; height: 15px; }
+  .startrow { display: flex; gap: 6px; align-items: center; }
+  .select { flex: 1; border: 1px solid var(--p-border); border-radius: 7px; padding: 5px 11px; display: flex; justify-content: space-between; align-items: center; }
+  .select svg { width: 13px; height: 13px; color: var(--p-muted); }
+  .select.open { position: relative; border-color: var(--mint); }
+  .menu { position: absolute; left: -1px; right: -1px; top: calc(100% + 4px); z-index: 5; background: var(--p-bg); border: 1px solid var(--p-border); border-radius: 8px; padding: 4px; box-shadow: 0 10px 24px rgba(0,0,0,.35); display: flex; flex-direction: column; gap: 2px; }
+  .opt { display: flex; gap: 6px; align-items: center; padding: 5px 8px; border-radius: 5px; font-size: 13.5px; }
+  .opt .ck { width: 14px; color: var(--p-muted); }
+  .opt.hover { background: var(--p-chip); }
+  .play { width: 32px; height: 32px; border: 1px solid var(--p-border); border-radius: 7px; display: grid; place-items: center; }
+  .play svg { width: 14px; height: 14px; }
+  .play.hot { border-color: var(--mint); background: var(--mint); color: #0B2A1F; box-shadow: 0 0 0 4px rgba(52,211,153,.25); }
+
+  /* The underline and the arrow, placed by the script below from where the text and the menu land. */
+  .mark { position: absolute; left: 0; top: 0; width: 1600px; height: 1000px; color: var(--mint); overflow: visible; }
+</style>
+</head>
+<body>
+  <div class="left">
+    <div class="brand"><img src="icon.svg" width="150" height="150" alt=""><div class="name">Kickoff</div></div>
+    <div class="line">Your <b><span id="marked">prompt templates</span></b>,<br>one click from any<br>GitHub or Jira task.</div>
+  </div>
+  <div class="frame">
+    <div class="panel">
+      <div class="p-head">
+        <div class="t">Kickoff · <b>web</b></div>
+        <div class="icons">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v5h-5"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="7.2"/><path d="M12 2v2.6M12 19.4V22M2 12h2.6M19.4 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></svg>
+        </div>
+      </div>
+      <div class="p-input">Filter loaded tasks · Enter searches the tracker</div>
+      <div class="card"><div><span class="key">WEB-12</span> Add dark mode to settings</div><div class="wt">web-12-add-dark-mode-to</div><div class="muted">Agent: claude</div></div>
+      <div class="card">
+        <div><span class="key">WEB-15</span> Retry failed payments once</div>
+        <div class="badges"><span class="badge accent">To Do</span><span class="badge">payments</span></div>
+        <div class="spin"><svg viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round"><circle cx="12" cy="12" r="9" stroke="currentColor" opacity=".25"/><path d="M12 3a9 9 0 0 1 9 9" stroke="currentColor"/></svg> Starting WEB-15</div>
+        <div class="muted">Creating the worktree can take a minute.</div>
+      </div>
+      <div class="card">
+        <div><span class="key">WEB-16</span> Remove the old checkout banner</div>
+        <div class="badges"><span class="badge accent">To Do</span></div>
+        <div class="startrow">
+          <div class="select open" id="menu-anchor">implement <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+            <div class="menu"><div class="opt"><span class="ck">✓</span>implement</div><div class="opt hover"><span class="ck"></span>prototype</div><div class="opt"><span class="ck"></span>review</div></div>
+          </div>
+          <div class="play hot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M7 4.5v15l12-7.5z"/></svg></div>
+        </div>
+      </div>
+      <div class="card">
+        <div><span class="key">WEB-18</span> Translate the error pages</div>
+        <div class="badges"><span class="badge accent">To Do</span><span class="badge">i18n</span><span class="badge">ui</span></div>
+        <div class="startrow"><div class="select">implement <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></div><div class="play"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M7 4.5v15l12-7.5z"/></svg></div></div>
+      </div>
+    </div>
+  </div>
+<script>
+  // Draws the tapered underline behind "prompt templates" and the curved arrow from under its last "e"
+  // to the open template menu, from where the layout put them.
+  function draw() {
+    document.querySelectorAll('.mark').forEach((el) => el.remove())
+    const word = document.getElementById('marked')
+    const box = (r) => ({ x: r.left, y: r.top, w: r.width, h: r.height })
+    const w = box(word.getBoundingClientRect())
+    const m = box(document.getElementById('menu-anchor').getBoundingClientRect())
+
+    // The underline: a flat start on the left that narrows in a straight line to a point, rising slightly,
+    // across the foot of the letters.
+    const fs = parseFloat(getComputedStyle(word).fontSize)
+    const base = w.y + w.h - 0.22 * fs
+    const T = 0.2 * fs, yL = base + 0.05 * fs, yR = yL - 0.1 * fs
+    const x0 = w.x - 0.08 * fs, x1 = w.x + w.w + 0.06 * fs
+    const brush = `M${x0} ${yL - T / 2} L${x1} ${yR} L${x0 + 0.04 * fs} ${yL + T / 2}Z`
+
+    // The arrow starts under the last "e", just below the underline.
+    const text = word.firstChild, ei = text.data.lastIndexOf('e')
+    const range = document.createRange(); range.setStart(text, ei); range.setEnd(text, ei + 1)
+    const er = box(range.getBoundingClientRect())
+    const sx = er.x + er.w / 2
+    const S = { x: sx, y: yL + (yR - yL) * ((sx - x0) / (x1 - x0)) + T / 2 + 8 }
+    const E = { x: m.x - 18, y: m.y + m.h / 2 }
+    const c1 = { x: S.x + 30, y: S.y + 170 }, c2 = { x: E.x - 200, y: E.y + 40 }
+    const at = (t) => {
+      const u = 1 - t
+      return [u ** 3 * S.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t ** 3 * E.x,
+              u ** 3 * S.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t ** 3 * E.y]
+    }
+    const [px, py] = at(0.96)
+    const ang = Math.atan2(E.y - py, E.x - px), L = 28, sp = 0.5
+    const head = `M${E.x - L * Math.cos(ang - sp)} ${E.y - L * Math.sin(ang - sp)} L${E.x} ${E.y} L${E.x - L * Math.cos(ang + sp)} ${E.y - L * Math.sin(ang + sp)}`
+    const curve = `M${S.x} ${S.y} C${c1.x} ${c1.y} ${c2.x} ${c2.y} ${E.x} ${E.y}`
+
+    // The underline goes first, so the text paints over it; the arrow goes last, on top.
+    document.body.insertAdjacentHTML('afterbegin', `<svg class="mark" viewBox="0 0 1600 1000" aria-hidden="true"><path d="${brush}" fill="currentColor"/></svg>`)
+    document.body.insertAdjacentHTML('beforeend', `<svg class="mark" viewBox="0 0 1600 1000" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${curve}"/><path d="${head}"/></svg>`)
+  }
+  document.fonts.ready.then(draw)
+</script>
+</body>
+</html>
