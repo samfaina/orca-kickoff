@@ -98,6 +98,22 @@ Capabilities and the Orca version they need **[Verified]**:
 
 - A real shot of the panel is a poor source for a cover: `orca plugin shot --scenario` captures at 1× CSS pixels (320×680 for a 320 px panel), so it blurs when enlarged, and a scenario replay takes no `--act`, so it cannot open the template `Select` **[Verified]** (issue #72, `orca plugin shot --help`). With Orca's window minimized by a script (`ShowWindowAsync`), 2 of 6 scenario shots showed the panel and 4 showed Orca's own window, all reporting `ok`.
 
+### Releases
+
+- `orca plugin install owner/repo` with no version installs the newest version tag (`vX.Y.Z`), or the default branch when the repository has none, pinned to the exact commit. `owner/repo@<ref>` installs a given tag, branch or commit **[Verified]** (`orca plugin install --help`, Orca 1.4.261). With Kickoff's `v0.1.0` tag pushed, `orca plugin install samfaina/orca-kickoff --json` without `--approve` answered `approval_required` with `source.ref: "v0.1.0"`, the tag's commit and `version: "0.1.0"` from the manifest, and installed nothing **[Verified]** (Orca 1.4.261).
+- `orca plugin update <plugin-key>` moves an install from a version tag to the newest version tag, and an install from a branch to the branch's newest commit; a commit pin stays put. An update that asks for no new access, from the same repository, keeps its approval; one that adds capabilities, a higher execution level, commands, shortcuts or panels fails with `approval_required` and leaves the running version in place **[Verified]** (`orca plugin update --help`, Orca 1.4.261).
+- So once a tag exists, a merge to `main` reaches no one who installed without a version until the next tag.
+- Whether Orca checks that a tag matches the manifest's `version` is not known **[Assumed]**; Kickoff keeps them equal.
+- A published tag is never moved or deleted, and the history under it is not rewritten: an install is pinned to the tag's commit, and a rewrite would leave the tag on commits no branch holds. A fix goes out as a new version.
+
+To release a version, with `X.Y.Z` following semantic versioning:
+
+1. In a pull request, set `version` in `orca-plugin.json` to `X.Y.Z`, and merge it.
+2. On the updated `main`, run the checks listed in `CLAUDE.md`.
+3. Tag the merge commit and push the tag: `git tag -a vX.Y.Z -m "Kickoff X.Y.Z"`, then `git push origin vX.Y.Z`.
+4. Publish the release notes: `gh release create vX.Y.Z --verify-tag --title "Kickoff X.Y.Z" --notes-file <notes>`.
+5. Check that `orca plugin install samfaina/orca-kickoff --json`, without `--approve`, answers with `source.ref: "vX.Y.Z"`. It installs nothing without the approval.
+
 ### Worker API
 
 ```ts
