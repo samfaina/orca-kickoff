@@ -260,8 +260,7 @@ async function savePending(): Promise<void> {
   pending = null
   if (!toSave) return
   try {
-    const settings = readSettings(await storage.get(SETTINGS_KEY))
-    await storage.set(SETTINGS_KEY, withProjectChanges(settings, toSave.projectId, toSave.changes) as unknown as JsonValue)
+    await writeProjectChanges(toSave.projectId, () => toSave.changes)
   } catch (error) {
     // Kept for the next save, under the changes made meanwhile.
     const meanwhile = pending as typeof toSave | null
@@ -270,6 +269,15 @@ async function savePending(): Promise<void> {
     }
     throw error
   }
+}
+
+/** Reads the settings in storage, and writes back the changes `compute` gives for the project's
+ *  settings, unless it gives none. Answers those changes. Only through `settingsWrites`. */
+async function writeProjectChanges<T extends ProjectChanges>(projectId: string, compute: (project: ProjectSettings) => T | null): Promise<T | null> {
+  const settings = readSettings(await storage.get(SETTINGS_KEY))
+  const changes = compute(projectSettings(settings, projectId))
+  if (changes) await storage.set(SETTINGS_KEY, withProjectChanges(settings, projectId, changes) as unknown as JsonValue)
+  return changes
 }
 
 /** `earlier` changes with `later` ones on top, keeping the providers either changed. */
@@ -394,10 +402,7 @@ async function writeTemplates(draft: TemplateDraft, change: (project: ProjectSet
   try {
     changes = await settingsWrites(async () => {
       await savePending()
-      const settings = readSettings(await storage.get(SETTINGS_KEY))
-      const changes = change(projectSettings(settings, draft.projectId))
-      if (changes) await storage.set(SETTINGS_KEY, withProjectChanges(settings, draft.projectId, changes) as unknown as JsonValue)
-      return changes
+      return writeProjectChanges(draft.projectId, change)
     })
   } catch (error) {
     changeDraft(draft, { saving: false, error: `Couldn't save the template (${errorCode(error)}). Try again.` })

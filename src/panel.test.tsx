@@ -1647,6 +1647,82 @@ test('a pending Project settings change survives a failed template write, and th
   assert.deepEqual(project.templates.map((template) => template.name), ['Implement', 'Triage', 'Review'])
 })
 
+/** How long Project settings wait after a change before they save themselves. */
+const SAVE_DELAY_MS = 600
+
+/** A host with the two templates stored, whose settings writes wait until `write` is released. Its
+ *  log says when each write starts and ends, and when the worker is asked for the list. */
+function heldWritesHost(write: ReturnType<typeof held>) {
+  const log: string[] = []
+  let data: JsonValue = twoTemplates.settings
+  const host = mockHost({
+    capabilities: ['storage:own', 'workspace:read'],
+    requests: {
+      'tasks.load': () => {
+        log.push('tasks.load')
+        return ready([task('#42')])
+      }
+    },
+    results: {
+      'storage.get': () => ({ value: data }),
+      'storage.set': async (params: { key: string; value: JsonValue }) => {
+        log.push('write starts')
+        await write.released
+        data = params.value
+        log.push('write ends')
+        return { ok: true }
+      }
+    }
+  })
+  const project = () => (data as { projects: Record<string, { agent?: string; defaultTemplateId?: string }> }).projects['github:acme/web']
+  return { host, log, project }
+}
+
+// While a write is held, every act waits for it, so these tests start their acts without awaiting
+// them, and release the write before they assert anything.
+
+test('a Reload while the timed save of a change is still writing asks for the list only after that write', async () => {
+  await withTimeouts(SAVE_DELAY_MS, async ({ fire }) => {
+    const write = held()
+    const { host, log, project } = heldWritesHost(write)
+    const view = await mount(panel, { host })
+    await view.press(gear)
+    await view.select({ type: 'Select', label: 'Agent' }, 'codex')
+    await view.press({ type: 'Button', text: 'Done' })
+    log.length = 0
+    const saving = fire(view)
+    await until(() => log.includes('write starts'), 'started the timed save')
+    const reloading = view.press({ type: 'IconButton', label: 'Reload tasks' })
+    for (let turns = 0; turns < 10; turns++) await turn()
+    const whileWriting = [...log]
+    write.release()
+    await Promise.all([saving, reloading])
+    assert.deepEqual(whileWriting, ['write starts'])
+    assert.deepEqual(log, ['write starts', 'write ends', 'tasks.load'])
+    assert.equal(project().agent, 'codex')
+  })
+})
+
+test('a second change saved while the first is still writing keeps both in storage', async () => {
+  await withTimeouts(SAVE_DELAY_MS, async ({ fire, pending }) => {
+    const write = held()
+    const { host, log, project } = heldWritesHost(write)
+    const view = await mount(panel, { host })
+    await view.press(gear)
+    await view.select({ type: 'Select', label: 'Agent' }, 'codex')
+    const first = fire(view)
+    await until(() => log.includes('write starts'), 'started the first save')
+    const selecting = view.select({ type: 'Select', label: 'Default template' }, 't-impl')
+    await until(() => pending() === 1, 'timed the second save')
+    const second = fire(view)
+    for (let turns = 0; turns < 10; turns++) await turn()
+    write.release()
+    await Promise.all([first, selecting, second])
+    assert.equal(project().agent, 'codex')
+    assert.equal(project().defaultTemplateId, 't-impl')
+  })
+})
+
 test('a started task opens its worktree in Orca from the link', async () => {
   const opened: unknown[] = []
   const { view } = await showWith({
