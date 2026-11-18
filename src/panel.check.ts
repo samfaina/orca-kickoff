@@ -1,0 +1,161 @@
+// States of the panel for `orca plugin check` and `orca plugin shot --scenario`; the plugin itself
+// never loads this file. Every scenario answers every panel request itself: a request left out goes to the
+// real worker, which runs the real `orca`, `gh` and `twg` and shows real data. All data is invented,
+// and each list is short, since a tall panel draws unreliably in `shot` (`docs/reference.md`).
+import { defineCheck, type MockRequests } from 'orca/testing'
+import { DEFAULT_JQL, type JiraProviderId, type ProjectRef, type ProviderId, type Task, type TaskList, type WorktreesResult } from './protocol'
+import { INITIAL_TEMPLATE_ID, INITIAL_TEMPLATE_NAME, INITIAL_TEMPLATE_TEXT } from './template'
+
+type ReadyList = Extract<TaskList, { kind: 'ready' }>
+
+/** The answers of a panel showing `tasks`, whose project is the active one. The worktrees and the
+ *  Starts under way are the list's own. A Start, or opening a worktree, does nothing. */
+function answers(tasks: TaskList): MockRequests {
+  let worktrees: WorktreesResult = { kind: 'ready', worktrees: {} }
+  let starting: string[] = []
+  if (tasks.kind === 'ready') {
+    worktrees =
+      tasks.worktrees === null
+        ? { kind: 'error', message: tasks.worktreesError ?? "Couldn't read Orca's worktrees." }
+        : { kind: 'ready', worktrees: tasks.worktrees }
+    starting = tasks.starting
+  }
+  return {
+    'tasks.load': tasks,
+    'worktrees.load': worktrees,
+    'project.active': { projectId: 'project' in tasks && tasks.project ? tasks.project.id : null },
+    'starts.load': { starting },
+    'jira.sites': { kind: 'ready', sites: [{ id: 'site-1', name: 'example.atlassian.net' }] },
+    'task.start': { ok: false, message: 'Starting is off in check scenarios.' },
+    'worktree.open': { ok: false, message: 'Opening a worktree is off in check scenarios.' }
+  }
+}
+
+/** A project with a GitHub repository, which lists its open tasks with no setup. */
+const web: ProjectRef = { id: 'github:acme/web', name: 'web', repo: 'acme/web' }
+/** A project with no GitHub repository, so it has no tracker until one is chosen. */
+const notes: ProjectRef = { id: 'repo:notes', name: 'notes', repo: null }
+
+/** A ready list, with no task worktree unless `fields` says otherwise. */
+const ready = (project: ProjectRef, provider: ProviderId, tasks: Task[], fields: Partial<ReadyList> = {}): ReadyList => ({
+  kind: 'ready',
+  project,
+  provider,
+  tasks,
+  nextCursor: null,
+  truncated: false,
+  worktrees: {},
+  worktreesError: null,
+  starting: [],
+  warning: null,
+  ...fields
+})
+
+const githubTask = (number: number, title: string, labels: string[] = []): Task => ({
+  tracker: 'github',
+  key: `#${number}`,
+  title,
+  url: `https://github.com/acme/web/issues/${number}`,
+  description: '',
+  status: 'Open',
+  statusCategory: 'todo',
+  assignees: [],
+  labels
+})
+
+const githubTasks: Task[] = [
+  githubTask(42, 'Add dark mode to settings', ['ui', 'enhancement']),
+  githubTask(41, 'Fix the login redirect after a session expires', ['bug']),
+  githubTask(39, 'Document the release steps'),
+  githubTask(37, 'Cache the avatar images', ['performance'])
+]
+
+const jiraTask = (key: string, title: string, status: string, category: Task['statusCategory'], labels: string[] = []): Task => ({
+  tracker: 'jira',
+  key,
+  title,
+  url: `https://example.atlassian.net/browse/${key}`,
+  description: '',
+  status,
+  statusCategory: category,
+  assignees: ['Ana Example'],
+  labels
+})
+
+const jiraTasks: Task[] = [
+  jiraTask('WEB-12', 'Add dark mode to settings', 'In Progress', 'in_progress', ['ui']),
+  jiraTask('WEB-14', 'Show the order history on the account page', 'In Progress', 'in_progress'),
+  jiraTask('WEB-15', 'Retry failed payments once', 'To Do', 'todo', ['payments']),
+  jiraTask('WEB-16', 'Remove the old checkout banner', 'To Do', 'todo'),
+  jiraTask('WEB-18', 'Translate the error pages', 'To Do', 'todo', ['i18n', 'ui'])
+]
+
+/** The stored settings of `web` reading Jira through `provider`, with two prompt templates so the
+ *  cards that can start offer a choice. */
+const jiraSettings = (provider: JiraProviderId) => ({
+  settings: {
+    version: 1,
+    projects: {
+      [web.id]: {
+        provider,
+        providers: {
+          'jira-orca': { jql: DEFAULT_JQL, siteId: '' },
+          'jira-twg': { jql: DEFAULT_JQL, site: 'example.atlassian.net', profile: '' }
+        },
+        templates: [
+          { id: INITIAL_TEMPLATE_ID, name: INITIAL_TEMPLATE_NAME, text: INITIAL_TEMPLATE_TEXT },
+          { id: 'test-first', name: 'Test first', text: '/tdd {{task_key}}: {{task_title}}\n\n{{task_description}}' }
+        ],
+        defaultTemplateId: INITIAL_TEMPLATE_ID
+      }
+    }
+  }
+})
+
+/** Through twg, which pages: WEB-12 runs an agent, WEB-14 has a worktree with none, and WEB-15 is
+ *  starting. */
+const jiraStarted = ready(web, 'jira-twg', jiraTasks, {
+  nextCursor: 'cursor-2',
+  worktrees: {
+    'WEB-12': { worktreeId: 'wt-12', name: 'web-12-add-dark-mode-to', agent: 'claude' },
+    'WEB-14': { worktreeId: 'wt-14', name: 'web-14-show-the-order-history', agent: null }
+  },
+  starting: ['WEB-15']
+})
+
+/** What the worker answers when twg has no login, when the Orca CLI can't be found, and when
+ *  `orca worktree list` fails. */
+const TWG_LOGGED_OUT =
+  "twg failed: authentication required. No valid credentials found. You're not signed in. Run `twg login --force` to authenticate with your Atlassian account."
+const ORCA_MISSING =
+  "Couldn't find the Orca CLI. It comes with Orca: reinstall or update Orca, and connect Jira in Orca's settings if you read Jira through Orca. Or set ORCA_CLI_COMMAND to the full path of the CLI."
+const ORCA_SLOW = "orca didn't answer in time."
+
+export default defineCheck({
+  'no-project': { requests: answers({ kind: 'no-project' }) },
+  // Project settings opens by itself, with a tracker to choose.
+  'needs-config': { requests: answers({ kind: 'needs-config', project: notes }) },
+  'github-ready': { requests: answers(ready(web, 'github', githubTasks)) },
+  'jira-started': { storage: jiraSettings('jira-twg'), requests: answers(jiraStarted) },
+  // Five tasks stand for the 100 Orca's Jira search answers at most.
+  truncated: {
+    storage: jiraSettings('jira-orca'),
+    requests: answers(ready(web, 'jira-orca', jiraTasks, { truncated: true }))
+  },
+  // Project settings opens by itself on a failed load, on the tracker that failed; Done shows the
+  // error.
+  'tracker-error': {
+    storage: jiraSettings('jira-twg'),
+    requests: answers({ kind: 'error', project: web, message: TWG_LOGGED_OUT })
+  },
+  // With no project known there are no Project settings to open, so the error shows at once.
+  'orca-error': {
+    requests: {
+      ...answers({ kind: 'error', project: null, message: ORCA_MISSING }),
+      'project.active': { kind: 'error', message: ORCA_MISSING }
+    }
+  },
+  'worktrees-unavailable': {
+    requests: answers(ready(web, 'github', githubTasks, { worktrees: null, worktreesError: ORCA_SLOW }))
+  }
+})
