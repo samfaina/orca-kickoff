@@ -28,6 +28,7 @@ Update this file when a fact is confirmed or disproved. All example data is inve
   "version": "0.1.0",
   "description": "...",
   "license": "MIT",
+  "icon": "assets/icon.png",
   "engines": { "orca": ">=1.4.255" },
   "execution": "trusted-worker",
   "pluginApi": 1,
@@ -61,6 +62,21 @@ Capabilities and the Orca version they need **[Verified]**:
 | `storage:own` | 1.4.245 |
 | `secrets:own` (system keychain) | 1.4.245 |
 | `settings:own` | 1.4.160 |
+
+### Plugin icon
+
+- `icon` (since 1.4.160) is the image Orca shows beside the plugin's name: a square, static PNG or WEBP, at least 128×128, at most 256 KB **[Verified]** (`orca skills get orca-plugin-authoring --reference manifest`, Orca 1.4.261). It is separate from a panel's `icon`, which names one of Orca's built-in icons (`zap`, `play`, `branch`, ...).
+- Kickoff's icon is `assets/icon.png`, 512×512, exported from `assets/icon.svg`. It is a task card with a play button on an indigo (`#4F46E5`) rounded square, drawn by hand with no image generator and no icon set. It was chosen in issue #71; the other variants are on the `prototype/icon` branch.
+- Microsoft Edge in headless mode exports an SVG to a PNG of an exact size on Windows, with the corners outside the rounded square left transparent **[Verified]** with Edge on Windows 11 (issue #71). `--force-device-scale-factor=1` keeps Windows display scaling out of the size, `--default-background-color=00000000` makes the background transparent, and a separate `--user-data-dir` keeps an Edge window that is already open from taking the call. In PowerShell, from the repository root:
+
+  ```powershell
+  $edge = "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"
+  $svg = ([Uri](Resolve-Path assets/icon.svg).Path).AbsoluteUri
+  Start-Process $edge -Wait -ArgumentList '--headless', '--disable-gpu', '--hide-scrollbars',
+    '--force-device-scale-factor=1', "--user-data-dir=$env:TEMP\kickoff-icon-export",
+    '--window-size=512,512', '--default-background-color=00000000',
+    "--screenshot=$PWD\assets\icon.png", $svg
+  ```
 
 ### Worker API
 
