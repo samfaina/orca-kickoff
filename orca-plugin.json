@@ -6,6 +6,10 @@
   "description": "Lists open tasks from Jira or GitHub and starts each one in its own linked worktree, with an agent and per-project prompt templates.",
   "license": "MIT",
   "icon": "assets/icon.png",
+  "cover": {
+    "path": "assets/cover.png",
+    "alt": "Kickoff with the line \"Your prompt templates, one click from any GitHub or Jira task.\" and an arrow to the open template menu in its panel."
+  },
   "engines": {
     "orca": ">=1.4.255"
   },

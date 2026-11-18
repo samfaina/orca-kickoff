@@ -80,6 +80,24 @@ Capabilities and the Orca version they need **[Verified]**:
     "--screenshot=$PWD\assets\icon.png", $svg
   ```
 
+### Plugin cover
+
+- `cover` (since 1.4.245) is the wide image at the top of the plugin page: `cover.path` is a static PNG, JPEG or WEBP, at least 800×500, at most 1024 KB, 16:10 recommended (1600×1000), and `cover.alt`, required, says what it shows for screen readers **[Verified]** (`orca skills get orca-plugin-authoring --reference manifest`, Orca 1.4.261). `cover.alt` takes at most 160 characters: `orca plugin validate` refuses a longer one with "cover.alt: must be at most 160 characters", a limit the reference doesn't state **[Verified]** with Orca 1.4.261 (issue #72).
+- Orca draws the cover in two places, both cropped to 16:10 with `object-cover`: on the plugin's card in the plugin list, above its name and description, and in the hero at the top of the plugin's page, in a rounded, bordered frame **[Verified]** by reading the Settings bundle of Orca 1.4.261. How wide each one is inside Orca was not measured.
+- Kickoff's cover is `assets/cover.png`, 1600×1000, about 560 KB, exported from `assets/cover.html`. On the icon's slate gradient, the name and the line "Your prompt templates, one click from any GitHub or Jira task." sit on the left, and Kickoff's panel in Orca's dark theme on the right, drawn in HTML with the tasks of the `jira-started` check scenario (without WEB-14, so the open menu fits). The template menu of WEB-16 is open with `implement`, `prototype` and `review`, which are example names. A mint underline, tapered to a point, sits behind "prompt templates", and a curved arrow runs from under its last "e" to the menu; a script in the page places both from the layout. It is drawn by hand, with no image generator and no icon set. It was chosen in issue #72, as variant C-A.
+- Edge in headless mode exports an HTML page to a PNG of exactly 1600×1000 on Windows **[Verified]** with Edge on Windows 11 (issue #72). `--virtual-time-budget` gives the page time to load its fonts and run its script before the capture. The page uses Segoe UI, so export it on Windows; elsewhere it falls back to another font **[Assumed]**. In PowerShell, from the repository root:
+
+  ```powershell
+  $edge = "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"
+  $src = ([Uri](Resolve-Path assets/cover.html).Path).AbsoluteUri
+  Start-Process $edge -Wait -ArgumentList '--headless', '--disable-gpu', '--hide-scrollbars',
+    '--force-device-scale-factor=1', "--user-data-dir=$env:TEMP\kickoff-cover-export",
+    '--window-size=1600,1000', '--default-background-color=FFFFFFFF', '--virtual-time-budget=3000',
+    "--screenshot=$PWD\assets\cover.png", $src
+  ```
+
+- A real shot of the panel is a poor source for a cover: `orca plugin shot --scenario` captures at 1× CSS pixels (320×680 for a 320 px panel), so it blurs when enlarged, and a scenario replay takes no `--act`, so it cannot open the template `Select` **[Verified]** (issue #72, `orca plugin shot --help`). With Orca's window minimized by a script (`ShowWindowAsync`), 2 of 6 scenario shots showed the panel and 4 showed Orca's own window, all reporting `ok`.
+
 ### Worker API
 
 ```ts
