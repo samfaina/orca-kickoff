@@ -1444,10 +1444,11 @@ function Body({ list }: { list: TaskList }) {
   }
 }
 
-/** "Filters", open at first: a header that opens and closes it, then the filter row and `children`,
- *  Search tasks on a ready list. Not a Collapsible, which would indent them. Closed, the header
- *  says the filter shown and the trimmed `words` of the text filter, so neither is hidden. A divider
- *  follows it. It shows nothing while it would hold nothing. */
+/** "Filters", open at first: a header as wide as the panel, as a Collapsible's, that opens and
+ *  closes it, then the filter row and `children`, Search tasks on a ready list. Not a Collapsible,
+ *  which would indent them. Closed, a line under the header says the filter shown and the trimmed
+ *  `words` of the text filter, so neither is hidden. A divider follows it. It shows nothing while it
+ *  would hold nothing. */
 function FiltersSection({ projectId, words = '', children }: { projectId: string; words?: string; children?: OrcaNode }) {
   const open = read(filtersOpen)
   const shown = read(shownSettings)
@@ -1459,27 +1460,23 @@ function FiltersSection({ projectId, words = '', children }: { projectId: string
   return (
     <>
       <Box direction="column" gap="xs">
-        <Box direction="row" align="center" gap="xs">
-          <Box shrink={false}>
-            <Button
-              key="filters-toggle"
-              size="sm"
-              variant="ghost"
-              icon={open ? 'collapse' : 'expand'}
-              tooltip={open ? 'Hide filters' : 'Show filters'}
-              onPress={() => set(filtersOpen, !open)}
-            >
-              Filters
-            </Button>
-          </Box>
-          {!open && summary !== '' ? (
-            <Box grow minWidth={0}>
-              <Text size="sm" muted truncate>
-                {summary}
-              </Text>
-            </Box>
-          ) : null}
-        </Box>
+        <Stack align="stretch">
+          <Button
+            key="filters-toggle"
+            size="sm"
+            variant="ghost"
+            icon={open ? 'collapse' : 'expand'}
+            tooltip={open ? 'Hide filters' : 'Show filters'}
+            onPress={() => set(filtersOpen, !open)}
+          >
+            Filters
+          </Button>
+        </Stack>
+        {!open && summary !== '' ? (
+          <Text size="sm" muted truncate>
+            {summary}
+          </Text>
+        ) : null}
         {open ? (
           <Stack gap="sm">
             <FilterRow projectId={projectId} />

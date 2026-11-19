@@ -3108,19 +3108,22 @@ test('a change of active project while the filter editor is open drops the draft
 /** The button that opens and closes "Filters", the header of its section. */
 const filtersToggle = { type: 'Button', text: 'Filters' }
 
-/** Whether `node` is the section "Filters": its first child is the header row, which holds the
- *  toggle, then, while it is open, what it holds. Orca keeps the keys of controls only, so the
- *  toggle's key finds it. */
+/** Whether `node` is the section "Filters": its first child is the header, a `Stack` that stretches
+ *  the toggle across the width, as a Collapsible's header; then the summary while it is closed, or
+ *  what it holds while it is open. Orca keeps the keys of controls only, so the toggle's key finds it. */
 function isFiltersSection(node: TreeSnapshot | string): node is TreeSnapshot {
   if (typeof node === 'string') return false
   const [header] = node.children ?? []
-  return (
-    header !== undefined &&
-    typeof header !== 'string' &&
-    header.type === 'Box' &&
-    header.props?.direction === 'row' &&
-    nodesIn(header, (inner) => inner.key === 'filters-toggle').length > 0
-  )
+  if (header === undefined || typeof header === 'string' || header.type !== 'Stack' || header.props?.align !== 'stretch') return false
+  const [toggle, ...others] = header.children ?? []
+  return typeof toggle !== 'string' && toggle?.key === 'filters-toggle' && others.length === 0
+}
+
+/** The types of the parts of "Filters": its header, then the summary or what it holds. */
+function filtersParts(view: TestPanel): string[] {
+  const [section] = nodesIn(view.tree(), isFiltersSection)
+  assert.ok(section, 'no "Filters"')
+  return (section.children ?? []).map((node) => (typeof node === 'string' ? 'text' : node.type))
 }
 
 /** The kinds and labels of the controls drawn in "Filters", its header first, in order. */
@@ -3141,9 +3144,10 @@ function filtersOpen(view: TestPanel): boolean {
   return open
 }
 
-test('"Filters", open at first, holds the filter row and Search tasks, with its hint and Search in Jira, flush under its own header; closed, it says the filter and the text', async () => {
+test('"Filters", open at first, holds the filter row and Search tasks, with its hint and Search in Jira, flush under a header as wide as the panel; closed, it says the filter and the text under it', async () => {
   const { view } = await showFilters(filtersStored([tasksFilter, boardFilter], 'f-board'))
   assert.equal(filtersOpen(view), true)
+  assert.deepEqual(filtersParts(view), ['Stack', 'Stack'])
   assert.equal(view.find(filtersToggle)?.props.variant, 'ghost')
   assert.equal(view.find(filtersToggle)?.props.size, 'sm')
   // No Collapsible: it would indent what it holds.
@@ -3165,6 +3169,7 @@ test('"Filters", open at first, holds the filter row and Search tasks, with its 
   assert.equal(view.find(filterSelect), null)
   assert.equal(view.find(searchField), null)
   assert.deepEqual(controlsInFilters(view), ['Button Filters'])
+  assert.deepEqual(filtersParts(view), ['Stack', 'Text'])
   assert.equal(view.find({ type: 'Text', text: 'Board · "dark"' })?.props.muted, true)
   assert.ok(view.find({ type: 'Button', text: 'Clear search' }))
   await view.press({ type: 'Button', text: 'Clear search' })
