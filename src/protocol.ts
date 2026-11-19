@@ -34,16 +34,29 @@ export type ProjectRef = {
   repo: string | null
 }
 
-/** Each provider's configuration, kept separately so switching provider and back loses nothing.
- *  A Jira provider's `jql` is its JQL queries, in order, as the settings show them: blank ones
- *  are kept, so the person can type into a new one, and never run. */
+/** Each provider's configuration, kept separately so switching provider and back loses nothing:
+ *  how it reads the tracker. What it lists is a filter, which belongs to the tracker. */
 export type ProviderConfigs = {
   github?: {}
   /** siteId '' = Orca's default site. */
-  'jira-orca'?: { jql: string[]; siteId: string }
+  'jira-orca'?: { siteId: string }
   /** '' = twg's default. */
-  'jira-twg'?: { jql: string[]; site: string; profile: string }
+  'jira-twg'?: { site: string; profile: string }
 }
+
+/** A named way to ask the tracker for a project's tasks. */
+export type Filter = {
+  /** Stable, made by the panel; never shown. */
+  id: string
+  /** Trimmed, not empty, unique in the project ignoring case. */
+  name: string
+  /** Its tracker queries, in order, as the filter editor shows them (JQL on Jira): blank ones are
+   *  kept, so the person can type into a new one, and never run. */
+  queries: string[]
+}
+
+/** A value per tracker that has filters. Only Jira has them so far; GitHub's go under its own key. */
+export type ByTracker<T> = { jira?: T }
 
 /** 'orca-default', 'none', or any other string as an Orca agent id. */
 export type AgentChoice = string
@@ -62,6 +75,11 @@ export type ProjectSettings = {
   /** undefined: GitHub when the project has a repo, else none. */
   provider?: ProviderId
   providers: ProviderConfigs
+  /** The filters of each tracker, in order; both Jira providers list the same ones. Undefined or
+   *  empty on Jira: one filter "Tasks" with DEFAULT_JQL. */
+  filters?: ByTracker<Filter[]>
+  /** The filter each tracker showed last; undefined or unknown: the first. */
+  shownFilterId?: ByTracker<string>
   /** undefined or empty: one template "Default" with INITIAL_TEMPLATE_TEXT. */
   templates?: PromptTemplate[]
   /** undefined or unknown: the first template. */
@@ -76,6 +94,12 @@ export type Settings = { version: 1; projects: Record<string, ProjectSettings> }
 export const SETTINGS_KEY = 'settings'
 
 export const DEFAULT_JQL = 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC'
+
+/** The id and name of the filter a Jira project has before it stores any (src/filter.ts). Settings
+ *  stored before filters, with JQL queries on a Jira provider, read as this filter with those
+ *  queries. */
+export const INITIAL_FILTER_ID = 'tasks'
+export const INITIAL_FILTER_NAME = 'Tasks'
 
 const PROVIDER_IDS: readonly ProviderId[] = ['github', 'jira-orca', 'jira-twg']
 
@@ -93,6 +117,12 @@ export function readSettings(raw: unknown): Settings {
 function readProjectSettings(raw: Record<string, unknown>): ProjectSettings {
   const project: ProjectSettings = { providers: readProviderConfigs(raw.providers) }
   if (PROVIDER_IDS.includes(raw.provider as ProviderId)) project.provider = raw.provider as ProviderId
+  const filters = readFilters(isRecord(raw.filters) ? raw.filters.jira : undefined)
+  // A project stored before filters kept its JQL queries on each Jira provider.
+  const jql = filters.length === 0 ? jqlStoredBeforeFilters(raw.providers, project.provider) : null
+  if (jql !== null) filters.push({ id: INITIAL_FILTER_ID, name: INITIAL_FILTER_NAME, queries: jql })
+  if (filters.length > 0) project.filters = { jira: filters }
+  if (isRecord(raw.shownFilterId) && typeof raw.shownFilterId.jira === 'string') project.shownFilterId = { jira: raw.shownFilterId.jira }
   const templates = readTemplates(raw.templates)
   // A project stored before it could have several templates kept one text in `template`.
   if (templates.length === 0 && typeof raw.template === 'string') {
@@ -119,27 +149,51 @@ function readTemplates(raw: unknown): PromptTemplate[] {
   return templates
 }
 
+/** The stored filters of the expected shape, in order, names trimmed. A filter whose id or name,
+ *  ignoring case, an earlier one already has is dropped too. */
+function readFilters(raw: unknown): Filter[] {
+  const filters: Filter[] = []
+  if (!Array.isArray(raw)) return filters
+  for (const item of raw) {
+    if (!isRecord(item)) continue
+    const { queries } = item
+    if (!strings(item, 'id', 'name') || !isStringList(queries)) continue
+    const name = item.name.trim()
+    if (item.id === '' || name === '') continue
+    if (filters.some((filter) => filter.id === item.id || filter.name.toLowerCase() === name.toLowerCase())) continue
+    filters.push({ id: item.id, name, queries: [...queries] })
+  }
+  return filters
+}
+
+/** The JQL queries a project stored before filters, or null when it stored none: those of the
+ *  Jira provider chosen, else of Jira (Orca connection), else of Jira (twg). Before a project could
+ *  have several queries, a provider stored one string, which is read as a list of one. */
+function jqlStoredBeforeFilters(raw: unknown, provider: ProviderId | undefined): string[] | null {
+  if (!isRecord(raw)) return null
+  const order: JiraProviderId[] = provider === 'jira-twg' ? ['jira-twg', 'jira-orca'] : ['jira-orca', 'jira-twg']
+  for (const id of order) {
+    const config = raw[id]
+    if (!isRecord(config)) continue
+    if (typeof config.jql === 'string') return [config.jql]
+    if (isStringList(config.jql)) return [...config.jql]
+  }
+  return null
+}
+
+function isStringList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+}
+
 function readProviderConfigs(raw: unknown): ProviderConfigs {
   const configs: ProviderConfigs = {}
   if (!isRecord(raw)) return configs
   if (isRecord(raw.github)) configs.github = {}
-  const orca = readJiraConfig(raw['jira-orca'])
-  if (orca && strings(orca.stored, 'siteId')) configs['jira-orca'] = { jql: orca.jql, siteId: orca.stored.siteId }
-  const twg = readJiraConfig(raw['jira-twg'])
-  if (twg && strings(twg.stored, 'site', 'profile')) {
-    configs['jira-twg'] = { jql: twg.jql, site: twg.stored.site, profile: twg.stored.profile }
-  }
+  const orca = raw['jira-orca']
+  if (isRecord(orca) && strings(orca, 'siteId')) configs['jira-orca'] = { siteId: orca.siteId }
+  const twg = raw['jira-twg']
+  if (isRecord(twg) && strings(twg, 'site', 'profile')) configs['jira-twg'] = { site: twg.site, profile: twg.profile }
   return configs
-}
-
-/** A Jira provider's stored configuration with its JQL queries read, or null when it isn't a
- *  record or its JQL is of an unexpected shape. Before a project could have several queries, it
- *  stored one string, which is read as a list of one. */
-function readJiraConfig(raw: unknown): { stored: Record<string, unknown>; jql: string[] } | null {
-  if (!isRecord(raw)) return null
-  if (typeof raw.jql === 'string') return { stored: raw, jql: [raw.jql] }
-  if (Array.isArray(raw.jql) && raw.jql.every((jql) => typeof jql === 'string')) return { stored: raw, jql: [...raw.jql] }
-  return null
 }
 
 function strings<K extends string>(record: Record<string, unknown>, ...keys: K[]): record is Record<K, string> {
@@ -149,6 +203,23 @@ function strings<K extends string>(record: Record<string, unknown>, ...keys: K[]
 /** A project's settings, or empty ones when it has none. */
 export function projectSettings(settings: Settings, projectId: string): ProjectSettings {
   return settings.projects[projectId] ?? { providers: {} }
+}
+
+/** The part of a project's settings that holds its filters. */
+export type FilterSettings = Pick<ProjectSettings, 'filters' | 'shownFilterId'>
+
+/** A Jira project's filters, in their order: the stored ones, or the initial one, "Tasks" with
+ *  DEFAULT_JQL, when none is stored. */
+export function projectFilters(settings: FilterSettings): Filter[] {
+  const filters = settings.filters?.jira
+  if (filters && filters.length > 0) return filters
+  return [{ id: INITIAL_FILTER_ID, name: INITIAL_FILTER_NAME, queries: [DEFAULT_JQL] }]
+}
+
+/** The filter to list: the one `id` names, else the one shown last, else the first. */
+export function listedFilter(settings: FilterSettings, id?: string): Filter {
+  const filters = projectFilters(settings)
+  return filters.find((filter) => filter.id === id) ?? filters.find((filter) => filter.id === settings.shownFilterId?.jira) ?? filters[0]
 }
 
 /** The provider a project reads tasks with: the chosen one, else GitHub when it has a repo. */
@@ -161,21 +232,16 @@ export function trackerOf(provider: ProviderId): TrackerId {
   return provider === 'github' ? 'github' : 'jira'
 }
 
-/** A provider's stored configuration, or its defaults when none is stored. A Jira provider's
- *  default JQL queries are the other Jira provider's, all of them, or DEFAULT_JQL alone. */
-export function providerConfig<K extends ProviderId>(settings: ProjectSettings, id: K): Required<ProviderConfigs>[K] {
-  const { providers } = settings
-  const defaults: Required<ProviderConfigs> = {
-    github: {},
-    'jira-orca': { jql: [...(providers['jira-twg']?.jql ?? [DEFAULT_JQL])], siteId: '' },
-    'jira-twg': { jql: [...(providers['jira-orca']?.jql ?? [DEFAULT_JQL])], site: '', profile: '' }
-  }
-  const configs: Required<ProviderConfigs> = { ...defaults, ...providers }
+/** A provider's stored configuration, or its defaults when none is stored: the tool's own default
+ *  site and profile. The filters don't depend on it: both Jira providers list the same ones. */
+export function providerConfig<K extends ProviderId>(settings: Pick<ProjectSettings, 'providers'>, id: K): Required<ProviderConfigs>[K] {
+  const defaults: Required<ProviderConfigs> = { github: {}, 'jira-orca': { siteId: '' }, 'jira-twg': { site: '', profile: '' } }
+  const configs: Required<ProviderConfigs> = { ...defaults, ...settings.providers }
   return configs[id]
 }
 
 /** One JQL query to run: trimmed, each line break a space, and its position from 1 among the
- *  queries as the settings show them, blank ones included. */
+ *  filter's queries as the filter editor shows them, blank ones included. */
 export type JqlQuery = { jql: string; position: number }
 
 /** The JQL queries that run, in order: the non-blank ones. What is stored doesn't change. */
@@ -186,14 +252,15 @@ export function jqlQueries(jql: readonly string[]): JqlQuery[] {
   })
 }
 
-/** How many queries a provider runs to list the project's tasks: its non-blank JQL queries on
- *  Jira, one on GitHub. */
-export function queryCount(settings: ProjectSettings, id: ProviderId): number {
-  return id === 'github' ? 1 : jqlQueries(providerConfig(settings, id).jql).length
+/** How many queries a provider runs to list the project's tasks: on Jira, the non-blank JQL
+ *  queries of the filter `filterId` names, or of the one `listedFilter` lists without it; one on
+ *  GitHub. */
+export function queryCount(settings: ProjectSettings, id: ProviderId, filterId?: string): number {
+  return id === 'github' ? 1 : jqlQueries(listedFilter(settings, filterId).queries).length
 }
 
-/** Chooses a provider, keeping every provider's configuration and filling in the chosen one's
- *  defaults the first time. */
+/** Chooses a provider, keeping every provider's configuration and the filters, and filling in the
+ *  chosen one's defaults the first time. */
 export function chooseProvider(settings: ProjectSettings, provider: ProviderId): ProjectSettings {
   return { ...settings, provider, providers: { ...settings.providers, [provider]: providerConfig(settings, provider) } }
 }
@@ -230,7 +297,9 @@ export type TaskList =
   | { kind: 'no-project' }
   /** No provider for this project. */
   | { kind: 'needs-config'; project: ProjectRef }
-  | { kind: 'error'; project: ProjectRef | null; message: string }
+  /** `filterId`: the filter one of whose queries failed, or that has none to run; the panel opens
+   *  the filter editor on it. */
+  | { kind: 'error'; project: ProjectRef | null; message: string; filterId?: string }
   | {
       kind: 'ready'
       project: ProjectRef
@@ -238,8 +307,10 @@ export type TaskList =
       tasks: Task[]
       nextCursor: string | null
       truncated: boolean
-      /** How many queries listed the tasks: the non-blank JQL queries on Jira, 1 on GitHub. A
-       *  truncated list's notice says whether it has the first 100 of each. */
+      /** The filter listed; null on GitHub, which has no filters yet. */
+      filterId: string | null
+      /** How many queries listed the tasks: the filter's non-blank JQL queries on Jira, 1 on
+       *  GitHub. A truncated list's notice says whether it has the first 100 of each. */
       queryCount: number
       /** null when Orca's worktrees couldn't be read. */
       worktrees: Record<string, TaskWorktree> | null
@@ -278,9 +349,10 @@ export type StartEnded = { projectId: string; taskKey: string; agent: string | n
 
 declare module 'orca' {
   interface PluginRequests {
-    /** `query`: a tracker search with the user's words; `cursor`: the next page of the list, or
-     *  of the tracker search with the same `query`. */
-    'tasks.load': { input: { cursor?: string; query?: string }; output: TaskList }
+    /** `filterId`: the filter of the active project to list; undefined or unknown, the one it
+     *  showed last. `query`: a tracker search with the user's words; `cursor`: the next page of the
+     *  filter's list, or of the tracker search with the same `query`. */
+    'tasks.load': { input: { filterId?: string; cursor?: string; query?: string }; output: TaskList }
     'worktrees.load': { input: { projectId: string }; output: WorktreesResult }
     'project.active': { input: {}; output: ActiveProjectResult }
     'jira.sites': { input: {}; output: JiraSitesResult }

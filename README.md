@@ -33,10 +33,10 @@ Open the **Kickoff** panel from its icon (a lightning bolt) in Orca's right side
 - **A project with a GitHub repository** lists its open issues with no setup.
 - **Any other project** opens **Project settings** by itself. Choose a tracker:
   - **GitHub**, for a project whose repository Orca knows.
-  - **Jira (Orca connection)**: one or more JQL queries, and the site when Orca is connected to more than one (Orca's default site otherwise).
-  - **Jira (twg)**: one or more JQL queries, and optionally `twg`'s site and profile.
+  - **Jira (Orca connection)**: the site, when Orca is connected to more than one (Orca's default site otherwise).
+  - **Jira (twg)**: optionally `twg`'s site and profile.
 
-  The JQL starts as `assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC`. **+** adds a query and **−** removes one. The list shows the tasks of the first query, then those of the next that the earlier ones didn't list, each in Jira's order; a blank query is skipped. A query can span several lines, and **Ctrl+Enter** (**Cmd+Enter** on macOS) in it lists the tasks. The gear in the panel's header opens Project settings again later, and **Done** goes back to the list, loading it again when a tracker setting changed.
+  **Done** shows the project's tasks: on Jira, those of its first [filter](#filters-jira), **Tasks**. The gear in the panel's header opens Project settings again later, and **Done** goes back to the list, loading it again when a tracker setting changed.
 
 Each task shows as a card with its key and title, then its labels, after its status on Jira, then its assignees, if any. **Start** (the play button):
 
@@ -51,9 +51,24 @@ Creating the worktree can take a minute. Once it exists, the card shows the work
 - **Agent**: Orca's default agent, a named one (`claude`, `codex`, `gemini`, `opencode`, `copilot`), or none. If Orca's default can't be read, Start says so and asks you to pick one.
 - **Prompt templates**: a project can have several, each with a name. The default template is used unless you choose another on a task's card. The pencil edits the template chosen as default, and **+** adds one.
 
-The **Search tasks** field above the list filters the loaded tasks as you type, by key, title or label. **Enter** (or **Search in GitHub** / **Search in Jira**) asks the tracker instead, for the tasks of the same list that match your words, including those not loaded yet. **Clear search** goes back to the list.
+The **Search tasks** field above the list narrows the loaded tasks as you type, by key, title or label. **Enter** (or **Search in GitHub** / **Search in Jira**) asks the tracker instead, for the tasks of the same list that match your words, including those not loaded yet. **Clear search** goes back to the list.
 
 GitHub lists up to 100 tasks, and Orca's Jira connection up to 100 per JQL query, and both say so when there are more. With `twg`, a page holds up to 50 tasks, filled from each query in turn, and **Load more** reads the next one.
+
+### Filters (Jira)
+
+A filter is a named way to ask Jira for the project's tasks, made of one or more JQL queries in order. A Jira project starts with one, **Tasks**, whose query is `assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC`, and can have several: for example the board's tasks in board order, and the tasks assigned to you.
+
+The row above **Search tasks** shows the filter listed, with ✎ to edit it and **+** to add one. Choosing another filter loads its tasks from Jira, keeping the words in **Search tasks**; the panel opens on the filter shown last. Both Jira providers list the same filters.
+
+✎ and **+** open the filter editor in place of the list. A new filter is named **Filter 2**, **Filter 3**…, with one blank query. In the editor:
+
+- **Name**: not empty, and unique in the project, ignoring case.
+- **JQL**, **JQL 2**…: the list shows the tasks of the first query, then those of the next that the earlier ones didn't list, each in Jira's order; a blank query is kept and skipped. **Add JQL** adds a query and the trash can removes one. A query can span several lines.
+- **Save** (or **Ctrl+Enter**, **Cmd+Enter** on macOS, in a query) stores the filter, goes back to the list and loads it. **Cancel** goes back without storing anything.
+- **Delete filter**, clicked twice, removes the filter; a project keeps at least one.
+
+A query Jira rejects names its filter and its place in it, such as `Board: JQL query 2 failed: …`, and the panel opens the filter editor on that filter. A failure that isn't about a query, such as a missing `twg` login or Jira connection, opens Project settings, as before. Settings stored before filters, with JQL in Project settings, become one filter, **Tasks**, with those queries.
 
 ## Prompt templates
 
@@ -109,7 +124,7 @@ The type check points at most of these once the id is added to `ProviderId`. A p
 
 - **The same task can be started in two projects.** Kickoff looks for a task's worktree in the active project only, so two Orca projects that read the same tracker can each start it.
 - **A renamed worktree without an Orca link isn't found.** A worktree counts as started for a task when Orca links it to the task, or, as a fallback, when its name starts with the task's key (`web-12-…`, `issue-42-…`). A worktree that has no link and was renamed is seen by neither.
-- GitHub lists at most 100 tasks, and Orca's Jira connection at most 100 per JQL query; a tracker search with them gives at most as many results: narrow the JQL on Jira, or refine the search. Only `twg` pages, 50 tasks at a time, filled from each query in turn.
+- GitHub lists at most 100 tasks, and Orca's Jira connection at most 100 per JQL query; a tracker search with them gives at most as many results: narrow the filter's JQL on Jira, or refine the search. Only `twg` pages, 50 tasks at a time, filled from each query in turn.
 - On Windows, Kickoff gives the tools the default `APPDATA` folder, which Orca leaves out of the worker's environment. If yours is redirected elsewhere, the tools can't find their login or Orca.
 
 ## Development

@@ -1,5 +1,5 @@
 import { assert, test } from 'orca/testing'
-import { chooseProvider, projectProvider, projectSettings, readSettings, withProjectChanges } from './protocol'
+import { chooseProvider, projectProvider, projectSettings, queryCount, readSettings, withProjectChanges } from './protocol'
 import { defaultTemplate, projectTemplates } from './template'
 
 const web = { id: 'github:acme/web', name: 'web', repo: 'acme/web' }
@@ -20,7 +20,8 @@ test('unexpected fields of a project are dropped and the rest is kept', () => {
     projects: {
       [web.id]: {
         provider: 'linear',
-        providers: { 'jira-orca': { jql: 'project = WEB', siteId: 7 }, 'jira-twg': { jql: 'project = WEB', site: '', profile: '' } },
+        providers: { 'jira-orca': { siteId: 7 }, 'jira-twg': { site: '', profile: '' } },
+        shownFilterId: { jira: 3 },
         template: 42,
         agent: 'codex'
       },
@@ -28,43 +29,78 @@ test('unexpected fields of a project are dropped and the rest is kept', () => {
     }
   })
   assert.deepEqual(settings.projects, {
-    [web.id]: { providers: { 'jira-twg': { jql: ['project = WEB'], site: '', profile: '' } }, agent: 'codex' }
+    [web.id]: { providers: { 'jira-twg': { site: '', profile: '' } }, agent: 'codex' }
   })
 })
 
-test('a JQL stored as one string is read as a list of one, and saving the project writes the list', () => {
+/** The project read from `project` as stored. */
+const readProject = (project: unknown) => projectSettings(readSettings({ version: 1, projects: { [web.id]: project } }), web.id)
+
+/** The one filter that settings stored before filters read as. */
+const tasksFilter = (queries: string[]) => ({ jira: [{ id: 'tasks', name: 'Tasks', queries }] })
+
+test('settings stored before filters read as one filter "Tasks" with the JQL queries of the Jira provider chosen, and saving writes it without the JQL', () => {
   const stored = {
-    version: 1,
-    projects: {
-      [web.id]: {
-        provider: 'jira-orca',
-        providers: { 'jira-orca': { jql: 'project = WEB', siteId: '' }, 'jira-twg': { jql: 'project = OLD', site: '', profile: '' } }
-      }
-    }
+    provider: 'jira-twg',
+    providers: { 'jira-orca': { jql: 'project = OLD', siteId: 'site-2' }, 'jira-twg': { jql: ['project = WEB', '', 'labels = ui'], site: '', profile: 'work' } }
   }
-  const read = readSettings(stored)
-  assert.deepEqual(read.projects[web.id].providers, {
-    'jira-orca': { jql: ['project = WEB'], siteId: '' },
-    'jira-twg': { jql: ['project = OLD'], site: '', profile: '' }
+  const read = readProject(stored)
+  assert.deepEqual(read, {
+    provider: 'jira-twg',
+    providers: { 'jira-orca': { siteId: 'site-2' }, 'jira-twg': { site: '', profile: 'work' } },
+    filters: tasksFilter(['project = WEB', '', 'labels = ui'])
   })
   // What the panel writes: the stored settings as read, with its changes on top.
-  const saved = JSON.parse(JSON.stringify(withProjectChanges(read, web.id, { agent: 'codex' })))
-  assert.deepEqual(saved.projects[web.id].providers['jira-orca'].jql, ['project = WEB'])
-  assert.deepEqual(saved.projects[web.id].providers['jira-twg'].jql, ['project = OLD'])
+  const saved = JSON.parse(JSON.stringify(withProjectChanges({ version: 1, projects: { [web.id]: read } }, web.id, { agent: 'codex' })))
+  assert.deepEqual(saved.projects[web.id], { ...read, agent: 'codex' })
 })
 
-test('a list of JQL queries is kept in order, blank ones included, and anything else is dropped', () => {
-  const providers = (orcaJql: unknown, twgJql: unknown) =>
-    readSettings({
-      version: 1,
-      projects: { [web.id]: { providers: { 'jira-orca': { jql: orcaJql, siteId: '' }, 'jira-twg': { jql: twgJql, site: '', profile: '' } } } }
-    }).projects[web.id].providers
-  assert.deepEqual(providers(['project = WEB', '', 'project = API'], ['  ']), {
-    'jira-orca': { jql: ['project = WEB', '', 'project = API'], siteId: '' },
-    'jira-twg': { jql: ['  '], site: '', profile: '' }
+test("without a Jira provider chosen, settings stored before filters take Jira (Orca connection)'s JQL, else Jira (twg)'s, one string as a list of one", () => {
+  const both = { 'jira-orca': { jql: 'project = WEB', siteId: '' }, 'jira-twg': { jql: ['project = OLD'], site: '', profile: '' } }
+  assert.deepEqual(readProject({ provider: 'github', providers: both }).filters, tasksFilter(['project = WEB']))
+  assert.deepEqual(readProject({ providers: both }).filters, tasksFilter(['project = WEB']))
+  assert.deepEqual(readProject({ provider: 'jira-orca', providers: { 'jira-twg': both['jira-twg'] } }).filters, tasksFilter(['project = OLD']))
+  // JQL of an unexpected shape is skipped.
+  assert.deepEqual(readProject({ providers: { ...both, 'jira-orca': { jql: ['project = WEB', 7], siteId: '' } } }).filters, tasksFilter(['project = OLD']))
+  assert.equal(readProject({ providers: { 'jira-orca': { jql: { 0: 'project = WEB' }, siteId: '' } } }).filters, undefined)
+  assert.equal(readProject({ provider: 'github', providers: {} }).filters, undefined)
+})
+
+const board = { id: 'f-board', name: 'Board', queries: ['project = WEB ORDER BY rank', ''] }
+const mine = { id: 'f-mine', name: 'Mine', queries: ['assignee = currentUser()'] }
+
+test('stored filters are kept in order, blank queries included, with the one shown last, and the JQL stored before filters is ignored', () => {
+  const read = readProject({
+    provider: 'jira-orca',
+    providers: { 'jira-orca': { jql: ['project = OLD'], siteId: '' } },
+    filters: { jira: [board, mine] },
+    shownFilterId: { jira: 'f-mine' }
   })
-  assert.deepEqual(providers(['project = WEB', 7], null), {})
-  assert.deepEqual(providers({ 0: 'project = WEB' }, 42), {})
+  assert.deepEqual(read, {
+    provider: 'jira-orca',
+    providers: { 'jira-orca': { siteId: '' } },
+    filters: { jira: [board, mine] },
+    shownFilterId: { jira: 'f-mine' }
+  })
+})
+
+test('filters of an unexpected shape are dropped, names trimmed, and with none left the JQL stored before filters is read', () => {
+  const stored = [
+    'garbage',
+    null,
+    { id: 'f-x', name: 'No queries' },
+    { id: 'f-y', name: 'Bad queries', queries: ['project = WEB', 7] },
+    { id: '', name: 'No id', queries: [] },
+    { id: 'f-z', name: '  ', queries: [] },
+    { ...board, name: ' Board ' },
+    // A second filter with an id or a name already read.
+    { id: 'f-board', name: 'Again', queries: [] },
+    { id: 'f-other', name: 'BOARD', queries: [] }
+  ]
+  assert.deepEqual(readProject({ providers: {}, filters: { jira: stored } }).filters, { jira: [board] })
+  const old = { 'jira-orca': { jql: ['project = OLD'], siteId: '' } }
+  assert.deepEqual(readProject({ providers: old, filters: { jira: [{ id: 'f-x' }] } }).filters, tasksFilter(['project = OLD']))
+  assert.deepEqual(readProject({ providers: old, filters: 'none' }).filters, tasksFilter(['project = OLD']))
 })
 
 test('a project without settings uses GitHub when it has a repository, and no provider otherwise', () => {
@@ -80,43 +116,46 @@ test('a chosen provider wins over the default', () => {
 
 test("each provider's configuration survives switching away and back", () => {
   let settings = chooseProvider({ providers: {} }, 'jira-orca')
-  settings = { ...settings, providers: { ...settings.providers, 'jira-orca': { jql: ['project = WEB'], siteId: 'site-2' } } }
+  settings = { ...settings, providers: { ...settings.providers, 'jira-orca': { siteId: 'site-2' } } }
   settings = chooseProvider(settings, 'github')
   settings = chooseProvider(settings, 'jira-orca')
   assert.equal(settings.provider, 'jira-orca')
-  assert.deepEqual(settings.providers['jira-orca'], { jql: ['project = WEB'], siteId: 'site-2' })
+  assert.deepEqual(settings.providers['jira-orca'], { siteId: 'site-2' })
 })
 
-test('a Jira provider starts with the default JQL, or copies the whole list from the other Jira provider the first time', () => {
+test("a Jira provider starts with its tool's defaults, and switching between the two Jira providers keeps every filter", () => {
   const first = chooseProvider({ providers: {} }, 'jira-orca')
-  assert.deepEqual(first.providers['jira-orca'], {
-    jql: ['assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC'],
-    siteId: ''
-  })
+  assert.deepEqual(first.providers, { 'jira-orca': { siteId: '' } })
+  const filters = { filters: { jira: [board, mine] }, shownFilterId: { jira: 'f-mine' } }
+  const other = chooseProvider({ ...first, ...filters }, 'jira-twg')
+  assert.deepEqual(other, { provider: 'jira-twg', providers: { 'jira-orca': { siteId: '' }, 'jira-twg': { site: '', profile: '' } }, ...filters })
+  assert.deepEqual(chooseProvider(other, 'jira-orca'), { ...other, provider: 'jira-orca' })
+})
 
-  const edited = { ...first, providers: { 'jira-orca': { jql: ['project = WEB', '', 'project = API'], siteId: 'site-2' } } }
-  const other = chooseProvider(edited, 'jira-twg')
-  assert.deepEqual(other.providers['jira-twg'], { jql: ['project = WEB', '', 'project = API'], site: '', profile: '' })
-
-  const back = chooseProvider({ ...other, providers: { ...other.providers, 'jira-orca': { jql: ['project = API'], siteId: '' } } }, 'jira-twg')
-  assert.deepEqual(back.providers['jira-twg'], { jql: ['project = WEB', '', 'project = API'], site: '', profile: '' })
+test("a Jira list runs its filter's non-blank queries, and GitHub's one", () => {
+  const settings = { providers: {}, filters: { jira: [mine, { ...board, queries: ['project = WEB', '  ', 'labels = ui'] }] } }
+  assert.equal(queryCount(settings, 'jira-twg', 'f-board'), 2)
+  assert.equal(queryCount(settings, 'jira-orca'), 1)
+  assert.equal(queryCount({ providers: {} }, 'jira-orca'), 1)
+  assert.equal(queryCount({ providers: {}, filters: { jira: [{ ...mine, queries: [''] }] } }, 'jira-orca'), 0)
+  assert.equal(queryCount(settings, 'github'), 1)
 })
 
 test("project changes keep the other projects, fields and providers' configurations", () => {
   const settings = {
     version: 1 as const,
     projects: {
-      [web.id]: { provider: 'jira-twg' as const, providers: { 'jira-twg': { jql: ['project = OLD'], site: '', profile: 'work' } }, agent: 'codex' },
+      [web.id]: { provider: 'jira-twg' as const, providers: { 'jira-twg': { site: '', profile: 'work' } }, agent: 'codex' },
       [notes.id]: { providers: {}, templates: [{ id: 'default', name: 'Default', text: '' }] }
     }
   }
-  const changed = withProjectChanges(settings, web.id, { provider: 'jira-orca', providers: { 'jira-orca': { jql: ['project = WEB'], siteId: '' } } })
+  const changed = withProjectChanges(settings, web.id, { provider: 'jira-orca', providers: { 'jira-orca': { siteId: '' } } })
   assert.deepEqual(changed, {
     version: 1,
     projects: {
       [web.id]: {
         provider: 'jira-orca',
-        providers: { 'jira-twg': { jql: ['project = OLD'], site: '', profile: 'work' }, 'jira-orca': { jql: ['project = WEB'], siteId: '' } },
+        providers: { 'jira-twg': { site: '', profile: 'work' }, 'jira-orca': { siteId: '' } },
         agent: 'codex'
       },
       [notes.id]: { providers: {}, templates: [{ id: 'default', name: 'Default', text: '' }] }

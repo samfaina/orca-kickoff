@@ -1,4 +1,5 @@
 import { assert, test } from 'orca/testing'
+import { CliError } from './cli'
 import {
   checkOrcaAnswer,
   findActiveProject,
@@ -83,9 +84,10 @@ test('with no active worktree there is no active project', () => {
   assert.equal(findActiveProject(projects, worktrees, parseWorktreePs(ps(null))), null)
 })
 
-test('an error answer from Orca throws its message', () => {
+test('an error answer from Orca throws its message, with its code', () => {
   const stdout = JSON.stringify({ ok: false, error: { code: 'runtime_unavailable', message: 'Orca is not running.' } })
   assert.throws(() => parseProjects(stdout), /orca failed: Orca is not running\./)
+  assert.throws(() => parseProjects(stdout), (error: unknown) => error instanceof CliError && error.code === 'runtime_unavailable')
 })
 
 test('output that is not Orca JSON throws a readable message', () => {

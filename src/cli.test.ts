@@ -1,5 +1,5 @@
 import { assert, test } from 'orca/testing'
-import { CliError, childProcessSetup, cliCandidates, cliFailureMessage, createRunCli, stderrReason, type Exec } from './cli'
+import { CliError, childProcessSetup, cliCandidates, cliFailureMessage, createRunCli, jsonErrorCode, stderrReason, type Exec } from './cli'
 
 const windows = (env: Record<string, string>) => ({ platform: 'win32', env, home: 'C:\\Users\\ana' })
 
@@ -270,4 +270,24 @@ test('run reports a timeout when the process is killed', async () => {
 test('a run that fails for another reason is not a timeout', async () => {
   const run = createRunCli(mac, fakeExec({}).exec)
   await assert.rejects(run('twg', []), (error) => error instanceof CliError && !error.timedOut)
+})
+
+test("a failed run carries the code of the tool's JSON error, and any other failure none", async () => {
+  const failing = (stdout: string) =>
+    createRunCli(
+      mac,
+      fakeExec({
+        twg: () => {
+          throw Object.assign(new Error('Command failed'), { code: 77, stdout, stderr: '' })
+        }
+      }).exec
+    )
+  const loggedOut = JSON.stringify({ ok: false, error: { code: 'AUTH_REQUIRED', message: 'authentication required.' } })
+  await assert.rejects(failing(loggedOut)('twg', []), (error) => error instanceof CliError && error.code === 'AUTH_REQUIRED')
+  await assert.rejects(failing('')('twg', []), (error) => error instanceof CliError && error.code === null)
+  await assert.rejects(createRunCli(mac, fakeExec({}).exec)('twg', []), (error) => error instanceof CliError && error.code === null)
+  assert.equal(jsonErrorCode(loggedOut), 'AUTH_REQUIRED')
+  assert.equal(jsonErrorCode(JSON.stringify({ ok: false, error: { message: 'no code' } })), null)
+  assert.equal(jsonErrorCode(JSON.stringify({ ok: true, error: { code: 'X' } })), null)
+  assert.equal(jsonErrorCode('not json'), null)
 })

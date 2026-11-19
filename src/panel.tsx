@@ -33,17 +33,22 @@ import {
   type OrcaNode,
   type PanelContext
 } from 'orca'
+import { filterNameProblem, newFilterName, withFilterDeleted, withFilterSaved, type FilterChanges } from './filter'
 import { isRecord } from './json'
 import {
   appendTasks,
   chooseProvider,
   DEFAULT_JQL,
+  listedFilter,
+  projectFilters,
   projectProvider,
   projectSettings,
   providerConfig,
   readSettings,
   SETTINGS_KEY,
   trackerOf,
+  type Filter,
+  type FilterSettings,
   type JiraProviderId,
   type JiraSitesResult,
   type ProjectChanges,
@@ -109,14 +114,33 @@ const PROVIDER_OPTIONS: { value: ProviderId; label: string }[] = [
 const NO_TRACKER = ':none'
 const DEFAULT_SITE = ':default'
 
-/** The listed project's settings, as the person sees them. `provider` is null while none is set. */
+/** The listed project's settings, as the person sees them. `provider` is null while none is set.
+ *  `filters` and `shownFilterId` are the Jira filters and the one the filter row shows. */
 type ShownSettings = {
   projectId: string
   provider: ProviderId | null
   providers: ProviderConfigs
+  filters: Filter[]
+  shownFilterId: string
   agent: string
   templates: PromptTemplate[]
   defaultTemplateId: string
+}
+
+/** The filter editor's draft: a filter of `projectId` being edited, or a new one. */
+type FilterDraft = {
+  projectId: string
+  id: string
+  isNew: boolean
+  name: string
+  queries: string[]
+  /** The failed load of the list that opened the editor on this filter, shown until Save. */
+  loadError: string | null
+  /** The error of the last write, shown until the next one. */
+  error: string | null
+  saving: boolean
+  /** Delete was clicked once and waits for its second click. */
+  confirmingDelete: boolean
 }
 
 /** The template detail's draft: a template of `projectId` being edited, or a new one. */
@@ -193,8 +217,9 @@ type SettingsChoice = 'open' | 'closed' | 'auto'
 
 /** Kept in memory, and back to `auto` when the active project changes. */
 const settingsChoice = atom<SettingsChoice>('auto')
-/** The text of the "Search tasks" field: the filter over the loaded tasks, and the words of a
- *  tracker search. Kept in memory, and cleared when the active project changes. */
+/** The text of the "Search tasks" field: the text filter over the loaded tasks, and the words of a
+ *  tracker search. Kept in memory, kept when another filter is chosen, and cleared when the active
+ *  project changes. */
 const fieldText = atom('')
 /** The active project `settingsChoice` and `fieldText` belong to, null without one, or undefined
  *  before the first answer that says which. */
@@ -213,6 +238,9 @@ const trackerSearch = atom<TrackerSearch | null>(null)
 
 /** The template detail's draft while it replaces the panel view, else null. */
 const templateDraft = atom<TemplateDraft | null>(null)
+
+/** The filter editor's draft while it replaces the panel view, else null. */
+const filterDraft = atom<FilterDraft | null>(null)
 
 /** Whether a "Load more" is under way, and the error of the last one. */
 const loadingMore = atom(false)
@@ -253,7 +281,11 @@ const settingsSave = settingsSaver({
   }
 })
 
-function changeSettings(changes: ProjectChanges): void {
+/** A change Project settings makes; the filters change through `chooseFilter` and the filter
+ *  editor. */
+type SettingsChange = Omit<ProjectChanges, keyof FilterSettings>
+
+function changeSettings(changes: SettingsChange): void {
   const current = read(shownSettings)
   if (!current) return
   if (changes.provider !== undefined || changes.providers !== undefined) {
@@ -275,10 +307,110 @@ async function showSettings(project: ProjectRef): Promise<void> {
     projectId: project.id,
     provider,
     providers: settings.providers,
+    ...shownFilters(settings),
     agent: settings.agent ?? 'orca-default',
     templates: projectTemplates(settings),
     defaultTemplateId: defaultTemplate(settings).id
   })
+}
+
+/** A project's Jira filters and the one the filter row shows, as the person sees them. */
+function shownFilters(settings: FilterSettings): Pick<ShownSettings, 'filters' | 'shownFilterId'> {
+  return { filters: projectFilters(settings), shownFilterId: listedFilter(settings).id }
+}
+
+/** Chooses the filter the panel shows, saves that choice, and loads its tasks from the tracker,
+ *  as Reload does. It leaves any tracker search, but the field keeps its words. */
+function chooseFilter(id: string): void {
+  const shown = read(shownSettings)
+  if (!shown || id === shown.shownFilterId || !shown.filters.some((filter) => filter.id === id)) return
+  leaveTrackerSearch()
+  set(shownSettings, { ...shown, shownFilterId: id })
+  settingsSave.change(shown.projectId, { shownFilterId: { jira: id } })
+  void load()
+}
+
+/** Opens the filter editor, in place of the panel view, on one of the shown project's filters, or
+ *  on a new one named "Filter 2", "Filter 3"… with one blank query. `loadError` is the failed load
+ *  that opened it. */
+function openFilter(id: string | null, loadError: string | null = null): void {
+  const shown = read(shownSettings)
+  if (!shown) return
+  const filter = id === null ? null : shown.filters.find((candidate) => candidate.id === id)
+  if (id !== null && !filter) return
+  closeTemplate()
+  set(filterDraft, {
+    projectId: shown.projectId,
+    id: filter?.id ?? newId('f', shown.filters),
+    isNew: !filter,
+    name: filter?.name ?? newFilterName(shown.filters),
+    queries: filter ? [...filter.queries] : [''],
+    loadError,
+    error: null,
+    saving: false,
+    confirmingDelete: false
+  })
+}
+
+/** Changes the editor's draft, while it is still the draft of the `expected` filter. */
+function changeFilterDraft(expected: FilterDraft, changes: Partial<FilterDraft>): void {
+  update(filterDraft, (draft) => (draft && isSameDraft(draft, expected) ? { ...draft, ...changes } : draft))
+}
+
+/** Leaves the filter editor without saving. */
+function closeFilter(): void {
+  cancelConfirmDelete()
+  set(filterDraft, null)
+}
+
+/** Stores the draft's filter, unless its name can't be saved, then goes back to the list and loads
+ *  the filter's tasks. */
+async function saveFilter(): Promise<void> {
+  const draft = read(filterDraft)
+  const shown = read(shownSettings)
+  if (!draft || draft.saving || shown?.projectId !== draft.projectId) return
+  if (filterNameProblem(shown.filters, draft.name, draft.id) !== null) return
+  await writeFilters(draft, (project) => withFilterSaved(project, { id: draft.id, name: draft.name, queries: draft.queries }))
+}
+
+/** The first click asks for a second within a few seconds; the second deletes the filter, then
+ *  goes back to the list and loads the tasks of the filter it shows. */
+async function deleteFilter(): Promise<void> {
+  const draft = read(filterDraft)
+  if (!draft || draft.saving || draft.isNew) return
+  cancelConfirmDelete()
+  if (!draft.confirmingDelete) {
+    changeFilterDraft(draft, { confirmingDelete: true })
+    confirmDeleteTimer = setTimeout(() => {
+      confirmDeleteTimer = null
+      changeFilterDraft(draft, { confirmingDelete: false })
+    }, CONFIRM_DELETE_MS)
+    return
+  }
+  await writeFilters(draft, (project) => withFilterDeleted(project, draft.id))
+}
+
+/** Writes a change to the draft project's filters, then shows them, goes back to the list and
+ *  loads it. A failed write keeps the editor open with its error and the draft. Pending Project
+ *  settings are saved first, so the change applies to what the person sees. */
+async function writeFilters(draft: FilterDraft, change: (project: ProjectSettings) => FilterChanges | null): Promise<void> {
+  changeFilterDraft(draft, { saving: true, error: null, confirmingDelete: false })
+  let changes: FilterChanges | null
+  try {
+    changes = await settingsSave.writeProject(draft.projectId, change)
+  } catch (error) {
+    changeFilterDraft(draft, { saving: false, error: `Couldn't save the filter (${errorCode(error)}). Try again.` })
+    return
+  }
+  const shown = read(shownSettings)
+  if (changes && shown?.projectId === draft.projectId) set(shownSettings, { ...shown, ...shownFilters(changes) })
+  const current = read(filterDraft)
+  if (!current || !isSameDraft(current, draft)) return
+  set(filterDraft, null)
+  if (!changes) return
+  set(settingsChoice, 'closed')
+  leaveTrackerSearch()
+  await load()
 }
 
 /** Opens the template detail for one of the shown project's templates, or for a new one. It opens
@@ -288,10 +420,11 @@ function openTemplate(id: string | null): void {
   if (!shown) return
   const template = id === null ? null : shown.templates.find((candidate) => candidate.id === id)
   if (id !== null && !template) return
+  closeFilter()
   set(settingsChoice, 'open')
   set(templateDraft, {
     projectId: shown.projectId,
-    id: template?.id ?? newTemplateId(shown.templates),
+    id: template?.id ?? newId('t', shown.templates),
     isNew: !template,
     name: template?.name ?? '',
     text: template?.text ?? INITIAL_TEMPLATE_TEXT,
@@ -301,21 +434,21 @@ function openTemplate(id: string | null): void {
   })
 }
 
-/** An id that none of `templates` has. */
-function newTemplateId(templates: PromptTemplate[]): string {
+/** An id, starting with `prefix`, that none of `items` has. */
+function newId(prefix: string, items: { id: string }[]): string {
   for (;;) {
-    const id = `t-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-    if (!templates.some((template) => template.id === id)) return id
+    const id = `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+    if (!items.some((item) => item.id === id)) return id
   }
 }
 
 /** Changes the detail's draft, while it is still the draft of the `expected` template. */
-function changeDraft(expected: TemplateDraft, changes: Partial<TemplateDraft>): void {
+function changeTemplateDraft(expected: TemplateDraft, changes: Partial<TemplateDraft>): void {
   update(templateDraft, (draft) => (draft && isSameDraft(draft, expected) ? { ...draft, ...changes } : draft))
 }
 
-/** Whether two drafts are of the same template of the same project. */
-const isSameDraft = (a: TemplateDraft, b: TemplateDraft) => a.projectId === b.projectId && a.id === b.id
+/** Whether two drafts are of the same template, or the same filter, of the same project. */
+const isSameDraft = (a: { projectId: string; id: string }, b: { projectId: string; id: string }) => a.projectId === b.projectId && a.id === b.id
 
 /** Leaves the template detail without saving. */
 function closeTemplate(): void {
@@ -341,10 +474,10 @@ async function deleteTemplate(): Promise<void> {
   if (!draft || draft.saving || draft.isNew) return
   cancelConfirmDelete()
   if (!draft.confirmingDelete) {
-    changeDraft(draft, { confirmingDelete: true })
+    changeTemplateDraft(draft, { confirmingDelete: true })
     confirmDeleteTimer = setTimeout(() => {
       confirmDeleteTimer = null
-      changeDraft(draft, { confirmingDelete: false })
+      changeTemplateDraft(draft, { confirmingDelete: false })
     }, CONFIRM_DELETE_MS)
     return
   }
@@ -361,12 +494,12 @@ function cancelConfirmDelete(): void {
  *  keeps the detail open with its error and the draft. Pending Project settings are saved first, so
  *  the change applies to what the person sees. */
 async function writeTemplates(draft: TemplateDraft, change: (project: ProjectSettings) => TemplateChanges | null): Promise<void> {
-  changeDraft(draft, { saving: true, error: null, confirmingDelete: false })
+  changeTemplateDraft(draft, { saving: true, error: null, confirmingDelete: false })
   let changes: TemplateChanges | null
   try {
     changes = await settingsSave.writeProject(draft.projectId, change)
   } catch (error) {
-    changeDraft(draft, { saving: false, error: `Couldn't save the template (${errorCode(error)}). Try again.` })
+    changeTemplateDraft(draft, { saving: false, error: `Couldn't save the template (${errorCode(error)}). Try again.` })
     return
   }
   const shown = read(shownSettings)
@@ -394,8 +527,9 @@ function loadKeepingSettingsOpen(): void {
 }
 
 /** Done: goes back to the list, and loads it again when the tracker settings changed since the list
- *  shown was loaded. Editing them loads nothing by itself, so typing a JQL query asks the tracker
- *  nothing. A change of tracker settings already left any tracker search, so this loads the list. */
+ *  shown was loaded. Typing in them loads nothing by itself, so typing twg's site or profile asks
+ *  the tracker nothing. A change of tracker settings already left any tracker search, so this loads
+ *  the list. */
 function closeSettings(): void {
   set(settingsChoice, 'closed')
   if (listedTrackerSettingsVersion !== trackerSettingsVersion) void load()
@@ -429,11 +563,13 @@ async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
   const mine = startLoading()
   const { answer, askedAt, worktreesAskedAt, savedTrackerSettings } = await askTasks({})
   if (mine !== generation) return
-  // A change of active project drops the template detail's draft. An answer that names no project
-  // because the worker didn't answer says nothing about it.
+  // A change of active project drops the template detail's draft and the filter editor's. An answer
+  // that names no project because the worker didn't answer says nothing about it.
   const answeredProjectId = answer.kind === 'no-project' ? null : answer.project?.id
   const draft = read(templateDraft)
   if (draft && answeredProjectId !== undefined && answeredProjectId !== draft.projectId) closeTemplate()
+  const filterEdit = read(filterDraft)
+  if (filterEdit && answeredProjectId !== undefined && answeredProjectId !== filterEdit.projectId) closeFilter()
   // A change of active project also sends Project settings back to opening by itself and clears
   // the field. Only once a project was listed: before that, both are as they start.
   if (answeredProjectId !== undefined) {
@@ -461,13 +597,17 @@ async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
   if (savedTrackerSettings !== null) listedTrackerSettingsVersion = savedTrackerSettings
   set(list, answer)
   set(loading, false)
+  // A failed query opens the filter editor on its filter, unless a draft is open already.
+  if (answer.kind === 'error' && answer.filterId !== undefined && !read(templateDraft) && !read(filterDraft)) {
+    if (read(shownSettings)?.projectId === answer.project?.id) openFilter(answer.filterId, answer.message)
+  }
 }
 
 /** Asks the tracker for the listed project's tasks that match the trimmed `query`, and shows them
  *  in place of the loaded list, which stays as it is. The same tracker search run again keeps its
  *  results while it loads, as a reload keeps the list. A blank query asks nothing. An answer for
- *  another project or tracker means the list the tracker search narrowed is gone: the tracker
- *  search ends and the list is loaded again. */
+ *  another project, tracker or filter means the list the tracker search narrowed is gone: the
+ *  tracker search ends and the list is loaded again. */
 async function searchTracker(query: string, reason: 'poll' | 'other' = 'other'): Promise<void> {
   if (query === '' || read(list)?.kind !== 'ready') return
   const mine = startLoading()
@@ -483,7 +623,7 @@ async function searchTracker(query: string, reason: 'poll' | 'other' = 'other'):
     set(loading, false)
     return
   }
-  if (answer.kind !== 'ready' || answer.project.id !== current.project.id || answer.provider !== current.provider) {
+  if (!isSameList(answer, current)) {
     set(trackerSearch, null)
     return load()
   }
@@ -530,8 +670,13 @@ async function askTasks(
   }
 }
 
-/** Goes back from the tracker search to the loaded list as it was, with the filter, dropping any
- *  answer still on its way, without loading the list again. Such an answer might have said that
+/** Whether `answer` is a page of the same list as `shown`: of the same project, tracker and filter. */
+function isSameList(answer: TaskList, shown: ReadyTaskList): answer is ReadyTaskList {
+  return answer.kind === 'ready' && answer.project.id === shown.project.id && answer.provider === shown.provider && answer.filterId === shown.filterId
+}
+
+/** Goes back from the tracker search to the loaded list as it was, with the text filter, dropping
+ *  any answer still on its way, without loading the list again. Such an answer might have said that
  *  the active project changed, so the next poll measures against the list. */
 function leaveTrackerSearch(): void {
   if (read(trackerSearch) === null) return
@@ -549,7 +694,8 @@ function clearTrackerSearch(): void {
   set(fieldText, '')
 }
 
-/** Typing in the field filters the loaded list, leaving a tracker search shown. */
+/** Typing in the field narrows the loaded list with the text filter, leaving a tracker search
+ *  shown. */
 function changeField(value: string): void {
   set(fieldText, value)
   leaveTrackerSearch()
@@ -557,10 +703,10 @@ function changeField(value: string): void {
 
 /** Asks for the next page of the list, or of the tracker search shown, and appends its tasks,
  *  skipping keys already listed. A page that arrives after a reload or after the tracker search changed
- *  is dropped; one for another project means the project changed, so the list is loaded again.
- *  Pending settings are not saved first: the cursor belongs to the list, or the tracker search,
- *  that listed the first page, with the JQL queries saved then, and a tracker search sends its
- *  words again with it. */
+ *  is dropped; one for another project or filter means the list changed, so it is loaded again.
+ *  Pending settings are not saved first: the cursor belongs to the list of the filter, or the
+ *  tracker search, that listed the first page, with the JQL queries saved then, so the request names
+ *  that filter, and a tracker search sends its words again with it. */
 async function loadMore(): Promise<void> {
   const current = read(list)
   const found = read(trackerSearch)
@@ -570,9 +716,10 @@ async function loadMore(): Promise<void> {
   const mine = generation
   set(loadingMore, true)
   set(moreError, null)
+  const page = current.filterId !== null ? { filterId: current.filterId, cursor } : { cursor }
   let answer: TaskList
   try {
-    answer = await plugin.request('tasks.load', found ? { cursor, query: found.query } : { cursor }, { timeoutMs: LOAD_TIMEOUT_MS })
+    answer = await plugin.request('tasks.load', found ? { ...page, query: found.query } : page, { timeoutMs: LOAD_TIMEOUT_MS })
   } catch (error) {
     answer = { kind: 'error', project: null, message: `Kickoff's worker didn't answer (${errorCode(error)}).` }
   }
@@ -583,7 +730,7 @@ async function loadMore(): Promise<void> {
     set(moreError, answer.message)
     return
   }
-  if (answer.kind !== 'ready' || answer.project.id !== shown.project.id || answer.provider !== shown.provider) {
+  if (!isSameList(answer, shown)) {
     set(trackerSearch, null)
     void load()
     return
@@ -857,14 +1004,16 @@ export function setup(ctx: PanelContext): void {
   set(agentStarting, {})
   set(cardTemplates, {})
   set(templateDraft, null)
+  set(filterDraft, null)
   set(variablesOpen, false)
   set(settingsChoice, 'auto')
   viewStateFor = undefined
   set(fieldText, '')
   set(trackerSearch, null)
   set(settingsSaveError, null)
-  // Closing the panel drops the template detail's draft.
+  // Closing the panel drops the template detail's draft and the filter editor's.
   ctx.subscriptions.push({ dispose: closeTemplate })
+  ctx.subscriptions.push({ dispose: closeFilter })
   let polling = false
   const poll = async () => {
     if (polling || read(loading) || !read(ctx.visible)) return
@@ -898,6 +1047,10 @@ export default function Panel() {
   if (draft && shown?.projectId === draft.projectId) {
     return <TemplateDetail draft={draft} templates={shown.templates} projectName={project?.name ?? ''} />
   }
+  const filterEdit = read(filterDraft)
+  if (filterEdit && shown?.projectId === filterEdit.projectId) {
+    return <FilterEditor draft={filterEdit} filters={shown.filters} projectName={project?.name ?? ''} />
+  }
   const settings = project !== null && shown?.projectId === project.id ? shown : null
   const choice = read(settingsChoice)
   if (project && settings && (choice === 'auto' ? needsSettings(current) : choice === 'open')) {
@@ -913,8 +1066,10 @@ export default function Panel() {
   )
 }
 
-/** Whether Project settings opens by itself: the project has no tracker, or its load failed. */
-const needsSettings = (current: TaskList | null) => current?.kind === 'needs-config' || current?.kind === 'error'
+/** Whether Project settings opens by itself: the project has no tracker, or its load failed for a
+ *  reason other than a filter's query, which opens the filter editor instead. */
+const needsSettings = (current: TaskList | null) =>
+  current?.kind === 'needs-config' || (current?.kind === 'error' && current.filterId === undefined)
 
 /** The panel's title, since its tab shows only its icon, and its actions. `gear` shows the button
  *  that opens Project settings. */
@@ -990,7 +1145,6 @@ function JiraOrcaSettings({ providers }: { providers: ProviderConfigs }) {
   }
   return (
     <Stack gap="sm">
-      <JqlQueries provider="jira-orca" jql={config.jql} />
       <Select
         label="Site"
         value={config.siteId || DEFAULT_SITE}
@@ -1012,12 +1166,11 @@ function JiraOrcaSettings({ providers }: { providers: ProviderConfigs }) {
   )
 }
 
-/** The JQL queries of a Jira provider, each with its Remove button while more than one is left,
- *  then Add JQL. Ctrl+Enter (Cmd+Enter on macOS) in any of them lists the tasks. */
-function JqlQueries({ provider, jql }: { provider: JiraProviderId; jql: string[] }) {
-  // Settings stored with no query at all still show one field to type into.
-  const queries = jql.length > 0 ? jql : ['']
-  const change = (next: string[]) => changeJiraConfig(provider, { jql: next })
+/** The JQL queries of a filter, each with its Remove button while more than one is left, then Add
+ *  JQL. Ctrl+Enter (Cmd+Enter on macOS) in any of them runs `onSubmit`. */
+function JqlQueries({ queries: stored, onChange: change, onSubmit }: { queries: string[]; onChange: (queries: string[]) => void; onSubmit: () => void }) {
+  // A filter stored with no query at all still shows one field to type into.
+  const queries = stored.length > 0 ? stored : ['']
   return (
     <Stack gap="sm">
       {queries.map((query, index) => {
@@ -1034,7 +1187,7 @@ function JqlQueries({ provider, jql }: { provider: JiraProviderId; jql: string[]
                   value={query}
                   placeholder={index === 0 ? DEFAULT_JQL : undefined}
                   onChange={(value) => change(queries.map((other, at) => (at === index ? value : other)))}
-                  onSubmit={loadKeepingSettingsOpen}
+                  onSubmit={onSubmit}
                 />
               </Box>
               {queries.length > 1 ? (
@@ -1060,7 +1213,7 @@ function JqlQueries({ provider, jql }: { provider: JiraProviderId; jql: string[]
         </Button>
       </Row>
       <Text size="sm" muted>
-        Ctrl+Enter (Cmd+Enter on macOS) lists the tasks.
+        Ctrl+Enter (Cmd+Enter on macOS) saves the filter and lists its tasks.
       </Text>
     </Stack>
   )
@@ -1070,7 +1223,6 @@ function JiraTwgSettings({ providers }: { providers: ProviderConfigs }) {
   const config = providerConfig({ providers }, 'jira-twg')
   return (
     <Stack gap="sm">
-      <JqlQueries provider="jira-twg" jql={config.jql} />
       <Input
         label="Site"
         value={config.site}
@@ -1140,10 +1292,40 @@ function Body({ list }: { list: TaskList }) {
         />
       )
     case 'error':
-      return <LoadError message={list.message} />
+      return (
+        <>
+          {list.project ? <FilterRow projectId={list.project.id} /> : null}
+          <LoadError message={list.message} />
+        </>
+      )
     case 'ready':
       return <ReadyList list={list} />
   }
+}
+
+/** On a Jira project, the filter shown, ✎ to edit it and + to add one. */
+function FilterRow({ projectId }: { projectId: string }) {
+  const shown = read(shownSettings)
+  if (shown?.projectId !== projectId || shown.provider === null || trackerOf(shown.provider) !== 'jira') return null
+  return (
+    <Box direction="row" align="center" gap="xs">
+      <Box grow minWidth={0}>
+        <Select
+          label="Filter"
+          labelHidden
+          value={shown.shownFilterId}
+          options={shown.filters.map((filter) => ({ value: filter.id, label: filter.name }))}
+          onChange={chooseFilter}
+        />
+      </Box>
+      <Box shrink={false}>
+        <Row gap="none" align="center">
+          <IconButton icon="edit" label="Edit filter" tooltip="Edit filter" size="sm" variant="ghost" onPress={() => openFilter(shown.shownFilterId)} />
+          <IconButton icon="add" label="New filter" tooltip="New filter" size="sm" variant="ghost" onPress={() => openFilter(null)} />
+        </Row>
+      </Box>
+    </Box>
+  )
 }
 
 /** The failure of the last timed save of Project settings, until a save of them succeeds. */
@@ -1171,9 +1353,9 @@ type ReadyTaskList = Extract<TaskList, { kind: 'ready' }>
 /** The tracker's name, as the panel says it. */
 const trackerName = (provider: ProviderId) => (trackerOf(provider) === 'github' ? 'GitHub' : 'Jira')
 
-/** The warnings, the field and the tracker search's title, which stay in place, then the list,
- *  which scrolls inside the rest of the panel's height: the loaded tasks that match the filter, or
- *  the tracker search's results, then "Load more" and the truncation notice. */
+/** The warnings, the filter row, the field and the tracker search's title, which stay in place,
+ *  then the list, which scrolls inside the rest of the panel's height: the loaded tasks that match
+ *  the text filter, or the tracker search's results, then "Load more" and the truncation notice. */
 function ReadyList({ list }: { list: ReadyTaskList }) {
   const text = read(fieldText)
   const query = text.trim()
@@ -1191,6 +1373,7 @@ function ReadyList({ list }: { list: ReadyTaskList }) {
           <Text>{`Couldn't read Orca's worktrees, so Start is off. ${list.worktreesError ?? ''}`.trim()}</Text>
         </Callout>
       ) : null}
+      <FilterRow projectId={list.project.id} />
       <Stack gap="xs">
         <Input
           type="search"
@@ -1231,22 +1414,23 @@ function ReadyList({ list }: { list: ReadyTaskList }) {
         </Box>
       ) : null}
       <Box direction="column" gap="xs" grow minHeight={0} maxHeight="100%" scroll="y">
-        {found === null ? <LoadedTasks list={list} filter={query} /> : <SearchResults found={found} list={list} tracker={tracker} />}
+        {found === null ? <LoadedTasks list={list} words={query} /> : <SearchResults found={found} list={list} tracker={tracker} />}
       </Box>
     </>
   )
 }
 
-/** The loaded tasks that match the trimmed `filter`, "Load more" and the truncation notice. */
-function LoadedTasks({ list, filter }: { list: ReadyTaskList; filter: string }) {
-  const tasks = list.tasks.filter((task) => matchesSearch(task, filter))
+/** The loaded tasks that the text filter's trimmed `words` match, "Load more" and the truncation
+ *  notice. */
+function LoadedTasks({ list, words }: { list: ReadyTaskList; words: string }) {
+  const tasks = list.tasks.filter((task) => matchesSearch(task, words))
   return (
     <>
       {list.tasks.length === 0 ? (
         <EmptyState title="No open tasks" icon="check" />
       ) : tasks.length === 0 ? (
         <Text size="sm" muted>
-          {`No loaded task matches "${filter}".`}
+          {`No loaded task matches "${words}".`}
         </Text>
       ) : (
         tasks.map((task) => <TaskCard key={task.key} task={task} projectId={list.project.id} worktrees={list.worktrees} />)
@@ -1267,8 +1451,8 @@ function truncationNotice(list: ReadyTaskList): string {
   return list.queryCount > 1 ? 'Showing the first 100 tasks of each query — narrow your JQL.' : 'Showing the first 100 tasks — narrow your JQL.'
 }
 
-/** A tracker search's results, unfiltered: a result may match on its description, which the
- *  filter doesn't read. Then "Load more" and the truncation notice. The cards show the worktrees
+/** A tracker search's results, without the text filter: a result may match on its description,
+ *  which the text filter doesn't read. Then "Load more" and the truncation notice. The cards show the worktrees
  *  of the loaded list, which every read of them keeps up to date. */
 function SearchResults({ found, list, tracker }: { found: TrackerSearch; list: ReadyTaskList; tracker: string }) {
   switch (found.kind) {
@@ -1433,7 +1617,7 @@ function TemplateDetail({ draft, templates, projectName }: { draft: TemplateDraf
       </TitleRow>
       <Box direction="column" gap="sm" grow minHeight={0} maxHeight="100%" scroll="y">
         <Stack gap="xs">
-          <Input label="Name" value={draft.name} invalid={nameProblem !== null} onChange={(name) => changeDraft(draft, { name })} />
+          <Input label="Name" value={draft.name} invalid={nameProblem !== null} onChange={(name) => changeTemplateDraft(draft, { name })} />
           {nameProblem !== null ? (
             <Text size="sm" tone="danger">
               {nameProblem}
@@ -1446,7 +1630,7 @@ function TemplateDetail({ draft, templates, projectName }: { draft: TemplateDraf
             value={draft.text}
             rows={12}
             placeholder="Empty: the prompt is the task URL"
-            onChange={(text) => changeDraft(draft, { text })}
+            onChange={(text) => changeTemplateDraft(draft, { text })}
           />
           <Text size="sm" muted>
             An empty text gives the task URL.
@@ -1484,6 +1668,61 @@ function TemplateDetail({ draft, templates, projectName }: { draft: TemplateDraf
             onPress={() => void deleteTemplate()}
           >
             {draft.confirmingDelete ? 'Confirm delete' : 'Delete template'}
+          </Button>
+        </Box>
+      )}
+    </Box>
+  )
+}
+
+/** The filter editor, in place of the panel view, as the template detail: the title row with
+ *  Cancel and Save, and the Delete bar, stay in place while the form between them scrolls. The
+ *  form starts with the failed load that opened it, if one did. */
+function FilterEditor({ draft, filters, projectName }: { draft: FilterDraft; filters: Filter[]; projectName: string }) {
+  const nameProblem = filterNameProblem(filters, draft.name, draft.id)
+  const save = () => void saveFilter()
+  return (
+    <Box direction="column" gap="sm" height="100%">
+      <TitleRow prefix={projectName !== '' ? `${projectName} ·` : null} title={draft.isNew ? 'New filter' : 'Edit filter'} level={3}>
+        <Row gap="xs" align="center">
+          {draft.saving ? <Spinner label="Saving the filter" labelHidden /> : null}
+          <Button key="filter-cancel" size="sm" variant="ghost" disabled={draft.saving} onPress={closeFilter}>
+            Cancel
+          </Button>
+          <Button key="filter-save" size="sm" variant="solid" disabled={nameProblem !== null || draft.saving} onPress={save}>
+            Save
+          </Button>
+        </Row>
+      </TitleRow>
+      <Box direction="column" gap="sm" grow minHeight={0} maxHeight="100%" scroll="y">
+        {draft.loadError !== null ? <LoadError message={draft.loadError} /> : null}
+        <Stack gap="xs">
+          <Input label="Name" value={draft.name} invalid={nameProblem !== null} onChange={(name) => changeFilterDraft(draft, { name })} />
+          {nameProblem !== null ? (
+            <Text size="sm" tone="danger">
+              {nameProblem}
+            </Text>
+          ) : null}
+        </Stack>
+        <JqlQueries queries={draft.queries} onChange={(queries) => changeFilterDraft(draft, { queries })} onSubmit={save} />
+        {draft.error !== null ? (
+          <Callout tone="danger" icon="error">
+            <Text>{draft.error}</Text>
+          </Callout>
+        ) : null}
+      </Box>
+      {draft.isNew ? null : (
+        <Box direction="row" justify="end" align="center" shrink={false}>
+          <Button
+            key="filter-delete"
+            size="sm"
+            variant="ghost"
+            tone="danger"
+            icon="delete"
+            disabled={filters.length < 2 || draft.saving}
+            onPress={() => void deleteFilter()}
+          >
+            {draft.confirmingDelete ? 'Confirm delete' : 'Delete filter'}
           </Button>
         </Box>
       )}
