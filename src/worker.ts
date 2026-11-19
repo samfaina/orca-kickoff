@@ -23,6 +23,7 @@ import {
   type OrcaWorktreeStatus
 } from './orca'
 import {
+  listedFilter,
   projectProvider,
   projectSettings,
   queryCount,
@@ -42,7 +43,7 @@ import {
 } from './protocol'
 import { taskLister } from './providers'
 import { JIRA_CONNECTION_ARGS, parseJiraSites } from './providers/jira-orca'
-import type { PageRequest } from './providers/types'
+import type { PageRequest, TaskPage } from './providers/types'
 import { buildPrompt, projectTemplates } from './template'
 
 /** After a timed-out `worktree create`, Orca may still finish it; a Start of the same task waits
@@ -101,8 +102,9 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
     }
   }
 
-  /** A page of the project's tasks: of the whole list, or of a tracker search with `query`. */
-  async function loadTasks(request: PageRequest): Promise<TaskList> {
+  /** A page of the tasks of the project's filter `filterId` names (on Jira, which has filters): of
+   *  its whole list, or of a tracker search with `query`. A failure listing a filter names it. */
+  async function loadTasks({ filterId, ...request }: { filterId?: string } & Omit<PageRequest, 'filter'>): Promise<TaskList> {
     let project: ProjectRef | null = null
     try {
       const active = await activeProject()
@@ -111,14 +113,22 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
       const settings = await readProjectSettings(project.id)
       const providerId = projectProvider(settings, project)
       if (!providerId) return { kind: 'needs-config', project }
-      const page = await taskLister(providerId)(run, project, settings, request)
+      const filter = trackerOf(providerId) === 'jira' ? listedFilter(settings, filterId) : null
+      let page: TaskPage
+      try {
+        page = await taskLister(providerId)(run, project, settings, filter ? { ...request, filter } : request)
+      } catch (error) {
+        if (!filter) throw error
+        return { kind: 'error', project, message: messageOf(error), filterId: filter.id }
+      }
       const { state } = active
       return {
         kind: 'ready',
         project,
         provider: providerId,
         ...page,
-        queryCount: queryCount(settings, providerId),
+        filterId: filter?.id ?? null,
+        queryCount: queryCount(settings, providerId, filter?.id),
         worktrees: state ? findTaskWorktrees(trackerOf(providerId), project.id, state.worktrees, state.statuses) : null,
         worktreesError: state ? null : active.orcaError,
         starting: startsUnderWay(project.id),
@@ -251,7 +261,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
     }
   }
 
-  orca.panels.handle('tasks.load', ({ cursor, query }) => loadTasks({ cursor, query }))
+  orca.panels.handle('tasks.load', ({ filterId, cursor, query }) => loadTasks({ filterId, cursor, query }))
   orca.panels.handle('worktrees.load', ({ projectId }) => loadWorktrees(projectId))
   orca.panels.handle('project.active', () => activeProjectId())
   orca.panels.handle('jira.sites', () => jiraSites())

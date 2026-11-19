@@ -3,7 +3,18 @@
 // real worker, which runs the real `orca`, `gh` and `twg` and shows real data. All data is invented,
 // and each list is short, since a tall panel draws unreliably in `shot` (`docs/reference.md`).
 import { defineCheck, type MockRequests } from 'orca/testing'
-import { DEFAULT_JQL, type JiraProviderId, type ProjectRef, type ProviderId, type Task, type TaskList, type WorktreesResult } from './protocol'
+import {
+  DEFAULT_JQL,
+  INITIAL_FILTER_ID,
+  INITIAL_FILTER_NAME,
+  type Filter,
+  type JiraProviderId,
+  type ProjectRef,
+  type ProviderId,
+  type Task,
+  type TaskList,
+  type WorktreesResult
+} from './protocol'
 import { INITIAL_TEMPLATE_ID, INITIAL_TEMPLATE_NAME, INITIAL_TEMPLATE_TEXT } from './template'
 
 type ReadyList = Extract<TaskList, { kind: 'ready' }>
@@ -44,6 +55,7 @@ const ready = (project: ProjectRef, provider: ProviderId, tasks: Task[], fields:
   tasks,
   nextCursor: null,
   truncated: false,
+  filterId: provider === 'github' ? null : INITIAL_FILTER_ID,
   queryCount: 1,
   worktrees: {},
   worktreesError: null,
@@ -92,18 +104,24 @@ const jiraTasks: Task[] = [
   jiraTask('WEB-18', 'Translate the error pages', 'To Do', 'todo', ['i18n', 'ui'])
 ]
 
-/** The stored settings of `web` reading Jira through `provider` with the `jql` queries, with two
- *  prompt templates so the cards that can start offer a choice. */
-const jiraSettings = (provider: JiraProviderId, jql: string[] = [DEFAULT_JQL]) => ({
+/** The filter a Jira project starts with. */
+const tasksFilter: Filter = { id: INITIAL_FILTER_ID, name: INITIAL_FILTER_NAME, queries: [DEFAULT_JQL] }
+
+/** The stored settings of `web` reading Jira through `provider` with these filters, the first
+ *  shown unless `shownFilterId` says otherwise, and two prompt templates so the cards that can
+ *  start offer a choice. */
+const jiraSettings = (provider: JiraProviderId, filters: Filter[] = [tasksFilter], shownFilterId = filters[0].id) => ({
   settings: {
     version: 1,
     projects: {
       [web.id]: {
         provider,
         providers: {
-          'jira-orca': { jql, siteId: '' },
-          'jira-twg': { jql, site: 'example.atlassian.net', profile: '' }
+          'jira-orca': { siteId: '' },
+          'jira-twg': { site: 'example.atlassian.net', profile: '' }
         },
+        filters: { jira: filters },
+        shownFilterId: { jira: shownFilterId },
         templates: [
           { id: INITIAL_TEMPLATE_ID, name: INITIAL_TEMPLATE_NAME, text: INITIAL_TEMPLATE_TEXT },
           { id: 'test-first', name: 'Test first', text: '/tdd {{task_key}}: {{task_title}}\n\n{{task_description}}' }
@@ -125,14 +143,17 @@ const jiraStarted = ready(web, 'jira-twg', jiraTasks, {
   starting: ['WEB-15']
 })
 
-/** Three JQL queries through twg: the active sprint, future sprints and the backlog. */
-const SPRINT_QUERIES = [
-  'project = WEB AND sprint in openSprints()',
-  'project = WEB AND sprint in futureSprints()',
-  'project = WEB AND sprint is EMPTY'
-]
+/** A filter of three JQL queries: the active sprint, future sprints and the backlog. */
+const sprintFilter: Filter = {
+  id: 'f-sprint',
+  name: 'Sprint',
+  queries: ['project = WEB AND sprint in openSprints()', 'project = WEB AND sprint in futureSprints()', 'project = WEB AND sprint is EMPTY']
+}
 
-/** The first page of `SPRINT_QUERIES`, which holds every task of the three: two in the active
+/** A filter of the board's tasks in board order, with a second query and a blank third one. */
+const boardFilter: Filter = { id: 'f-board', name: 'Board', queries: [DEFAULT_JQL, 'project = WEB AND labels = ui\nORDER BY rank', ''] }
+
+/** The first page of `sprintFilter`, which holds every task of its three queries: two in the active
  *  sprint, one in a future sprint and two in the backlog, so there is no Load more. */
 const sprintTasks = ready(
   web,
@@ -144,18 +165,18 @@ const sprintTasks = ready(
     jiraTask('WEB-30', 'Translate the error pages', 'To Do', 'todo', ['i18n']),
     jiraTask('WEB-31', 'Remove the old checkout banner', 'To Do', 'todo')
   ],
-  { queryCount: SPRINT_QUERIES.length }
+  { filterId: sprintFilter.id, queryCount: sprintFilter.queries.length }
 )
 
-/** What the worker answers when twg has no login, when the Orca CLI can't be found, and when
- *  `orca worktree list` fails. */
+/** What the worker answers when twg has no login, which fails the first query of the filter
+ *  "Tasks", when the Orca CLI can't be found, and when `orca worktree list` fails. */
 const TWG_LOGGED_OUT =
-  "twg failed: authentication required. No valid credentials found. You're not signed in. Run `twg login --force` to authenticate with your Atlassian account."
+  "Tasks: JQL query 1 failed: twg failed: authentication required. No valid credentials found. You're not signed in. Run `twg login --force` to authenticate with your Atlassian account."
 const ORCA_MISSING =
   "Couldn't find the Orca CLI. It comes with Orca: reinstall or update Orca, and connect Jira in Orca's settings if you read Jira through Orca. Or set ORCA_CLI_COMMAND to the full path of the CLI."
 const ORCA_SLOW = "orca didn't answer in time."
-/** What the worker answers when the second of several JQL queries is invalid. */
-const SECOND_JQL_INVALID = "JQL query 2 failed: twg failed: The value 'WEB' does not exist for the field 'project'."
+/** What the worker answers when the second query of the filter "Board" is invalid. */
+const SECOND_JQL_INVALID = "Board: JQL query 2 failed: twg failed: The value 'WEB' does not exist for the field 'project'."
 
 export default defineCheck({
   'no-project': { requests: answers({ kind: 'no-project' }) },
@@ -168,21 +189,32 @@ export default defineCheck({
     storage: jiraSettings('jira-orca'),
     requests: answers(ready(web, 'jira-orca', jiraTasks, { truncated: true }))
   },
-  // Project settings opens by itself on a failed load, on the tracker that failed; Done shows the
-  // error.
+  // A failed load that names no filter opens Project settings by itself, on the tracker that
+  // failed; Done shows the error.
   'tracker-error': {
+    storage: jiraSettings('jira-orca'),
+    requests: answers({ kind: 'error', project: web, message: "orca failed: Orca isn't connected to Jira. Connect Jira in Orca's settings." })
+  },
+  // twg without a login fails the query of the filter shown: the filter editor opens by itself on
+  // it, with the error.
+  'filter-error': {
     storage: jiraSettings('jira-twg'),
-    requests: answers({ kind: 'error', project: web, message: TWG_LOGGED_OUT })
+    requests: answers({ kind: 'error', project: web, message: TWG_LOGGED_OUT, filterId: tasksFilter.id })
   },
-  // Several JQL queries, the second one invalid: Project settings opens by itself on them, each
-  // with its Remove button, and Add JQL below.
+  // A filter of several JQL queries, the second one invalid: the filter editor opens by itself on
+  // them, each with its Remove button, and Add JQL below.
   'jira-queries': {
-    storage: jiraSettings('jira-twg', [DEFAULT_JQL, 'project = WEB AND labels = ui\nORDER BY rank', '']),
-    requests: answers({ kind: 'error', project: web, message: SECOND_JQL_INVALID })
+    storage: jiraSettings('jira-twg', [tasksFilter, boardFilter], boardFilter.id),
+    requests: answers({ kind: 'error', project: web, message: SECOND_JQL_INVALID, filterId: boardFilter.id })
   },
-  // Several JQL queries through twg, whose first page holds the tasks of all three, as the
-  // provider fills a page across queries: the panel lists them all, with no Load more.
-  'jira-twg-queries': { storage: jiraSettings('jira-twg', SPRINT_QUERIES), requests: answers(sprintTasks) },
+  // A filter of several JQL queries through twg, whose first page holds the tasks of all three, as
+  // the provider fills a page across queries: the panel lists them all, with no Load more.
+  'jira-twg-queries': { storage: jiraSettings('jira-twg', [sprintFilter]), requests: answers(sprintTasks) },
+  // Two filters, the second one shown: the filter row above the field shows it, with ✎ and +.
+  'jira-filters': {
+    storage: jiraSettings('jira-twg', [tasksFilter, sprintFilter], sprintFilter.id),
+    requests: answers(sprintTasks)
+  },
   // With no project known there are no Project settings to open, so the error shows at once.
   'orca-error': {
     requests: {

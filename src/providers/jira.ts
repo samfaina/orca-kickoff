@@ -1,9 +1,9 @@
 // What both Jira providers share: the task shape, the status category, the rule that a blank
-// JQL never runs, how the tasks and failures of several JQL queries make one list, and the JQL of
-// a tracker search.
+// JQL never runs, how the tasks and failures of a filter's JQL queries make one list, and the JQL
+// of a tracker search.
 import { cleanMessage, CliError } from '../cli'
 import { isRecord, text } from '../json'
-import { appendTasks, DEFAULT_JQL, jqlQueries, type JqlQuery, type Task } from '../protocol'
+import { appendTasks, DEFAULT_JQL, jqlQueries, type Filter, type JqlQuery, type Task } from '../protocol'
 import { searchWords } from './types'
 
 /** The fields of one Jira issue, as each provider finds them in its tool's output. */
@@ -54,20 +54,21 @@ export function jiraStatusCategory(key: unknown): Task['statusCategory'] {
   }
 }
 
-/** The JQL queries to run (see `jqlQueries`). With none that isn't blank it throws, asking for one,
- *  so the tool never runs without one. */
-export function requireJql(jql: readonly string[]): JqlQuery[] {
-  const queries = jqlQueries(jql)
-  if (queries.length === 0) throw new CliError(`Enter a JQL query to list Jira tasks, for example: ${DEFAULT_JQL}`)
-  return queries
+/** The filter to list and its JQL queries to run (see `jqlQueries`). With no filter, or none of its
+ *  queries that isn't blank, it throws, asking for one by the filter's name, so the tool never runs
+ *  without one. */
+export function requireJql(filter: Filter | undefined): { filter: Filter; queries: JqlQuery[] } {
+  const queries = jqlQueries(filter?.queries ?? [])
+  if (filter && queries.length > 0) return { filter, queries }
+  const ask = `Enter a JQL query to list Jira tasks, for example: ${DEFAULT_JQL}`
+  throw new CliError(filter ? `${filter.name}: ${ask}` : ask)
 }
 
-/** `error`, from running `query`, as the failure of the whole list. With more than one query it
- *  says which one failed, by its position in the settings; with one, it is `error` unchanged. */
-export function jqlQueryFailure(queries: readonly JqlQuery[], query: JqlQuery, error: unknown): unknown {
-  if (queries.length < 2) return error
+/** `error`, from running `query` of `filter`, as the failure of the whole list: it names the
+ *  filter and the query's position in it, so the person knows which query to fix. */
+export function jqlQueryFailure(filter: Filter, query: JqlQuery, error: unknown): CliError {
   const message = error instanceof CliError ? error.message : cleanMessage(error instanceof Error ? error.message : String(error))
-  return new CliError(`JQL query ${query.position} failed: ${message}`, error instanceof CliError && error.timedOut)
+  return new CliError(`${filter.name}: JQL query ${query.position} failed: ${message}`, error instanceof CliError && error.timedOut)
 }
 
 /** The tasks of each query's page, in query order, each task once, where it first appears. */

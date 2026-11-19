@@ -117,13 +117,13 @@ test('a change saves itself once its timer of SAVE_DELAY_MS fires', async () => 
 
 test("a later change restarts the timer, and the save writes both changes of the project, the later on top, keeping the providers either changed", async () => {
   const { saver, storage, timers } = setup()
-  saver.change('github:acme/web', { agent: 'codex', providers: { 'jira-twg': { jql: ['project = WEB'], site: '', profile: '' } } })
-  saver.change('github:acme/web', { agent: 'claude', providers: { 'jira-orca': { jql: ['project = API'], siteId: '' } } })
+  saver.change('github:acme/web', { agent: 'codex', providers: { 'jira-twg': { site: '', profile: 'work' } } })
+  saver.change('github:acme/web', { agent: 'claude', providers: { 'jira-orca': { siteId: 'site-2' } } })
   assert.deepEqual(timers.delays(), [SAVE_DELAY_MS])
   timers.fire()
   await settle()
   assert.deepEqual(storage.project('github:acme/web'), {
-    providers: { 'jira-twg': { jql: ['project = WEB'], site: '', profile: '' }, 'jira-orca': { jql: ['project = API'], siteId: '' } },
+    providers: { 'jira-twg': { site: '', profile: 'work' }, 'jira-orca': { siteId: 'site-2' } },
     agent: 'claude'
   })
 })

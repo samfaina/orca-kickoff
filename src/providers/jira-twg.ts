@@ -1,6 +1,6 @@
 // Jira through Atlassian's Teamwork Graph CLI, with `twg jira workitem query`. twg pages with an
-// opaque cursor, so a page is up to 50 tasks and the panel can ask for the next one. The JQL
-// queries are read one after the other, each to its end, and a page fills across them.
+// opaque cursor, so a page is up to 50 tasks and the panel can ask for the next one. The filter's
+// JQL queries are read one after the other, each to its end, and a page fills across them.
 import { unreadableOutput, type RunCli } from '../cli'
 import { adfToText } from '../adf'
 import { isRecord, parseJson, text } from '../json'
@@ -52,17 +52,17 @@ export const jiraTwg: Provider<Config> = {
    *  stops at the first query with a next page, or once the page is full, with a cursor to go on
    *  from there; the last query's end gives none. A task several queries list is on the page once,
    *  where it first appears, and the panel's append drops those an earlier page listed, so a page
-   *  can show fewer than `LIMIT`. A cursor belongs to its tracker search, so the next page of one
-   *  sends the same words again. */
+   *  can show fewer than `LIMIT`. A cursor belongs to its filter and its tracker search, so the
+   *  next page of one names the same filter and sends the same words again. */
   async list(run, _project, config, request = {}) {
-    const queries = requireJql(config.jql)
+    const { filter, queries } = requireJql(request.filter)
     let { index, after } = decodeTwgCursor(request.cursor, queries.length)
     let tasks: Task[] = []
     for (;;) {
       const query = queries[index]
       const jql = jiraSearchJql(query.jql, request.query)
       const page = await queryPage(run, config, jql, after, LIMIT - tasks.length).catch((error: unknown) => {
-        throw jqlQueryFailure(queries, query, error)
+        throw jqlQueryFailure(filter, query, error)
       })
       tasks = appendTasks(tasks, page.tasks)
       if (page.nextCursor !== null) return { tasks, nextCursor: encodeTwgCursor({ index, after: page.nextCursor }), truncated: false }

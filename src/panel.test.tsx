@@ -53,6 +53,7 @@ const ready = (tasks: Task[], fields: Partial<Extract<TaskList, { kind: 'ready' 
   tasks,
   nextCursor: null,
   truncated: false,
+  filterId: null,
   queryCount: 1,
   worktrees: {},
   worktreesError: null,
@@ -160,7 +161,7 @@ test('while the field is not blank, the hint says it filters the loaded tasks an
 const searchIn = (tracker: string) => ({ type: 'Button', text: `Search in ${tracker}` })
 const clearSearch = { type: 'Button', text: 'Clear search' }
 
-type LoadInput = { cursor?: string; query?: string }
+type LoadInput = { filterId?: string; cursor?: string; query?: string }
 
 /** A panel whose `tasks.load` answers `list` without a query and `found(query)` with one, and the
  *  inputs it was asked with. */
@@ -2579,6 +2580,70 @@ test('a workspace event during a reload reads the worktrees once the reload ends
 
 const SITES = { kind: 'ready' as const, sites: [{ id: 'site-1', name: 'Example' }, { id: 'site-2', name: 'Other' }] }
 
+/** Stored settings of the web project on Jira (twg) with `config`, and these other fields. */
+const twgStored = (config: { site: string; profile: string }, project: Record<string, JsonValue> = {}) => ({
+  settings: {
+    version: 1,
+    projects: {
+      'github:acme/web': {
+        provider: 'jira-twg',
+        providers: { 'jira-twg': config, 'jira-orca': { siteId: 'site-1' } },
+        ...project
+      }
+    }
+  }
+})
+
+const twgTask = (key: string) => task(key, { tracker: 'jira', url: `https://example.atlassian.net/browse/${key}`, status: 'To Do' })
+const twgReady = (tasks: Task[], fields: Partial<Extract<TaskList, { kind: 'ready' }>> = {}) => ready(tasks, { provider: 'jira-twg', ...fields })
+
+const tasksFilter = { id: 'tasks', name: 'Tasks', queries: ['project = WEB'] }
+const boardFilter = { id: 'f-board', name: 'Board', queries: ['project = WEB ORDER BY rank', 'project = API'] }
+const mineFilter = { id: 'f-mine', name: 'Mine', queries: ['assignee = currentUser()'] }
+
+type StoredFilter = { id: string; name: string; queries: string[] }
+type StoredFilters = { filters?: { jira?: StoredFilter[] }; shownFilterId?: { jira?: string } }
+
+/** Stored settings of the web project on Jira (twg) with these filters, and the one shown last. */
+const filtersStored = (filters: StoredFilter[], shownFilterId?: string) =>
+  twgStored({ site: '', profile: '' }, { filters: { jira: filters }, ...(shownFilterId ? { shownFilterId: { jira: shownFilterId } } : {}) })
+
+/** The key each filter lists in `showFilters`, by filter id. */
+const FILTER_KEYS: Record<string, string> = { tasks: 'WEB-1', 'f-board': 'WEB-2', 'f-mine': 'WEB-3' }
+
+/** The panel on the web project with `storage`, whose `tasks.load` lists, as the worker does, the
+ *  filter the request names, else the one stored as shown when it is asked, else the first: one
+ *  task each, `FILTER_KEYS`, or WEB-9 for a filter not in it. It answers an error naming the filter
+ *  instead for a filter whose queries are all blank. Also its host and the inputs `tasks.load` was
+ *  asked with. */
+async function showFilters(storage: ReturnType<typeof filtersStored>, requests: MockRequests = {}) {
+  const inputs: LoadInput[] = []
+  let host: MockHost | null = null
+  let view: TestPanel
+  ;({ view, host } = await showWith(
+    {
+      'tasks.load': (input: LoadInput) => {
+        inputs.push(input)
+        // `host` is set once the panel has mounted, after the first load.
+        const project = (host ? storedProject(host) : storage.settings.projects['github:acme/web']) as StoredFilters
+        const filters = project.filters?.jira ?? [{ id: 'tasks', name: 'Tasks', queries: ['assignee = currentUser()'] }]
+        const filter = filters.find((f) => f.id === input.filterId) ?? filters.find((f) => f.id === project.shownFilterId?.jira) ?? filters[0]
+        if (filter.queries.every((query) => query.trim() === '')) {
+          return { kind: 'error', project: web, message: `${filter.name}: Enter a JQL query to list Jira tasks.`, filterId: filter.id }
+        }
+        return twgReady([twgTask(FILTER_KEYS[filter.id] ?? 'WEB-9')], { filterId: filter.id })
+      },
+      ...requests
+    },
+    storage
+  ))
+  return { view, host, inputs }
+}
+
+const filterSelect = { type: 'Select', label: 'Filter' }
+const editFilter = { type: 'IconButton', label: 'Edit filter' }
+const newFilter = { type: 'IconButton', label: 'New filter' }
+
 test('whether Project settings is open is kept in memory only, and a panel opened again shows the list', async () => {
   const host = mockHost({ capabilities: ['storage:own', 'workspace:read'], requests: { 'tasks.load': ready([task('#42')]) } })
   const first = await mount(panel, { host })
@@ -2599,7 +2664,7 @@ test('a GitHub project shows GitHub as its tracker, without the "Choose a tracke
   assert.equal(view.find({ label: /^JQL/ }), null)
 })
 
-test('choosing Jira (Orca connection) saves it with the default JQL, shows its settings and reloads', async () => {
+test("setting up a Jira project takes the tracker and its site, no JQL, and Done shows the tasks of its filter \"Tasks\"", async () => {
   let loads = 0
   let seen: unknown
   let host: MockHost | null = null
@@ -2607,77 +2672,151 @@ test('choosing Jira (Orca connection) saves it with the default JQL, shows its s
   ;({ view, host } = await showWith({
     'tasks.load': () => {
       seen = host?.data().storage.settings
-      return ++loads === 1 ? { kind: 'needs-config', project: notes } : ready([], { project: notes, provider: 'jira-orca' })
+      return ++loads === 1 ? { kind: 'needs-config', project: notes } : ready([task('WEB-1', { tracker: 'jira' })], { project: notes, provider: 'jira-orca', filterId: 'tasks' })
     },
     'jira.sites': SITES
   }))
   await view.select({ type: 'Select', label: 'Tracker' }, 'jira-orca')
   assert.equal(loads, 2)
-  assert.deepEqual(seen, {
-    version: 1,
-    projects: {
-      'repo:r1': {
-        provider: 'jira-orca',
-        providers: { 'jira-orca': { jql: ['assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC'], siteId: '' } }
-      }
-    }
-  })
-  assert.deepEqual(jqlFields(view), [['JQL', 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC', 3]])
+  assert.deepEqual(seen, { version: 1, projects: { 'repo:r1': { provider: 'jira-orca', providers: { 'jira-orca': { siteId: '' } } } } })
+  assert.equal(view.find({ type: 'Textarea' }), null)
+  assert.equal(view.find({ text: /JQL/ }), null)
   assert.equal(view.valueOf({ type: 'Select', label: 'Site' }), ':default')
   assert.deepEqual(optionLabels(view, 'Site'), ['Default site', 'Example', 'Other'])
   assert.deepEqual(optionLabels(view, 'Tracker'), ['GitHub', 'Jira (Orca connection)', 'Jira (twg)'])
   assert.ok(view.find({ type: 'Text', text: /Connect Jira in Orca's settings/ }))
+  await view.press(done)
+  assert.equal(loads, 2)
+  assert.deepEqual(optionLabels(view, 'Filter'), ['Tasks'])
+  assert.ok(view.find({ type: 'Link', text: 'WEB-1' }))
   assert.deepEqual(view.errors, [])
   assert.deepEqual(view.warnings, [])
 })
 
-/** `jql` as stored: a list of queries, or one string as before a project could have several. */
-const jiraStored = (jql: string | string[], siteId: string) => ({
+/** Stored settings of the web project on Jira (Orca connection) with `siteId`, and these other fields. */
+const jiraStored = (siteId: string, project: Record<string, JsonValue> = {}) => ({
   settings: {
     version: 1,
     projects: {
       'github:acme/web': {
         provider: 'jira-orca',
-        providers: { 'jira-orca': { jql, siteId }, 'jira-twg': { jql: 'project = OLD', site: '', profile: 'work' } }
+        providers: { 'jira-orca': { siteId }, 'jira-twg': { site: '', profile: 'work' } },
+        ...project
       }
     }
   }
 })
 
-const jiraReady = (tasks: Task[] = []) => ready(tasks, { provider: 'jira-orca' })
+const jiraReady = (tasks: Task[] = []) => ready(tasks, { provider: 'jira-orca', filterId: 'tasks' })
 
-test("the JQL and site save themselves as a list, keeping the other providers' settings, and Ctrl+Enter reloads", async () => {
+test("the site saves itself, keeping the other providers' settings, and lists the tasks", async () => {
   let loads = 0
-  const { view, host } = await showWith(
-    { 'tasks.load': () => (loads++, jiraReady()), 'jira.sites': SITES },
-    jiraStored('project = WEB', 'site-1')
-  )
+  const { view, host } = await showWith({ 'tasks.load': () => (loads++, jiraReady()), 'jira.sites': SITES }, jiraStored('site-1'))
   await view.press(gear)
-  assert.equal(view.valueOf(jqlField('JQL')), 'project = WEB')
   assert.equal(view.valueOf({ type: 'Select', label: 'Site' }), 'site-1')
-  await view.type(jqlField('JQL'), 'project = API', { replace: true })
   await view.select({ type: 'Select', label: 'Site' }, 'site-2')
+  assert.equal(loads, 2)
   await wait(800)
-  assert.deepEqual(storedProject(host), {
-    provider: 'jira-orca',
-    providers: { 'jira-orca': { jql: ['project = API'], siteId: 'site-2' }, 'jira-twg': { jql: ['project = OLD'], site: '', profile: 'work' } }
-  })
-  const before = loads
-  await view.submit(jqlField('JQL'))
-  assert.equal(loads, before + 1)
+  assert.deepEqual(storedProject(host), { provider: 'jira-orca', providers: { 'jira-orca': { siteId: 'site-2' }, 'jira-twg': { site: '', profile: 'work' } } })
 })
 
 const jqlField = (label: string) => ({ type: 'Textarea', label })
 const removeQuery = (label: string) => ({ type: 'IconButton', label: `Remove ${label}` })
 const addJql = { type: 'Button', text: 'Add JQL' }
+const filterTitle = (title: 'Edit filter' | 'New filter') => ({ type: 'Heading', text: title })
 
 /** The JQL fields shown, as [label, value, rows], in order. */
 const jqlFields = (view: TestPanel) =>
   view.findAll({ type: 'Textarea', label: /^JQL/ }).map((field) => [field.label, view.valueOf(field), field.props.rows])
 
+test("✎ opens the filter editor on the filter shown, in place of the list, with its name and JQL queries, and Cancel goes back loading nothing", async () => {
+  const { view, inputs } = await showFilters(filtersStored([tasksFilter, boardFilter], 'f-board'))
+  await view.press(editFilter)
+  assert.equal(view.find({ type: 'Text', text: 'web ·' })?.props.muted, true)
+  assert.equal(view.find(filterTitle('Edit filter'))?.props.level, 3)
+  assert.equal(view.find(searchField), null)
+  assert.equal(view.find({ type: 'Link', text: 'WEB-2' }), null)
+  assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Board')
+  assert.deepEqual(jqlFields(view), [
+    ['JQL', 'project = WEB ORDER BY rank', 3],
+    ['JQL 2', 'project = API', 3]
+  ])
+  // As the template detail: Cancel and Save in the title row, Delete in a bar of its own.
+  const { title, deleteBar } = detailParts(view)
+  assert.deepEqual(buttonsIn(title), ['Cancel', 'Save'])
+  assert.ok(deleteBar)
+  assertProps(buttonIn(deleteBar, 'Delete filter'), { tone: 'danger', icon: 'delete', variant: 'ghost' })
+
+  await view.type({ type: 'Input', label: 'Name' }, 'Sprint', { replace: true })
+  await view.press({ type: 'Button', text: 'Cancel' })
+  assert.equal(view.find(filterTitle('Edit filter')), null)
+  assert.ok(view.find({ type: 'Link', text: 'WEB-2' }))
+  assert.deepEqual(optionLabels(view, 'Filter'), ['Tasks', 'Board'])
+  assert.equal(inputs.length, 1)
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.warnings, [])
+})
+
+test('Save stores the filter as edited, blank queries included, shows it, goes back to the list and loads it again', async () => {
+  const { view, host, inputs } = await showFilters(filtersStored([tasksFilter, boardFilter], 'f-board'))
+  await view.press(editFilter)
+  await view.type({ type: 'Input', label: 'Name' }, ' Sprint ', { replace: true })
+  await view.press(addJql)
+  await view.type(jqlField('JQL 2'), 'sprint in openSprints()', { replace: true })
+  await view.press(saveButton)
+  assert.deepEqual((storedProject(host) as StoredFilters).filters, {
+    jira: [tasksFilter, { id: 'f-board', name: 'Sprint', queries: ['project = WEB ORDER BY rank', 'sprint in openSprints()', ''] }]
+  })
+  assert.equal(view.find(filterTitle('Edit filter')), null)
+  assert.deepEqual(optionLabels(view, 'Filter'), ['Tasks', 'Sprint'])
+  assert.equal(view.valueOf(filterSelect), 'f-board')
+  assert.equal(inputs.length, 2)
+  assert.ok(view.find({ type: 'Link', text: 'WEB-2' }))
+})
+
+test('+ opens the editor on a new filter, "Filter 2" or the first free number, with one blank query; Save adds it at the end and shows its tasks', async () => {
+  const { view, host } = await showFilters(filtersStored([tasksFilter, { ...boardFilter, name: 'Filter 2' }]))
+  await view.press(newFilter)
+  assert.ok(view.find(filterTitle('New filter')))
+  assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Filter 3')
+  assert.deepEqual(jqlFields(view), [['JQL', '', 3]])
+  assert.equal(view.find(jqlField('JQL'))?.props.placeholder, 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC')
+  assert.equal(detailParts(view).deleteBar, undefined)
+  await view.type(jqlField('JQL'), 'assignee = currentUser()')
+  await view.press(saveButton)
+  const stored = storedProject(host) as StoredFilters
+  const added = stored.filters?.jira?.[2]
+  assert.ok(added)
+  assert.deepEqual({ ...added, id: '' }, { id: '', name: 'Filter 3', queries: ['assignee = currentUser()'] })
+  assert.match(added.id, /^f-/)
+  assert.deepEqual(stored.shownFilterId, { jira: added.id })
+  assert.deepEqual(optionLabels(view, 'Filter'), ['Tasks', 'Filter 2', 'Filter 3'])
+  assert.equal(view.valueOf(filterSelect), added.id)
+  assert.ok(view.find({ type: 'Link', text: 'WEB-9' }))
+})
+
+test("a filter's name can't be blank or another filter's, ignoring case, and Save waits until it can", async () => {
+  const { view, host } = await showFilters(filtersStored([tasksFilter, boardFilter]))
+  await view.press(newFilter)
+  const name = { type: 'Input', label: 'Name' }
+  await view.type(name, '   ', { replace: true })
+  assert.ok(view.find({ type: 'Text', text: 'Give the filter a name.' }))
+  assert.equal(view.find(name)?.props.invalid, true)
+  assert.equal(view.find(saveButton)?.disabled, true)
+  await view.type(name, ' board', { replace: true })
+  assert.ok(view.find({ type: 'Text', text: 'Another filter is already called "Board".' }))
+  assert.equal(view.find(saveButton)?.disabled, true)
+  await view.submit(jqlField('JQL'))
+  assert.ok(view.find(filterTitle('New filter')))
+  await view.type(name, 'Board 2', { replace: true })
+  assert.equal(view.find(saveButton)?.disabled, false)
+  await view.press({ type: 'Button', text: 'Cancel' })
+  assert.equal((storedProject(host) as StoredFilters).filters?.jira?.length, 2)
+})
+
 test('each JQL query is a three-row field, "JQL" then "JQL 2"…, with Remove beside each while more than one is left and Add JQL below', async () => {
-  const { view, host } = await showWith({ 'tasks.load': jiraReady(), 'jira.sites': SITES }, jiraStored(['project = WEB', '', 'labels = ui'], ''))
-  await view.press(gear)
+  const { view, host } = await showFilters(filtersStored([{ ...tasksFilter, queries: ['project = WEB', '', 'labels = ui'] }]))
+  await view.press(editFilter)
   assert.deepEqual(jqlFields(view), [
     ['JQL', 'project = WEB', 3],
     ['JQL 2', '', 3],
@@ -2689,13 +2828,13 @@ test('each JQL query is a three-row field, "JQL" then "JQL 2"…, with Remove be
     assert.ok(remove)
     assertProps(remove, { tooltip: 'Remove query', icon: 'delete', tone: 'danger' })
   }
-  // Add JQL is the "add" icon and its text, coloured as Done is.
+  // Add JQL is the "add" icon and its text, coloured as Save is.
   const add = view.find(addJql)
-  const doneProps = view.find(done)?.props
-  assert.ok(add && doneProps)
-  assertProps(add, { icon: 'add', variant: doneProps.variant, tone: doneProps.tone, size: doneProps.size })
+  const saveProps = view.find(saveButton)?.props
+  assert.ok(add && saveProps)
+  assertProps(add, { icon: 'add', variant: saveProps.variant, tone: saveProps.tone, size: saveProps.size })
   assert.equal(add.props.variant, 'solid')
-  assert.ok(view.find({ type: 'Text', text: 'Ctrl+Enter (Cmd+Enter on macOS) lists the tasks.' })?.props.muted)
+  assert.ok(view.find({ type: 'Text', text: 'Ctrl+Enter (Cmd+Enter on macOS) saves the filter and lists its tasks.' })?.props.muted)
 
   await view.press(removeQuery('JQL 2'))
   assert.deepEqual(jqlFields(view), [
@@ -2712,18 +2851,18 @@ test('each JQL query is a three-row field, "JQL" then "JQL 2"…, with Remove be
     ['JQL', 'labels = ui', 3],
     ['JQL 2', 'project = API', 3]
   ])
+  // Nothing is stored before Save.
   await wait(800)
-  assert.deepEqual((storedProject(host) as { providers: Record<string, unknown> }).providers['jira-orca'], {
-    jql: ['labels = ui', 'project = API'],
-    siteId: ''
-  })
+  assert.deepEqual((storedProject(host) as StoredFilters).filters?.jira?.[0].queries, ['project = WEB', '', 'labels = ui'])
+  await view.press(saveButton)
+  assert.deepEqual((storedProject(host) as StoredFilters).filters?.jira?.[0].queries, ['labels = ui', 'project = API'])
   assert.deepEqual(view.errors, [])
   assert.deepEqual(view.warnings, [])
 })
 
 test('each JQL label sits above its query, and Remove is centred beside the query, not the label', async () => {
-  const { view } = await showWith({ 'tasks.load': jiraReady(), 'jira.sites': SITES }, jiraStored(['project = WEB', 'labels = ui'], ''))
-  await view.press(gear)
+  const { view } = await showFilters(filtersStored([boardFilter]))
+  await view.press(editFilter)
   const fields = nodesIn(view.tree(), (node) => node.type === 'Field')
   assert.deepEqual(
     fields.map((field) => field.props?.label),
@@ -2743,7 +2882,7 @@ test('each JQL label sits above its query, and Remove is centred beside the quer
   assert.deepEqual(view.warnings, [])
 })
 
-test('Ctrl+Enter in any JQL field lists the tasks with the queries as typed', async () => {
+test('Ctrl+Enter in any JQL field saves the filter with the queries as typed and lists its tasks', async () => {
   const seen: unknown[] = []
   let host: MockHost | null = null
   let view: TestPanel
@@ -2751,23 +2890,109 @@ test('Ctrl+Enter in any JQL field lists the tasks with the queries as typed', as
     {
       'tasks.load': () => {
         // `host` is set once the panel has mounted, after the first load.
-        if (host) seen.push((storedProject(host) as { providers: { 'jira-orca': { jql: unknown } } }).providers['jira-orca'].jql)
-        return jiraReady()
-      },
-      'jira.sites': SITES
+        if (host) seen.push((storedProject(host) as StoredFilters).filters?.jira?.[0].queries)
+        return twgReady([twgTask('WEB-1')], { filterId: 'tasks' })
+      }
     },
-    jiraStored('project = WEB', '')
+    filtersStored([tasksFilter])
   ))
-  await view.press(gear)
+  await view.press(editFilter)
   await view.press(addJql)
   await view.type(jqlField('JQL 2'), 'labels = ui\nAND status = Open')
   await view.submit(jqlField('JQL 2'))
+  assert.equal(view.find(filterTitle('Edit filter')), null)
+  await view.press(editFilter)
   await view.submit(jqlField('JQL'))
   assert.deepEqual(seen, [
     ['project = WEB', 'labels = ui\nAND status = Open'],
     ['project = WEB', 'labels = ui\nAND status = Open']
   ])
-  assert.ok(view.find(settingsTitle))
+  assert.ok(view.find({ type: 'Link', text: 'WEB-1' }))
+})
+
+test('Delete needs a second click, and deleting the filter shown shows the first remaining one and loads its tasks', async () => {
+  const { view, host, inputs } = await showFilters(filtersStored([tasksFilter, boardFilter, mineFilter], 'f-board'))
+  await view.press(editFilter)
+  await view.press({ type: 'Button', text: 'Delete filter' })
+  assert.ok(view.find(filterTitle('Edit filter')))
+  assert.equal((storedProject(host) as StoredFilters).filters?.jira?.length, 3)
+  await view.press({ type: 'Button', text: 'Confirm delete' })
+  assert.deepEqual(storedProject(host) as StoredFilters, {
+    ...(storedProject(host) as object),
+    filters: { jira: [tasksFilter, mineFilter] },
+    shownFilterId: { jira: 'tasks' }
+  })
+  assert.equal(view.find(filterTitle('Edit filter')), null)
+  assert.deepEqual(optionLabels(view, 'Filter'), ['Tasks', 'Mine'])
+  assert.equal(view.valueOf(filterSelect), 'tasks')
+  assert.ok(view.find({ type: 'Link', text: 'WEB-1' }))
+  assert.equal(inputs.length, 2)
+})
+
+test('Delete turns back after a few seconds without the second click, and is disabled for the only filter', async () => {
+  const { view } = await showFilters(filtersStored([tasksFilter]))
+  await view.press(editFilter)
+  assert.equal(view.find({ type: 'Button', text: 'Delete filter' })?.disabled, true)
+  await view.press({ type: 'Button', text: 'Cancel' })
+  await view.unmount()
+
+  const two = await showFilters(filtersStored([tasksFilter, boardFilter]))
+  await two.view.press(editFilter)
+  await two.view.press({ type: 'Button', text: 'Delete filter' })
+  assert.ok(two.view.find({ type: 'Button', text: 'Confirm delete' }))
+  await wait(CONFIRM_DELETE_MS + 200)
+  await two.view.settled()
+  assert.ok(two.view.find({ type: 'Button', text: 'Delete filter' }))
+})
+
+test('a failed write of a filter keeps the editor open with the error and the draft', async () => {
+  let failing = true
+  let data: JsonValue = filtersStored([tasksFilter, boardFilter]).settings
+  const host = mockHost({
+    capabilities: ['storage:own', 'workspace:read'],
+    requests: { 'tasks.load': twgReady([twgTask('WEB-1')], { filterId: 'tasks' }) },
+    results: {
+      'storage.get': () => ({ value: data }),
+      'storage.set': (params: { key: string; value: JsonValue }) => {
+        if (failing) throw hostError('quota_exceeded', 'Storage is full')
+        data = params.value
+        return { ok: true }
+      }
+    }
+  })
+  const view = await mount(panel, { host })
+  await view.press(editFilter)
+  await view.type({ type: 'Input', label: 'Name' }, 'Sprint', { replace: true })
+  await view.press(saveButton)
+  assert.ok(view.find(filterTitle('Edit filter')))
+  assert.ok(view.find({ type: 'Callout', text: "Couldn't save the filter (quota_exceeded). Try again." }))
+  assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Sprint')
+  failing = false
+  await view.press(saveButton)
+  assert.equal(view.find(filterTitle('Edit filter')), null)
+  assert.deepEqual(optionLabels(view, 'Filter'), ['Sprint', 'Board'])
+})
+
+test('a change of active project while the filter editor is open drops the draft, and closing the panel drops it too', async () => {
+  let project = web
+  const { view } = await showWith(
+    { 'tasks.load': () => (project === web ? twgReady([twgTask('WEB-1')], { filterId: 'tasks' }) : ready([task('#9')], { project: api })) },
+    filtersStored([tasksFilter])
+  )
+  await view.press(editFilter)
+  project = api
+  await view.emit('workspace.changed', { context: { branch: 'main', displayName: 'api', terminals: [] } })
+  await view.settled()
+  assert.equal(view.find(filterTitle('Edit filter')), null)
+  assert.ok(view.find({ type: 'Link', text: '#9' }))
+  await view.unmount()
+
+  const again = await showFilters(filtersStored([tasksFilter]))
+  await again.view.press(editFilter)
+  await again.view.unmount()
+  const reopened = await mount(panel, { host: again.host })
+  assert.equal(reopened.find(filterTitle('Edit filter')), null)
+  assert.ok(reopened.find(filterSelect))
 })
 
 test('a truncated Jira list from several queries says the first 100 of each are shown, whatever the settings say since', async () => {
@@ -2775,11 +3000,11 @@ test('a truncated Jira list from several queries says the first 100 of each are 
     'tasks.load': ready([task('WEB-1', { tracker: 'jira' })], { provider: 'jira-orca', truncated: true, queryCount }),
     'jira.sites': SITES
   })
-  const several = await showWith(truncated(2), jiraStored(['project = WEB'], ''))
+  const several = await showWith(truncated(2), jiraStored('', { filters: { jira: [tasksFilter] } }))
   assert.ok(several.view.find({ type: 'Text', text: 'Showing the first 100 tasks of each query — narrow your JQL.' }))
   await several.view.unmount()
 
-  const one = await showWith(truncated(1), jiraStored(['project = WEB', 'labels = ui'], ''))
+  const one = await showWith(truncated(1), jiraStored('', { filters: { jira: [boardFilter] } }))
   assert.ok(one.view.find({ type: 'Text', text: 'Showing the first 100 tasks — narrow your JQL.' }))
 })
 
@@ -2794,7 +3019,7 @@ test('100 tracker search results from several queries say the first 100 of each 
 test("a stored site that isn't connected any more stays selectable, and a site list failure is shown", async () => {
   const { view } = await showWith(
     { 'tasks.load': jiraReady(), 'jira.sites': { kind: 'error', message: 'orca failed: Orca is not running.' } },
-    jiraStored('project = WEB', 'site-9')
+    jiraStored('site-9')
   )
   await view.press(gear)
   assert.equal(view.valueOf({ type: 'Select', label: 'Site' }), 'site-9')
@@ -2802,26 +3027,26 @@ test("a stored site that isn't connected any more stays selectable, and a site l
   assert.ok(view.find({ type: 'Text', text: /Orca is not running/ }))
 })
 
-test('a load failure keeps the provider settings visible', async () => {
+test('a load failure that names no filter opens Project settings by itself on the tracker, and Done shows the error under the filter row', async () => {
   const { view } = await showWith(
-    { 'tasks.load': { kind: 'error', project: web, message: 'orca failed: Error 400: JQL no válida.' }, 'jira.sites': SITES },
-    jiraStored('project = ', '')
+    { 'tasks.load': { kind: 'error', project: web, message: "orca failed: Orca isn't connected to Jira." }, 'jira.sites': SITES },
+    jiraStored('')
   )
   assert.equal(view.valueOf({ type: 'Select', label: 'Tracker' }), 'jira-orca')
-  assert.equal(view.valueOf(jqlField('JQL')), 'project = ')
+  assert.equal(view.find(filterTitle('Edit filter')), null)
   await view.press(done)
-  assert.ok(view.find({ type: 'Callout', text: /JQL no válida/ }))
+  assert.ok(view.find({ type: 'Callout', text: /isn't connected to Jira/ }))
+  assert.ok(view.find(filterSelect))
 })
 
 test('Project settings that opened by itself stays open once a load from it, or from its template detail, lists the tasks', async () => {
   let fixed = false
   const { view } = await showWith(
-    { 'tasks.load': () => (fixed ? jiraReady([task('WEB-1', { tracker: 'jira' })]) : { kind: 'error', project: web, message: 'orca failed: Error 400.' }), 'jira.sites': SITES },
-    jiraStored('project = ', '')
+    { 'tasks.load': () => (fixed ? jiraReady([task('WEB-1', { tracker: 'jira' })]) : { kind: 'error', project: web, message: 'orca failed: Orca is not running.' }), 'jira.sites': SITES },
+    jiraStored('')
   )
-  await view.type(jqlField('JQL'), 'project = WEB', { replace: true })
   fixed = true
-  await view.submit(jqlField('JQL'))
+  await view.select({ type: 'Select', label: 'Site' }, 'site-1')
   assert.ok(view.find(settingsTitle))
   await view.press(done)
   assert.ok(view.find({ type: 'Link', text: 'WEB-1' }))
@@ -2836,8 +3061,8 @@ test('Project settings that opened by itself stays open once a load from it, or 
   assert.ok(second.view.find(settingsTitle))
 })
 
-/** The provider settings of the web project, as `jiraStored` and `twgStored` store them. */
-type StoredProviders = { providers: { 'jira-orca'?: { jql: string | string[] }; 'jira-twg'?: { profile: string } } }
+/** The provider settings of the web project, as `twgStored` stores them. */
+type StoredProviders = { providers: { 'jira-twg'?: { profile: string } } }
 
 /** The panel with these stored settings and a `tasks.load` that answers from the web project's
  *  settings as stored when it is asked, and its count of loads. */
@@ -2862,37 +3087,8 @@ async function showFromStored(
   return { view, loads: () => loads }
 }
 
-/** The panel with a Jira (Orca connection) project whose list is `WEB-<n>` for each stored query
- *  `project = <n>`, a failed load for a query that names no project, and its count of loads. */
-const showJiraByQuery = (jql: string) =>
-  showFromStored(jiraStored(jql, ''), (project) => {
-    const numbers = [project.providers['jira-orca']?.jql ?? []].flat().map((query) => /^project = (\d+)$/.exec(query)?.[1])
-    if (numbers.some((number) => number === undefined)) return { kind: 'error', project: web, message: 'orca failed: Error 400: JQL no válida.' }
-    return jiraReady(numbers.map((number) => task(`WEB-${number}`, { tracker: 'jira' })))
-  })
-
-test('editing a JQL query loads nothing until Done, which lists the tasks of the queries as typed, saved or not', async () => {
-  const { view, loads } = await showJiraByQuery('project = 1')
-  assert.ok(view.find({ type: 'Link', text: 'WEB-1' }))
-  await view.press(gear)
-  await view.type(jqlField('JQL'), 'project = 2', { replace: true })
-  await wait(800)
-  assert.equal(loads(), 1)
-  // A change not saved yet when Done is pressed.
-  await view.type(jqlField('JQL'), 'project = 3', { replace: true })
-  await view.press(done)
-  assert.equal(loads(), 2)
-  assert.equal(view.find(settingsTitle), null)
-  assert.ok(view.find({ type: 'Link', text: 'WEB-3' }))
-  assert.equal(view.find({ type: 'Link', text: 'WEB-1' }), null)
-  // Done again with nothing changed since loads nothing.
-  await view.press(gear)
-  await view.press(done)
-  assert.equal(loads(), 2)
-})
-
-test("Done after a change of twg's profile, a setting of the tracker beside its JQL, reloads the list once", async () => {
-  const { view, loads } = await showFromStored(twgStored({ jql: 'project = WEB', site: '', profile: 'work' }), (project) =>
+test("Done after a change of twg's profile, a setting of the tracker, reloads the list once", async () => {
+  const { view, loads } = await showFromStored(twgStored({ site: '', profile: 'work' }), (project) =>
     twgReady([twgTask(project.providers['jira-twg']?.profile === 'home' ? 'WEB-2' : 'WEB-1')])
   )
   assert.ok(view.find({ type: 'Link', text: 'WEB-1' }))
@@ -2908,7 +3104,7 @@ test("changing the tracker lists the new tracker's tasks, and Done shows them wi
   let loads = 0
   const { view } = await showWith(
     { 'tasks.load': () => (++loads === 1 ? jiraReady([task('WEB-1', { tracker: 'jira' })]) : twgReady([twgTask('WEB-2')])), 'jira.sites': SITES },
-    jiraStored('project = WEB', '')
+    jiraStored('')
   )
   await view.press(gear)
   await view.select({ type: 'Select', label: 'Tracker' }, 'jira-twg')
@@ -2933,15 +3129,64 @@ test('Done after changing only the agent or the default template, or nothing, lo
   assert.ok(view.find({ type: 'Link', text: '#42' }))
 })
 
-test('Project settings that opened by itself after a failed load lists the tasks on Done once the JQL is fixed', async () => {
-  const { view, loads } = await showJiraByQuery('project = ')
-  assert.ok(view.find(settingsTitle))
-  await view.type(jqlField('JQL'), 'project = 7', { replace: true })
-  assert.equal(loads(), 1)
-  await view.press(done)
-  assert.equal(loads(), 2)
+test('a failed query opens the filter editor by itself on its filter, with the error, not Project settings', async () => {
+  const { view } = await showFilters(filtersStored([tasksFilter, { ...boardFilter, queries: ['', ' '] }], 'f-board'))
+  assert.ok(view.find(filterTitle('Edit filter')))
   assert.equal(view.find(settingsTitle), null)
-  assert.ok(view.find({ type: 'Link', text: 'WEB-7' }))
+  assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Board')
+  assert.deepEqual(jqlFields(view), [
+    ['JQL', '', 3],
+    ['JQL 2', ' ', 3]
+  ])
+  const error = view.find({ type: 'Callout', text: /^Couldn't load tasks / })
+  assert.match(error?.text ?? '', /^Couldn't load tasks Board: Enter a JQL query/)
+  // The error opens the form, above the name.
+  const { form } = detailParts(view)
+  assert.equal(elementsIn(form)[0]?.type, 'Callout')
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.warnings, [])
+})
+
+test('Save in the filter editor that opened on a failed query, with the query fixed, lists the tasks and shows the error no more', async () => {
+  const { view, inputs } = await showFilters(filtersStored([tasksFilter, { ...boardFilter, queries: [''] }], 'f-board'))
+  await view.type(jqlField('JQL'), 'project = WEB')
+  await view.press(saveButton)
+  assert.equal(view.find(filterTitle('Edit filter')), null)
+  assert.equal(view.find({ type: 'Callout' }), null)
+  assert.ok(view.find({ type: 'Link', text: 'WEB-2' }))
+  assert.equal(inputs.length, 2)
+})
+
+test('Cancel in the filter editor that opened on a failed query shows the error under the filter row, and another filter can be chosen', async () => {
+  const { view, inputs } = await showFilters(filtersStored([tasksFilter, { ...boardFilter, queries: [''] }], 'f-board'))
+  await view.press({ type: 'Button', text: 'Cancel' })
+  assert.equal(view.find(filterTitle('Edit filter')), null)
+  assert.equal(view.find(settingsTitle), null)
+  assert.match(view.find({ type: 'Callout', text: /^Couldn't load tasks / })?.text ?? '', /^Couldn't load tasks Board: Enter a JQL query/)
+  assert.equal(view.valueOf(filterSelect), 'f-board')
+  await view.select(filterSelect, 'tasks')
+  assert.equal(inputs.length, 2)
+  assert.ok(view.find({ type: 'Link', text: 'WEB-1' }))
+  assert.equal(view.find({ type: 'Callout' }), null)
+})
+
+test('a failed query while the filter editor or the template detail is open leaves its draft open', async () => {
+  const { view } = await showFilters(filtersStored([tasksFilter, { ...boardFilter, queries: [''] }], 'f-board'))
+  await view.press({ type: 'Button', text: 'Cancel' })
+  await view.press(newFilter)
+  await view.type({ type: 'Input', label: 'Name' }, 'Sprint', { replace: true })
+  const reload = () => view.emit('workspace.changed', { context: { branch: 'main', displayName: 'web', terminals: [] } })
+  await reload()
+  await view.settled()
+  assert.ok(view.find(filterTitle('New filter')))
+  assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Sprint')
+
+  await view.press({ type: 'Button', text: 'Cancel' })
+  await view.press(gear)
+  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await reload()
+  await view.settled()
+  assert.ok(view.find({ type: 'Heading', text: 'Edit template' }))
 })
 
 test('after a site list failure or no connected site, reloading the tasks asks for the sites again', async () => {
@@ -2949,7 +3194,7 @@ test('after a site list failure or no connected site, reloading the tasks asks f
   let asked = 0
   const { view } = await showWith(
     { 'tasks.load': jiraReady(), 'jira.sites': () => answers[Math.min(asked++, answers.length - 1)] },
-    jiraStored('project = WEB', '')
+    jiraStored('')
   )
   const reloadAndOpen = async () => {
     await view.press(done)
@@ -2966,31 +3211,16 @@ test('after a site list failure or no connected site, reloading the tasks asks f
   assert.equal(asked, 3)
 })
 
-const twgStored = (config: { jql: string; site: string; profile: string }) => ({
-  settings: {
-    version: 1,
-    projects: {
-      'github:acme/web': {
-        provider: 'jira-twg',
-        providers: { 'jira-twg': config, 'jira-orca': { jql: 'project = OLD', siteId: 'site-1' } }
-      }
-    }
-  }
-})
-
-const twgTask = (key: string) => task(key, { tracker: 'jira', url: `https://example.atlassian.net/browse/${key}`, status: 'To Do' })
-const twgReady = (tasks: Task[], fields: Partial<Extract<TaskList, { kind: 'ready' }>> = {}) => ready(tasks, { provider: 'jira-twg', ...fields })
-
-test('choosing Jira (twg) shows its stored JQL, Site and Profile fields, with the twg login hint', async () => {
+test('choosing Jira (twg) shows its Site and Profile fields, no JQL, with the twg login hint', async () => {
   let loads = 0
   const { view, host } = await showWith(
     { 'tasks.load': () => (++loads === 1 ? ready([], { provider: 'jira-orca' }) : twgReady([])) },
-    jiraStored('project = WEB', 'site-1')
+    jiraStored('site-1')
   )
   await view.press(gear)
   await view.select({ type: 'Select', label: 'Tracker' }, 'jira-twg')
   assert.equal(loads, 2)
-  assert.equal(view.valueOf(jqlField('JQL')), 'project = OLD')
+  assert.equal(view.find({ type: 'Textarea' }), null)
   assert.equal(view.valueOf({ type: 'Input', label: 'Site' }), '')
   assert.equal(view.valueOf({ type: 'Input', label: 'Profile' }), 'work')
   assert.equal(view.find({ type: 'Select', label: 'Site' }), null)
@@ -3000,42 +3230,157 @@ test('choosing Jira (twg) shows its stored JQL, Site and Profile fields, with th
   assert.deepEqual(view.warnings, [])
 })
 
-test("the twg JQL, site and profile save themselves, keeping the other providers' settings, and Ctrl+Enter or Enter reloads", async () => {
+test("the twg site and profile save themselves, keeping the other providers' settings, and Enter reloads", async () => {
   let loads = 0
-  const { view, host } = await showWith({ 'tasks.load': () => (loads++, twgReady([])) }, twgStored({ jql: 'project = WEB', site: '', profile: '' }))
+  const { view, host } = await showWith({ 'tasks.load': () => (loads++, twgReady([])) }, twgStored({ site: '', profile: '' }))
   await view.press(gear)
-  await view.type(jqlField('JQL'), 'project = API', { replace: true })
   await view.type({ type: 'Input', label: 'Site' }, 'example')
   await view.type({ type: 'Input', label: 'Profile' }, 'work')
   await wait(800)
-  assert.deepEqual(storedProject(host), {
-    provider: 'jira-twg',
-    providers: { 'jira-twg': { jql: ['project = API'], site: 'example', profile: 'work' }, 'jira-orca': { jql: ['project = OLD'], siteId: 'site-1' } }
-  })
-  for (const field of [jqlField('JQL'), { type: 'Input', label: 'Site' }, { type: 'Input', label: 'Profile' }]) {
+  assert.deepEqual(storedProject(host), { provider: 'jira-twg', providers: { 'jira-twg': { site: 'example', profile: 'work' }, 'jira-orca': { siteId: 'site-1' } } })
+  for (const field of [{ type: 'Input', label: 'Site' }, { type: 'Input', label: 'Profile' }]) {
     const before = loads
     await view.submit(field)
     assert.equal(loads, before + 1)
   }
 })
 
-test('switching to the other Jira provider the first time carries every JQL query over', async () => {
-  const { view } = await showWith(
-    { 'tasks.load': ready([], { provider: 'jira-orca' }), 'jira.sites': SITES },
-    {
-      settings: {
-        version: 1,
-        projects: { 'github:acme/web': { provider: 'jira-orca', providers: { 'jira-orca': { jql: ['project = WEB', '', 'labels = ui'], siteId: '' } } } }
-      }
-    }
+test('switching between the two Jira providers keeps every filter, and the one shown', async () => {
+  const { view, host } = await showFilters(
+    jiraStored('', { filters: { jira: [tasksFilter, boardFilter] }, shownFilterId: { jira: 'f-board' } }) as ReturnType<typeof filtersStored>,
+    { 'jira.sites': SITES }
   )
-  await view.press(gear)
-  await view.select({ type: 'Select', label: 'Tracker' }, 'jira-twg')
-  assert.deepEqual(jqlFields(view), [
-    ['JQL', 'project = WEB', 3],
-    ['JQL 2', '', 3],
-    ['JQL 3', 'labels = ui', 3]
-  ])
+  for (const provider of ['jira-twg', 'jira-orca']) {
+    await view.press(gear)
+    await view.select({ type: 'Select', label: 'Tracker' }, provider)
+    await view.press(done)
+    assert.deepEqual(optionLabels(view, 'Filter'), ['Tasks', 'Board'])
+    assert.equal(view.valueOf(filterSelect), 'f-board')
+    assert.ok(view.find({ type: 'Link', text: 'WEB-2' }))
+  }
+  assert.deepEqual((storedProject(host) as StoredFilters).filters, { jira: [tasksFilter, boardFilter] })
+})
+
+test('a Jira project shows the filter row above the search field: the filter shown last, then ✎ and +', async () => {
+  const { view } = await showFilters(filtersStored([tasksFilter, boardFilter, mineFilter], 'f-board'))
+  assert.equal(view.valueOf(filterSelect), 'f-board')
+  assert.deepEqual(optionLabels(view, 'Filter'), ['Tasks', 'Board', 'Mine'])
+  assert.equal(view.find(filterSelect)?.props.labelHidden, true)
+  assertProps(view.find(editFilter)!, { icon: 'edit', tooltip: 'Edit filter', size: 'sm', variant: 'ghost' })
+  assertProps(view.find(newFilter)!, { icon: 'add', tooltip: 'New filter', size: 'sm', variant: 'ghost' })
+  assert.deepEqual(keysShown(view, ['WEB-1', 'WEB-2', 'WEB-3']), ['WEB-2'])
+  // The row, the select, then ✎ and +, comes before the field.
+  const [row] = nodesIn(view.tree(), (node) => node.type === 'Box' && nodesIn(node, (inner) => inner.type === 'Select' && inner.props?.label === 'Filter').length > 0 && node.props?.direction === 'row')
+  assertProps(row, { direction: 'row', align: 'center' })
+  const order = nodesIn(view.tree(), (node) => (node.type === 'Select' && node.props?.label === 'Filter') || (node.type === 'Input' && node.props?.label === 'Search tasks') || node.type === 'IconButton')
+    .map((node) => node.props?.label)
+    .filter((label) => label !== 'Reload tasks' && label !== 'Project settings' && !String(label).startsWith('Start'))
+  assert.deepEqual(order, ['Filter', 'Edit filter', 'New filter', 'Search tasks'])
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.warnings, [])
+})
+
+test('a Jira project without stored filters shows the filter "Tasks", and a GitHub project shows no filter row', async () => {
+  const { view } = await showFilters(twgStored({ site: '', profile: '' }))
+  assert.deepEqual(optionLabels(view, 'Filter'), ['Tasks'])
+  assert.equal(view.valueOf(filterSelect), 'tasks')
+  await view.unmount()
+
+  const github = await show(ready([task('#42')]))
+  assert.equal(github.find(filterSelect), null)
+  assert.equal(github.find(editFilter), null)
+})
+
+test("choosing another filter stores it as shown before it loads that filter's tasks from the tracker, keeping the field's words", async () => {
+  const { view, host, inputs } = await showFilters(filtersStored([tasksFilter, boardFilter, mineFilter]))
+  const shownWhenAsked: unknown[] = []
+  await view.type(searchField, 'web')
+  await view.select(filterSelect, 'f-mine')
+  shownWhenAsked.push((storedProject(host) as StoredFilters).shownFilterId)
+  assert.deepEqual(inputs, [{}, {}])
+  assert.deepEqual(shownWhenAsked, [{ jira: 'f-mine' }])
+  assert.equal(view.valueOf(filterSelect), 'f-mine')
+  assert.equal(view.valueOf(searchField), 'web')
+  assert.deepEqual(keysShown(view, ['WEB-1', 'WEB-3']), ['WEB-3'])
+
+  // The filter shown already loads nothing.
+  await view.select(filterSelect, 'f-mine')
+  assert.equal(inputs.length, 2)
+})
+
+test('a panel opened again shows the filter shown there last', async () => {
+  const { view, host } = await showFilters(filtersStored([tasksFilter, boardFilter]))
+  await view.select(filterSelect, 'f-board')
+  await view.unmount()
+  const again = await mount(panel, { host })
+  assert.equal(again.valueOf(filterSelect), 'f-board')
+  assert.ok(again.find({ type: 'Link', text: 'WEB-2' }))
+})
+
+test('choosing another filter leaves the tracker search shown, and drops the answer of one under way', async () => {
+  const search = held()
+  let searches = 0
+  // Every tracker search answers WEB-90, the second one once the test releases it.
+  const { view: shown } = await showWith(
+    {
+      'tasks.load': async (input: LoadInput) => {
+        if (input.query === undefined) return twgReady([twgTask('WEB-1')])
+        if (++searches === 2) await search.released
+        return twgReady([twgTask('WEB-90')])
+      }
+    },
+    filtersStored([tasksFilter, boardFilter])
+  )
+  await shown.type(searchField, 'dark')
+  await shown.submit(searchField)
+  assert.ok(shown.find({ type: 'Text', text: /^Results in Jira/ }))
+  await shown.select(filterSelect, 'f-board')
+  assert.equal(shown.find({ type: 'Text', text: /^Results in/ }), null)
+  assert.equal(shown.valueOf(searchField), 'dark')
+
+  const searchAgain = shown.submit(searchField)
+  await drawn(shown, { label: 'Searching Jira' })
+  const choosing = shown.select(filterSelect, 'tasks')
+  search.release()
+  await Promise.all([searchAgain, choosing])
+  await shown.settled()
+  assert.equal(shown.find({ type: 'Text', text: /^Results in/ }), null)
+  assert.equal(shown.find({ type: 'Link', text: 'WEB-90' }), null)
+  assert.equal(shown.valueOf(searchField), 'dark')
+})
+
+test('"Load more" names the filter listed with its cursor', async () => {
+  const inputs: LoadInput[] = []
+  const { view } = await showWith(
+    {
+      'tasks.load': (input: LoadInput) => {
+        inputs.push(input)
+        return input.cursor ? twgReady([twgTask('WEB-3')], { filterId: 'f-board' }) : twgReady([twgTask('WEB-2')], { filterId: 'f-board', nextCursor: '1:c2' })
+      }
+    },
+    filtersStored([tasksFilter, boardFilter], 'f-board')
+  )
+  await view.press({ type: 'Button', text: /· Load more$/ })
+  assert.deepEqual(inputs, [{}, { filterId: 'f-board', cursor: '1:c2' }])
+  assert.deepEqual(keysShown(view, ['WEB-2', 'WEB-3']), ['WEB-2', 'WEB-3'])
+})
+
+test('"Load more" answered for another filter loads the list again', async () => {
+  let loads = 0
+  const { view } = await showWith(
+    {
+      'tasks.load': (input: LoadInput) => {
+        loads++
+        if (input.cursor) return twgReady([twgTask('WEB-3')], { filterId: 'tasks' })
+        return twgReady([twgTask(loads === 1 ? 'WEB-2' : 'WEB-1')], { filterId: loads === 1 ? 'f-board' : 'tasks', nextCursor: loads === 1 ? '1:c2' : null })
+      }
+    },
+    filtersStored([tasksFilter, boardFilter], 'f-board')
+  )
+  await view.press({ type: 'Button', text: /· Load more$/ })
+  await view.settled()
+  assert.equal(loads, 3)
+  assert.deepEqual(keysShown(view, ['WEB-1', 'WEB-2', 'WEB-3']), ['WEB-1'])
 })
 
 test('"Load more" appends the next page without duplicate keys, and the loaded pages stay in place after a Start', async () => {
@@ -3050,7 +3395,7 @@ test('"Load more" appends the next page without duplicate keys, and the loaded p
       'task.start': { ok: true, underWay: false },
       'worktrees.load': { kind: 'ready', worktrees: { 'WEB-3': { worktreeId: 'r1::/src/web-3', name: 'web-3-task-web-3', agent: 'claude' } } }
     },
-    twgStored({ jql: 'project = WEB', site: '', profile: '' })
+    twgStored({ site: '', profile: '' })
   )
   assert.deepEqual(keysShown(view, ['WEB-1', 'WEB-2', 'WEB-3']), ['WEB-1', 'WEB-2'])
   await view.press({ type: 'Button', text: /· Load more$/ })
@@ -3075,7 +3420,7 @@ test('"Load more" is a full-width outline button with the count of loaded tasks,
         return twgReady([twgTask('WEB-3')], { nextCursor: 'cursor-3' })
       }
     },
-    twgStored({ jql: 'project = WEB', site: '', profile: '' })
+    twgStored({ site: '', profile: '' })
   )
   const button = view.find({ type: 'Button', text: 'Showing 2 · Load more' })
   assert.ok(button)
@@ -3101,7 +3446,7 @@ test('a "Load more" failure keeps the loaded tasks and says why', async () => {
       'tasks.load': ({ cursor }) =>
         cursor ? { kind: 'error', project: web, message: 'twg failed: The cursor has expired.' } : twgReady([twgTask('WEB-1')], { nextCursor: 'cursor-2' })
     },
-    twgStored({ jql: 'project = WEB', site: '', profile: '' })
+    twgStored({ site: '', profile: '' })
   )
   await view.press({ type: 'Button', text: /· Load more$/ })
   assert.ok(view.find({ type: 'Link', text: 'WEB-1' }))
@@ -3132,7 +3477,7 @@ test('"Load more" during a tracker search sends its words with the cursor and ap
         return cursor ? twgReady([twgTask('WEB-91'), twgTask('WEB-92')]) : twgReady([twgTask('WEB-90'), twgTask('WEB-91')], { nextCursor: 'found-2' })
       }
     },
-    twgStored({ jql: 'project = WEB', site: '', profile: '' })
+    twgStored({ site: '', profile: '' })
   )
   await view.type(searchField, 'dark')
   await view.submit(searchField)
@@ -3202,12 +3547,12 @@ test('a change of the tracker in Project settings clears the tracker search', as
         return query === undefined ? twgReady([twgTask('WEB-1')]) : twgReady([twgTask('WEB-90')])
       }
     },
-    twgStored({ jql: 'project = WEB', site: '', profile: '' })
+    twgStored({ site: '', profile: '' })
   )
   await view.type(searchField, 'web')
   await view.submit(searchField)
   await view.press(gear)
-  await view.type(jqlField('JQL'), ' AND labels = ui')
+  await view.type({ type: 'Input', label: 'Profile' }, 'work')
   await view.press(done)
   assert.equal(view.find({ type: 'Text', text: /^Results in/ }), null)
   assert.equal(view.valueOf(searchField), 'web')
@@ -3215,10 +3560,10 @@ test('a change of the tracker in Project settings clears the tracker search', as
 
   await view.submit(searchField)
   await view.press(gear)
-  await view.submit(jqlField('JQL'))
+  await view.submit({ type: 'Input', label: 'Profile' })
   await view.press(done)
   assert.equal(view.find({ type: 'Text', text: /^Results in/ }), null)
-  // Done reloads the list after the first change; after Ctrl+Enter it is loaded already.
+  // Done reloads the list after the first change; after Enter it is loaded already.
   assert.deepEqual(inputs, [{ query: undefined }, { query: 'web' }, { query: undefined }, { query: 'web' }, { query: undefined }])
 })
 
@@ -3240,7 +3585,7 @@ test('a page that arrives after a reload is dropped', async () => {
         return twgReady([twgTask('WEB-99')])
       }
     },
-    twgStored({ jql: 'project = WEB', site: '', profile: '' })
+    twgStored({ site: '', profile: '' })
   ))
   await view.press({ type: 'Button', text: /· Load more$/ })
   await view.settled()

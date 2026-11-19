@@ -128,6 +128,7 @@ test('a project with a GitHub repo lists its open issues with no configuration',
     ],
     nextCursor: null,
     truncated: false,
+    filterId: null,
     queryCount: 1,
     worktrees: {},
     worktreesError: null,
@@ -174,7 +175,9 @@ test('a project without a repo or a chosen provider needs configuration, not an 
 test('a project with Jira (twg) lists its tasks through twg, one page at a time', async () => {
   const settings = {
     version: 1,
-    projects: { 'github:acme/web': { provider: 'jira-twg', providers: { 'jira-twg': { jql: ['project = WEB'], site: '', profile: 'work' } } } }
+    projects: {
+      'github:acme/web': { provider: 'jira-twg', providers: { 'jira-twg': { site: '', profile: 'work' } }, filters: { jira: [{ id: 'tasks', name: 'Tasks', queries: ['project = WEB'] }] } }
+    }
   }
   const page = (key: string, nextCursor: string | null) =>
     JSON.stringify({
@@ -202,7 +205,7 @@ test('a project with Jira (twg) lists its tasks through twg, one page at a time'
 })
 
 test('tasks.load with a query runs a tracker search, and a Jira (twg) next page sends the query again with the cursor', async () => {
-  // A JQL stored as one string, as before a project could have several.
+  // A JQL stored as one string, as before a project could have several queries or filters.
   const settings = {
     version: 1,
     projects: { 'github:acme/web': { provider: 'jira-twg', providers: { 'jira-twg': { jql: 'project = WEB ORDER BY rank', site: '', profile: '' } } } }
@@ -298,8 +301,19 @@ const JIRA_SEARCH = wrap([
   { key: 'WEB-13', title: 'Arreglar el login', description: '', url: 'https://example.atlassian.net/browse/WEB-13', status: { name: 'Por hacer', categoryKey: 'new' }, labels: [] }
 ])
 
-const jiraSettings = (siteId = '') => ({
-  settings: { version: 1, projects: { 'github:acme/web': { provider: 'jira-orca', providers: { 'jira-orca': { jql: ['project = WEB'], siteId } } } } }
+/** Stored settings of the web project on Jira (Orca connection), with these filters. */
+const jiraSettings = (siteId = '', filters = [{ id: 'tasks', name: 'Tasks', queries: ['project = WEB'] }], shownFilterId?: string) => ({
+  settings: {
+    version: 1,
+    projects: {
+      'github:acme/web': {
+        provider: 'jira-orca',
+        providers: { 'jira-orca': { siteId } },
+        filters: { jira: filters },
+        ...(shownFilterId ? { shownFilterId: { jira: shownFilterId } } : {})
+      }
+    }
+  }
 })
 
 test("a project on Jira (Orca connection) lists the JQL's tasks, with task worktrees linked or named after them", async () => {
@@ -329,41 +343,58 @@ test("a project on Jira (Orca connection) lists the JQL's tasks, with task workt
   assert.deepEqual(search?.args, ['jira', 'search', 'project = WEB', '--limit', '100', '--json', '--site', 'site-2'])
 })
 
-test('a Jira list says how many JQL queries listed it: the non-blank ones', async () => {
-  const settings = {
-    version: 1,
-    projects: { 'github:acme/web': { provider: 'jira-orca', providers: { 'jira-orca': { jql: ['project = WEB', ' ', 'labels = ui'], siteId: '' } } } }
-  }
-  const { worker } = await start({ ...ORCA_OK, 'orca jira search': JIRA_SEARCH }, { storage: { settings } })
+const board = { id: 'f-board', name: 'Board', queries: ['project = WEB ORDER BY rank', ' ', 'labels = ui'] }
+const mine = { id: 'f-mine', name: 'Mine', queries: ['assignee = currentUser()'] }
+
+/** The JQL of each `orca jira search` call. */
+const searched = (calls: Call[]) => calls.filter((call) => call.args[0] === 'jira' && call.args[1] === 'search').map((call) => call.args[2])
+
+test('tasks.load lists the filter it names, else the one shown last, else the first, and says which, with its count of queries that run', async () => {
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca jira search': JIRA_SEARCH }, { storage: jiraSettings('', [board, mine], 'f-mine') })
+  const shown = await worker.request('tasks.load', {})
+  assert.ok(shown.kind === 'ready')
+  assert.deepEqual([shown.filterId, shown.queryCount], ['f-mine', 1])
+  assert.deepEqual(searched(calls.splice(0)), ['assignee = currentUser()'])
+
+  const named = await worker.request('tasks.load', { filterId: 'f-board', query: 'dark' })
+  assert.ok(named.kind === 'ready')
+  assert.deepEqual([named.filterId, named.queryCount], ['f-board', 2])
+  assert.deepEqual(searched(calls.splice(0)), ['(project = WEB) AND (text ~ "dark*") ORDER BY rank', '(labels = ui) AND (text ~ "dark*")'])
+
+  const gone = await worker.request('tasks.load', { filterId: 'f-gone' })
+  assert.ok(gone.kind === 'ready')
+  assert.equal(gone.filterId, 'f-mine')
+})
+
+test('a Jira project without filters lists the filter "Tasks" with the default JQL', async () => {
+  const settings = { version: 1, projects: { 'github:acme/web': { provider: 'jira-orca', providers: {} } } }
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca jira search': JIRA_SEARCH }, { storage: { settings } })
   const list = await worker.request('tasks.load', {})
   assert.ok(list.kind === 'ready')
-  assert.equal(list.queryCount, 2)
-  const found = await worker.request('tasks.load', { query: 'dark' })
-  assert.ok(found.kind === 'ready')
-  assert.equal(found.queryCount, 2)
+  assert.equal(list.filterId, 'tasks')
+  assert.deepEqual(searched(calls), ['assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC'])
 })
 
-test('an invalid second JQL query fails the whole list, saying which one', async () => {
-  const settings = {
-    version: 1,
-    projects: { 'github:acme/web': { provider: 'jira-orca', providers: { 'jira-orca': { jql: ['project = WEB', 'project = ('], siteId: '' } } } }
-  }
+test("an invalid JQL query fails the whole list, naming its filter and position, and the answer names the filter", async () => {
   const invalid = JSON.stringify({ ok: false, error: { code: 'runtime_error', message: 'Error 400: La consulta JQL no es válida.' } })
   const { worker } = await start(
-    { ...ORCA_OK, 'orca jira search': (args) => (args.includes('project = (') ? invalid : JIRA_SEARCH) },
-    { storage: { settings } }
+    { ...ORCA_OK, 'orca jira search': (args) => (args.includes('labels = ui') ? invalid : JIRA_SEARCH) },
+    { storage: jiraSettings('', [mine, board]) }
   )
-  const list = await worker.request('tasks.load', {})
-  assert.ok(list.kind === 'error' && list.project?.id === 'github:acme/web')
-  assert.equal(list.message, 'JQL query 2 failed: orca failed: Error 400: La consulta JQL no es válida.')
+  assert.deepEqual(await worker.request('tasks.load', { filterId: 'f-board' }), {
+    kind: 'error',
+    project: { id: 'github:acme/web', name: 'web', repo: 'acme/web' },
+    message: 'Board: JQL query 3 failed: orca failed: Error 400: La consulta JQL no es válida.',
+    filterId: 'f-board'
+  })
 })
 
-test('a blank JQL is an error asking for one, and keeps the project so the settings stay', async () => {
-  const settings = { version: 1, projects: { 'github:acme/web': { provider: 'jira-orca', providers: { 'jira-orca': { jql: ['', ' '], siteId: '' } } } } }
-  const { worker, calls } = await start({ ...ORCA_OK }, { storage: { settings } })
+test('a filter whose queries are all blank is an error asking for one, naming the filter, and keeps the project', async () => {
+  const { worker, calls } = await start({ ...ORCA_OK }, { storage: jiraSettings('', [{ ...mine, queries: ['', ' '] }]) })
   const list = await worker.request('tasks.load', {})
   assert.ok(list.kind === 'error' && list.project?.id === 'github:acme/web')
-  assert.match(list.message, /Enter a JQL query/)
+  assert.match(list.message, /^Mine: Enter a JQL query/)
+  assert.equal(list.filterId, 'f-mine')
   assert.equal(calls.some((call) => call.args[0] === 'jira'), false)
 })
 

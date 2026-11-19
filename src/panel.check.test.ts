@@ -86,15 +86,34 @@ test('truncated ends the list with the truncation notice', async () => {
   assert.ok(shown.find({ text: /^Showing the first 100 tasks — narrow your JQL/ }))
 })
 
-test('tracker-error opens Project settings on the tracker that failed', async () => {
+test('tracker-error opens Project settings on the tracker that failed, without JQL', async () => {
   const shown = await render('tracker-error')
   assert.ok(shown.find({ type: 'Heading', text: 'Project settings' }))
-  assert.equal(shown.valueOf({ label: 'Tracker' }), 'jira-twg')
-  assert.ok(shown.find({ type: 'Textarea', label: 'JQL' }))
+  assert.equal(shown.valueOf({ label: 'Tracker' }), 'jira-orca')
+  assert.equal(shown.find({ type: 'Textarea' }), null)
 })
 
-test('jira-queries shows each JQL query with its Remove button, adds and removes queries, and Ctrl+Enter lists the tasks', async () => {
+test('filter-error opens the filter editor on the filter whose query failed, with its error', async () => {
+  const shown = await render('filter-error')
+  assert.ok(shown.find({ type: 'Heading', text: 'Edit filter' }))
+  assert.equal(shown.valueOf({ type: 'Input', label: 'Name' }), 'Tasks')
+  assert.ok(shown.find({ text: /Tasks: JQL query 1 failed: twg failed: authentication required/ }))
+})
+
+test('jira-filters shows the filter row with the filter shown, then ✎ and +, above the field', async () => {
+  const shown = await render('jira-filters')
+  assert.equal(shown.valueOf({ type: 'Select', label: 'Filter' }), 'f-sprint')
+  const options = shown.find({ type: 'Select', label: 'Filter' })?.props.options as { label: string }[]
+  assert.deepEqual(options.map((option) => option.label), ['Tasks', 'Sprint'])
+  assert.ok(shown.find({ type: 'IconButton', label: 'Edit filter' }))
+  assert.ok(shown.find({ type: 'IconButton', label: 'New filter' }))
+  assert.ok(shown.find({ type: 'Input', label: 'Search tasks' }))
+})
+
+test('jira-queries opens the filter editor on each JQL query with its Remove button, adds and removes queries, and Ctrl+Enter saves and lists the tasks', async () => {
   const shown = await render('jira-queries')
+  assert.ok(shown.find({ type: 'Heading', text: 'Edit filter' }))
+  assert.ok(shown.find({ text: /^Board: JQL query 2 failed/ }))
   const labels = () => shown.findAll({ type: 'Textarea', label: /^JQL/ }).map((field) => field.label)
   const removable = () => shown.findAll({ type: 'IconButton', label: /^Remove JQL/ }).map((button) => button.label)
   assert.deepEqual(labels(), ['JQL', 'JQL 2', 'JQL 3'])
@@ -113,7 +132,8 @@ test('jira-queries shows each JQL query with its Remove button, adds and removes
   const before = loads()
   await shown.submit({ type: 'Textarea', label: 'JQL 2' })
   assert.equal(loads(), before + 1)
-  assert.ok(shown.find({ type: 'Heading', text: 'Project settings' }))
+  // The scenario's list fails again, so the editor opens on the filter again.
+  assert.ok(shown.find({ type: 'Heading', text: 'Edit filter' }))
   assert.deepEqual(shown.errors, [])
 })
 

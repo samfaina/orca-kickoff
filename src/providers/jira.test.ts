@@ -1,22 +1,29 @@
 import { assert, test } from 'orca/testing'
 import { isJiraTaskKey, jiraSearchJql, requireJql, splitJql } from './jira'
 
-test('the queries to run are the non-blank ones, trimmed, each with its position in the settings', () => {
-  assert.deepEqual(requireJql(['  project = WEB ', '', '   ', 'project = API']), [
-    { jql: 'project = WEB', position: 1 },
-    { jql: 'project = API', position: 4 }
-  ])
+const board = (...queries: string[]) => ({ id: 'f-board', name: 'Board', queries })
+
+test("the queries to run are the filter's non-blank ones, trimmed, each with its position in the filter", () => {
+  const filter = board('  project = WEB ', '', '   ', 'project = API')
+  assert.deepEqual(requireJql(filter), {
+    filter,
+    queries: [
+      { jql: 'project = WEB', position: 1 },
+      { jql: 'project = API', position: 4 }
+    ]
+  })
 })
 
 test('each line break in a query becomes a space', () => {
-  assert.deepEqual(requireJql(['project = WEB\nAND labels = ui\r\nORDER BY rank\r', '\n\r\n']), [
+  assert.deepEqual(requireJql(board('project = WEB\nAND labels = ui\r\nORDER BY rank\r', '\n\r\n')).queries, [
     { jql: 'project = WEB AND labels = ui ORDER BY rank', position: 1 }
   ])
 })
 
-test('with no query, or only blank ones, the list asks for one', () => {
-  assert.throws(() => requireJql([]), /Enter a JQL query to list Jira tasks, for example: assignee = currentUser\(\)/)
-  assert.throws(() => requireJql(['', ' \n ']), /Enter a JQL query to list Jira tasks/)
+test('a filter with no query, or only blank ones, asks for one by its name, and so does a list without a filter', () => {
+  assert.throws(() => requireJql(board()), /^Error: Board: Enter a JQL query to list Jira tasks, for example: assignee = currentUser\(\)/)
+  assert.throws(() => requireJql(board('', ' \n ')), /^Error: Board: Enter a JQL query to list Jira tasks/)
+  assert.throws(() => requireJql(undefined), /^Error: Enter a JQL query to list Jira tasks/)
 })
 
 test("a tracker search keeps the JQL's conditions in parentheses, matches word prefixes and keeps ORDER BY outside", () => {
