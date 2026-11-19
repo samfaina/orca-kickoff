@@ -15,6 +15,7 @@ import {
   IconButton,
   Input,
   Link,
+  RadioGroup,
   Row,
   Select,
   Separator,
@@ -44,6 +45,7 @@ import {
   type FilterRecipe
 } from './filter'
 import { isRecord } from './json'
+import { jqlRecipe, type JqlRecipeAnswers, type RecipeAssignees } from './jql-recipe'
 import {
   appendTasks,
   chooseProvider,
@@ -138,6 +140,31 @@ type ShownSettings = {
   defaultTemplateId: string
 }
 
+/** What + offers on Jira, in place of the panel view, before the filter editor opens on the new
+ *  filter: the kind of filter to start from, and the answers of each JQL recipe, as typed. */
+type NewFilterChoice = {
+  projectId: string
+  kind: NewFilterKind
+  projectKey: string
+  assignees: RecipeAssignees
+  leaveOut: string
+}
+
+/** A blank filter, or one of the JQL recipes. */
+type NewFilterKind = 'custom' | JqlRecipeAnswers['recipe']
+
+const NEW_FILTER_KINDS: { value: NewFilterKind; label: string; description: string }[] = [
+  { value: 'custom', label: 'Custom', description: 'One blank JQL query to write yourself.' },
+  { value: 'board-order', label: 'Board order', description: "A Jira project's tasks in board order: the open sprints, the future sprints, then the rest." },
+  { value: 'my-open-tasks', label: 'My open tasks', description: 'The tasks assigned to you, last updated first.' }
+]
+
+const ASSIGNEE_OPTIONS: { value: RecipeAssignees; label: string }[] = [
+  { value: 'mine', label: 'Mine' },
+  { value: 'mine-or-unassigned', label: 'Mine or unassigned' },
+  { value: 'anyone', label: 'Anyone' }
+]
+
 /** The filter editor's draft: a filter of `projectId` on `tracker` being edited, or a new one. */
 type FilterDraft = {
   projectId: string
@@ -210,6 +237,10 @@ const cardTemplates = atom<Record<string, string>>({})
 /** Whether the template detail's Variables list is open, while the panel is open. */
 const variablesOpen = atom(false)
 
+/** Whether "Filters", the filter row and Search tasks above the list, is open, while the panel is
+ *  open. */
+const filtersOpen = atom(true)
+
 /** The key of a task's card in `cardTemplates`. */
 const cardKey = (projectId: string, taskKey: string) => `${projectId}\n${taskKey}`
 
@@ -253,6 +284,9 @@ const templateDraft = atom<TemplateDraft | null>(null)
 
 /** The filter editor's draft while it replaces the panel view, else null. */
 const filterDraft = atom<FilterDraft | null>(null)
+
+/** What + offers on Jira while it replaces the panel view, else null. */
+const newFilterChoice = atom<NewFilterChoice | null>(null)
 
 /** Whether a "Load more" is under way, and the error of the last one. */
 const loadingMore = atom(false)
@@ -351,27 +385,71 @@ function chooseFilter(id: string): void {
 }
 
 /** Opens the filter editor, in place of the panel view, on one of the shown project's filters, or
- *  on a new one named "Filter 2", "Filter 3"… with one blank query. `loadError` is the failed load
- *  that opened it. */
-function openFilter(id: string | null, loadError: string | null = null): void {
+ *  on a new one: named "Filter 2", "Filter 3"… with one blank query, or with the name and queries of
+ *  `recipe`, the name made free. `loadError` is the failed load that opened it. */
+function openFilter(id: string | null, loadError: string | null = null, recipe: FilterRecipe | null = null): void {
   const shown = read(shownSettings)
   const current = shown ? trackerFilters(shown) : null
   if (!shown || !current) return
   const filter = id === null ? null : current.filters.find((candidate) => candidate.id === id)
   if (id !== null && !filter) return
   closeTemplate()
+  set(newFilterChoice, null)
   set(filterDraft, {
     projectId: shown.projectId,
     tracker: current.tracker,
     id: filter?.id ?? newId('f', current.filters),
     isNew: !filter,
-    name: filter?.name ?? newFilterName(current.filters),
-    queries: filter ? [...filter.queries] : [''],
+    name: filter?.name ?? (recipe ? recipeFilterName(current.filters, recipe.name) : newFilterName(current.filters)),
+    queries: filter ? [...filter.queries] : recipe ? [...recipe.queries] : [''],
     loadError,
     error: null,
     saving: false,
     confirmingDelete: false
   })
+}
+
+/** + in the filter row: on Jira, the choice of a blank filter or a JQL recipe, in place of the panel
+ *  view, with fresh answers; on GitHub, the filter editor on a new filter, whose recipes are in it. */
+function newFilter(): void {
+  const shown = read(shownSettings)
+  const current = shown ? trackerFilters(shown) : null
+  if (!shown || !current) return
+  if (current.tracker !== 'jira') {
+    openFilter(null)
+    return
+  }
+  closeTemplate()
+  set(filterDraft, null)
+  set(newFilterChoice, { projectId: shown.projectId, kind: 'custom', projectKey: '', assignees: 'mine-or-unassigned', leaveOut: 'Done' })
+}
+
+/** Changes the choice of +, while it is still open on the project `expected` was made for. */
+function changeNewFilterChoice(expected: NewFilterChoice, changes: Partial<NewFilterChoice>): void {
+  update(newFilterChoice, (choice) => (choice && choice.projectId === expected.projectId ? { ...choice, ...changes } : choice))
+}
+
+/** The name and queries the choice of + writes: null for a blank filter, or undefined while its
+ *  recipe lacks an answer it needs. */
+function chosenRecipe(choice: NewFilterChoice): FilterRecipe | null | undefined {
+  switch (choice.kind) {
+    case 'custom':
+      return null
+    case 'board-order':
+      return jqlRecipe({ recipe: 'board-order', projectKey: choice.projectKey, assignees: choice.assignees, leaveOut: choice.leaveOut }) ?? undefined
+    case 'my-open-tasks':
+      return jqlRecipe({ recipe: 'my-open-tasks', leaveOut: choice.leaveOut }) ?? undefined
+  }
+}
+
+/** Continue: opens the filter editor on a new filter, blank or with the queries its recipe writes,
+ *  unless the recipe lacks an answer. The answers are not kept. */
+function continueNewFilter(): void {
+  const choice = read(newFilterChoice)
+  if (!choice || read(shownSettings)?.projectId !== choice.projectId) return
+  const recipe = chosenRecipe(choice)
+  if (recipe === undefined) return
+  openFilter(null, null, recipe)
 }
 
 /** Changes the editor's draft, while it is still the draft of the `expected` filter. */
@@ -384,10 +462,11 @@ function useRecipe(draft: FilterDraft, filters: Filter[], recipe: FilterRecipe):
   changeFilterDraft(draft, { name: recipeFilterName(filters, recipe.name), queries: [...recipe.queries] })
 }
 
-/** Leaves the filter editor without saving. */
+/** Leaves the filter editor, or the choice of + before it, without saving. */
 function closeFilter(): void {
   cancelConfirmDelete()
   set(filterDraft, null)
+  set(newFilterChoice, null)
 }
 
 /** Stores the draft's filter, unless its name can't be saved, then goes back to the list and loads
@@ -595,8 +674,8 @@ async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
   const answeredProjectId = answer.kind === 'no-project' ? null : answer.project?.id
   const draft = read(templateDraft)
   if (draft && answeredProjectId !== undefined && answeredProjectId !== draft.projectId) closeTemplate()
-  const filterEdit = read(filterDraft)
-  if (filterEdit && answeredProjectId !== undefined && answeredProjectId !== filterEdit.projectId) closeFilter()
+  const filterOpen = read(filterDraft) ?? read(newFilterChoice)
+  if (filterOpen && answeredProjectId !== undefined && answeredProjectId !== filterOpen.projectId) closeFilter()
   // A change of active project also sends Project settings back to opening by itself and clears
   // the field. Only once a project was listed: before that, both are as they start.
   if (answeredProjectId !== undefined) {
@@ -624,8 +703,9 @@ async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
   if (savedTrackerSettings !== null) listedTrackerSettingsVersion = savedTrackerSettings
   set(list, answer)
   set(loading, false)
-  // A failed query opens the filter editor on its filter, unless a draft is open already.
-  if (answer.kind === 'error' && answer.filterId !== undefined && !read(templateDraft) && !read(filterDraft)) {
+  // A failed query opens the filter editor on its filter, unless a draft, or the choice of +, is
+  // open already.
+  if (answer.kind === 'error' && answer.filterId !== undefined && !read(templateDraft) && !read(filterDraft) && !read(newFilterChoice)) {
     if (read(shownSettings)?.projectId === answer.project?.id) openFilter(answer.filterId, answer.message)
   }
 }
@@ -1032,7 +1112,9 @@ export function setup(ctx: PanelContext): void {
   set(cardTemplates, {})
   set(templateDraft, null)
   set(filterDraft, null)
+  set(newFilterChoice, null)
   set(variablesOpen, false)
+  set(filtersOpen, true)
   set(settingsChoice, 'auto')
   viewStateFor = undefined
   set(fieldText, '')
@@ -1078,6 +1160,8 @@ export default function Panel() {
   if (filterEdit && shown?.projectId === filterEdit.projectId) {
     return <FilterEditor draft={filterEdit} filters={projectFilters(shown.filterSettings, filterEdit.tracker)} projectName={project?.name ?? ''} />
   }
+  const newChoice = read(newFilterChoice)
+  if (newChoice && shown?.projectId === newChoice.projectId) return <NewFilterChooser choice={newChoice} projectName={project?.name ?? ''} />
   const settings = project !== null && shown?.projectId === project.id ? shown : null
   const choice = read(settingsChoice)
   if (project && settings && (choice === 'auto' ? needsSettings(current) : choice === 'open')) {
@@ -1351,13 +1435,58 @@ function Body({ list }: { list: TaskList }) {
     case 'error':
       return (
         <>
-          {list.project ? <FilterRow projectId={list.project.id} /> : null}
+          {list.project ? <FiltersSection projectId={list.project.id} /> : null}
           <LoadError message={list.message} />
         </>
       )
     case 'ready':
       return <ReadyList list={list} />
   }
+}
+
+/** "Filters", open at first: a header as wide as the panel, as a Collapsible's, that opens and
+ *  closes it, then the filter row and `children`, Search tasks on a ready list. Not a Collapsible,
+ *  which would indent them. Closed, a line under the header says the filter shown and the trimmed
+ *  `words` of the text filter, so neither is hidden. A divider follows it. It shows nothing while it
+ *  would hold nothing. */
+function FiltersSection({ projectId, words = '', children }: { projectId: string; words?: string; children?: OrcaNode }) {
+  const open = read(filtersOpen)
+  const shown = read(shownSettings)
+  const current = shown?.projectId === projectId ? trackerFilters(shown) : null
+  if (!current && children === undefined) return null
+  const filterName = current?.filters.find((filter) => filter.id === current.shownFilterId)?.name ?? null
+  const summary = [filterName, words !== '' ? `"${words}"` : null].filter((part) => part !== null).join(' · ')
+  // The divider parts the section from the list, or from the load error, below it.
+  return (
+    <>
+      <Box direction="column" gap="xs">
+        <Stack align="stretch">
+          <Button
+            key="filters-toggle"
+            size="sm"
+            variant="ghost"
+            icon={open ? 'collapse' : 'expand'}
+            tooltip={open ? 'Hide filters' : 'Show filters'}
+            onPress={() => set(filtersOpen, !open)}
+          >
+            Filters
+          </Button>
+        </Stack>
+        {!open && summary !== '' ? (
+          <Text size="sm" muted truncate>
+            {summary}
+          </Text>
+        ) : null}
+        {open ? (
+          <Stack gap="sm">
+            <FilterRow projectId={projectId} />
+            {children}
+          </Stack>
+        ) : null}
+      </Box>
+      <Separator />
+    </>
+  )
 }
 
 /** On a project with a tracker, the filter shown, ✎ to edit it and + to add one. */
@@ -1379,7 +1508,7 @@ function FilterRow({ projectId }: { projectId: string }) {
       <Box shrink={false}>
         <Row gap="none" align="center">
           <IconButton icon="edit" label="Edit filter" tooltip="Edit filter" size="sm" variant="ghost" onPress={() => openFilter(current.shownFilterId)} />
-          <IconButton icon="add" label="New filter" tooltip="New filter" size="sm" variant="ghost" onPress={() => openFilter(null)} />
+          <IconButton icon="add" label="New filter" tooltip="New filter" size="sm" variant="ghost" onPress={newFilter} />
         </Row>
       </Box>
     </Box>
@@ -1411,9 +1540,10 @@ type ReadyTaskList = Extract<TaskList, { kind: 'ready' }>
 /** The tracker's name, as the panel says it. */
 const trackerName = (provider: ProviderId) => (trackerOf(provider) === 'github' ? 'GitHub' : 'Jira')
 
-/** The warnings, the filter row, the field and the tracker search's title, which stay in place,
- *  then the list, which scrolls inside the rest of the panel's height: the loaded tasks that match
- *  the text filter, or the tracker search's results, then "Load more" and the truncation notice. */
+/** The warnings, "Filters" with the filter row and the field, and the tracker search's title, which
+ *  stay in place, then the list, which scrolls inside the rest of the panel's height: the loaded
+ *  tasks that match the text filter, or the tracker search's results, then "Load more" and the
+ *  truncation notice. */
 function ReadyList({ list }: { list: ReadyTaskList }) {
   const text = read(fieldText)
   const query = text.trim()
@@ -1431,34 +1561,35 @@ function ReadyList({ list }: { list: ReadyTaskList }) {
           <Text>{`Couldn't read Orca's worktrees, so Start is off. ${list.worktreesError ?? ''}`.trim()}</Text>
         </Callout>
       ) : null}
-      <FilterRow projectId={list.project.id} />
-      <Stack gap="xs">
-        <Input
-          type="search"
-          label="Search tasks"
-          labelHidden
-          value={text}
-          placeholder="Filter loaded tasks · Enter searches the tracker"
-          onChange={changeField}
-          onSubmit={(value) => void searchTracker(value.trim())}
-        />
-        {query !== '' ? (
-          <Box direction="row" justify="between" align="center" gap="xs">
-            <Box grow minWidth={0}>
-              {found === null ? (
-                <Text size="sm" muted>
-                  {`Filtering ${list.tasks.length} loaded tasks · Enter searches ${tracker}`}
-                </Text>
-              ) : null}
+      <FiltersSection projectId={list.project.id} words={query}>
+        <Stack gap="xs">
+          <Input
+            type="search"
+            label="Search tasks"
+            labelHidden
+            value={text}
+            placeholder="Filter loaded tasks · Enter searches the tracker"
+            onChange={changeField}
+            onSubmit={(value) => void searchTracker(value.trim())}
+          />
+          {query !== '' ? (
+            <Box direction="row" justify="between" align="center" gap="xs">
+              <Box grow minWidth={0}>
+                {found === null ? (
+                  <Text size="sm" muted>
+                    {`Filtering ${list.tasks.length} loaded tasks · Enter searches ${tracker}`}
+                  </Text>
+                ) : null}
+              </Box>
+              <Box shrink={false}>
+                <Button key="tracker-search" size="sm" variant="outline" onPress={() => void searchTracker(query)}>
+                  {`Search in ${tracker}`}
+                </Button>
+              </Box>
             </Box>
-            <Box shrink={false}>
-              <Button key="tracker-search" size="sm" variant="outline" onPress={() => void searchTracker(query)}>
-                {`Search in ${tracker}`}
-              </Button>
-            </Box>
-          </Box>
-        ) : null}
-      </Stack>
+          ) : null}
+        </Stack>
+      </FiltersSection>
       {found !== null ? (
         <Box direction="row" justify="between" align="center" gap="xs">
           <Box grow minWidth={0}>
@@ -1729,6 +1860,70 @@ function TemplateDetail({ draft, templates, projectName }: { draft: TemplateDraf
           </Button>
         </Box>
       )}
+    </Box>
+  )
+}
+
+/** What + offers on Jira, in place of the panel view, as the filter editor is: the title row with
+ *  Cancel and Continue, then the kind of filter to start from and the answers its recipe asks. */
+function NewFilterChooser({ choice, projectName }: { choice: NewFilterChoice; projectName: string }) {
+  const ready = chosenRecipe(choice) !== undefined
+  const change = (changes: Partial<NewFilterChoice>) => changeNewFilterChoice(choice, changes)
+  const leaveOut = (
+    <Stack gap="xs">
+      <Input label="Statuses to leave out" value={choice.leaveOut} onChange={(value) => change({ leaveOut: value })} onSubmit={continueNewFilter} />
+      <Text size="sm" muted>
+        Status names separated by commas, such as Done, Closed. Leave it empty to keep every status.
+      </Text>
+    </Stack>
+  )
+  return (
+    <Box direction="column" gap="sm" height="100%">
+      <TitleRow prefix={projectName !== '' ? `${projectName} ·` : null} title="New filter" level={3}>
+        <Row gap="xs" align="center">
+          <Button key="new-filter-cancel" size="sm" variant="ghost" onPress={closeFilter}>
+            Cancel
+          </Button>
+          <Button key="new-filter-continue" size="sm" variant="solid" disabled={!ready} onPress={continueNewFilter}>
+            Continue
+          </Button>
+        </Row>
+      </TitleRow>
+      <Box direction="column" gap="sm" grow minHeight={0} maxHeight="100%" scroll="y">
+        <RadioGroup label="Start from" value={choice.kind} options={NEW_FILTER_KINDS} onChange={(kind) => change({ kind: kind as NewFilterKind })} />
+        {choice.kind === 'board-order' ? (
+          <Stack gap="sm">
+            <Stack gap="xs">
+              <Input
+                label="Jira project key"
+                value={choice.projectKey}
+                placeholder="WEB"
+                onChange={(projectKey) => change({ projectKey })}
+                onSubmit={continueNewFilter}
+              />
+              {choice.projectKey.trim() === '' ? (
+                <Text size="sm" muted>
+                  Enter the key of the board's Jira project to go on.
+                </Text>
+              ) : null}
+            </Stack>
+            <RadioGroup
+              label="Whose tasks"
+              value={choice.assignees}
+              options={ASSIGNEE_OPTIONS}
+              orientation="horizontal"
+              onChange={(assignees) => change({ assignees: assignees as RecipeAssignees })}
+            />
+            {leaveOut}
+          </Stack>
+        ) : null}
+        {choice.kind === 'my-open-tasks' ? leaveOut : null}
+        {choice.kind !== 'custom' ? (
+          <Text size="sm" muted>
+            Continue writes the filter's JQL queries for you to change before saving it.
+          </Text>
+        ) : null}
+      </Box>
     </Box>
   )
 }

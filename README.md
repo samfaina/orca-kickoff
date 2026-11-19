@@ -51,7 +51,7 @@ Creating the worktree can take a minute. Once it exists, the card shows the work
 - **Agent**: Orca's default agent, a named one (`claude`, `codex`, `gemini`, `opencode`, `copilot`), or none. If Orca's default can't be read, Start says so and asks you to pick one.
 - **Prompt templates**: a project can have several, each with a name. The default template is used unless you choose another on a task's card. The pencil edits the template chosen as default, and **+** adds one.
 
-The **Search tasks** field above the list narrows the loaded tasks as you type, by key, title or label. **Enter** (or **Search in GitHub** / **Search in Jira**) asks the tracker instead, for the tasks of the same list that match your words, including those not loaded yet. **Clear search** goes back to the list.
+**Filters**, above the list and open at first, holds the filter row and the **Search tasks** field; closed, it says the filter listed and the words typed. The field narrows the loaded tasks as you type, by key, title or label. **Enter** (or **Search in GitHub** / **Search in Jira**) asks the tracker instead, for the tasks of the same list that match your words, including those not loaded yet. **Clear search** goes back to the list.
 
 GitHub lists up to 100 tasks per query, and Orca's Jira connection up to 100 per JQL query, and both say so when there are more. With `twg`, a page holds up to 50 tasks, filled from each query in turn, and **Load more** reads the next one.
 
@@ -62,9 +62,17 @@ A filter is a named way to ask the tracker for the project's tasks, made of one 
 - A Jira project starts with one, **Tasks**, whose query is `assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC`.
 - A GitHub project starts with one, **Open**, whose query is `is:open`: its open issues, as before filters.
 
-The row above **Search tasks** shows the filter listed, with ✎ to edit it and **+** to add one. Choosing another filter loads its tasks from the tracker, keeping the words in **Search tasks**; the panel opens on the filter shown last. Both Jira providers list the same filters.
+The filter row, in **Filters** above **Search tasks**, shows the filter listed, with ✎ to edit it and **+** to add one. Choosing another filter loads its tasks from the tracker, keeping the words in **Search tasks**; the panel opens on the filter shown last. Both Jira providers list the same filters.
 
-✎ and **+** open the filter editor in place of the list. A new filter is named **Filter 2**, **Filter 3**…, with one blank query. In the editor:
+✎ and **+** open the filter editor in place of the list. On Jira, **+** first asks what the new filter starts from:
+
+- **Custom**: one blank query.
+- **Board order**: a Jira project's tasks in board order. It asks for the project key (typed, such as `WEB`; required), whose tasks (**Mine**, **Mine or unassigned**, the default, or **Anyone**) and the statuses to leave out, and writes three queries: the open sprints in rank order, then the future sprints, then the rest. With `WEB`, *Mine or unassigned* and `Done, Closed, To validate`, the first is `project = WEB AND sprint in openSprints() AND (assignee IS EMPTY OR assignee = currentUser()) AND status NOT IN ("Done", "Closed", "To validate") ORDER BY Rank ASC`.
+- **My open tasks**: asks for the statuses to leave out and writes one query; with the first answer, `Done`, it is `assignee = currentUser() AND status NOT IN ("Done") ORDER BY updated DESC`.
+
+The statuses to leave out are names separated by commas, starting as `Done`; with none, the queries keep every status. Status names are used rather than status categories, because a workflow's statuses such as *To validate* don't map to one. A wrong project key shows as the query's error when the filter lists its tasks. **Continue** opens the filter editor on the new filter, named after its recipe, with the queries written for you to change before saving; the answers are not kept.
+
+A new filter is named **Filter 2**, **Filter 3**…, or after its recipe, the first name no filter has. In the editor:
 
 - **Name**: not empty, and unique in the project, ignoring case.
 - **JQL**, **JQL 2**… on Jira, **Query**, **Query 2**… on GitHub: the list shows the tasks of the first query, then those of the next that the earlier ones didn't list, each in the tracker's order; a blank query is kept and skipped. **Add JQL** (**Add query**) adds a query and the trash can removes one. A query can span several lines.
@@ -124,7 +132,7 @@ For a tracker Kickoff already knows (another way to read Jira, say), adding a pr
 3. **A configuration entry**: the id in `ProviderId` and `PROVIDER_IDS`, and its settings in `ProviderConfigs`, `readProviderConfigs` and the defaults of `providerConfig`, all in `src/protocol.ts`.
 4. **Its panel settings**: an entry in `PROVIDER_OPTIONS` and the fields its configuration needs in `TrackerFields`, in `src/panel.tsx`.
 
-The type check points at most of these once the id is added to `ProviderId`. A provider for a new tracker, such as Linear or GitLab, also adds the tracker to `TrackerId` and `trackerOf`, with the filter a project starts with in `INITIAL_FILTERS` (`src/protocol.ts`), its recipes in `RECIPES` (`src/filter.ts`), says how its worktrees are named and read back (`src/naming.ts`), how a Start links the worktree to the task and how a linked worktree is found (`src/orca.ts`), and how the panel names the tracker and its queries, in `QUERY_WORDING` (`src/panel.tsx`).
+The type check points at most of these once the id is added to `ProviderId`. A provider for a new tracker, such as Linear or GitLab, also adds the tracker to `TrackerId` and `trackerOf`, with the filter a project starts with in `INITIAL_FILTERS` (`src/protocol.ts`), the recipes its filter editor offers a new filter in `RECIPES` (`src/filter.ts`), says how its worktrees are named and read back (`src/naming.ts`), how a Start links the worktree to the task and how a linked worktree is found (`src/orca.ts`), and how the panel names the tracker and its queries, in `QUERY_WORDING` (`src/panel.tsx`).
 
 ## Known limitations
 
