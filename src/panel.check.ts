@@ -168,10 +168,10 @@ const sprintTasks = ready(
   { filterId: sprintFilter.id, queryCount: sprintFilter.queries.length }
 )
 
-/** What the worker answers when twg has no login, which fails the first query of the filter
- *  "Tasks", when the Orca CLI can't be found, and when `orca worktree list` fails. */
+/** What the worker answers when twg has no login, when the Orca CLI can't be found, and when
+ *  `orca worktree list` fails. */
 const TWG_LOGGED_OUT =
-  "Tasks: JQL query 1 failed: twg failed: authentication required. No valid credentials found. You're not signed in. Run `twg login --force` to authenticate with your Atlassian account."
+  "twg failed: authentication required. No valid credentials found. You're not signed in. Run `twg login --force` to authenticate with your Atlassian account."
 const ORCA_MISSING =
   "Couldn't find the Orca CLI. It comes with Orca: reinstall or update Orca, and connect Jira in Orca's settings if you read Jira through Orca. Or set ORCA_CLI_COMMAND to the full path of the CLI."
 const ORCA_SLOW = "orca didn't answer in time."
@@ -189,17 +189,11 @@ export default defineCheck({
     storage: jiraSettings('jira-orca'),
     requests: answers(ready(web, 'jira-orca', jiraTasks, { truncated: true }))
   },
-  // A failed load that names no filter opens Project settings by itself, on the tracker that
-  // failed; Done shows the error.
+  // A failed load that isn't about a query, such as twg without a login, opens Project settings by
+  // itself, on the tracker that failed; Done shows the error under the filter row.
   'tracker-error': {
-    storage: jiraSettings('jira-orca'),
-    requests: answers({ kind: 'error', project: web, message: "orca failed: Orca isn't connected to Jira. Connect Jira in Orca's settings." })
-  },
-  // twg without a login fails the query of the filter shown: the filter editor opens by itself on
-  // it, with the error.
-  'filter-error': {
     storage: jiraSettings('jira-twg'),
-    requests: answers({ kind: 'error', project: web, message: TWG_LOGGED_OUT, filterId: tasksFilter.id })
+    requests: answers({ kind: 'error', project: web, message: TWG_LOGGED_OUT })
   },
   // A filter of several JQL queries, the second one invalid: the filter editor opens by itself on
   // them, each with its Remove button, and Add JQL below.

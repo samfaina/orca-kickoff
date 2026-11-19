@@ -68,7 +68,7 @@ The row above **Search tasks** shows the filter listed, with ✎ to edit it and 
 - **Save** (or **Ctrl+Enter**, **Cmd+Enter** on macOS, in a query) stores the filter, goes back to the list and loads it. **Cancel** goes back without storing anything.
 - **Delete filter**, clicked twice, removes the filter; a project keeps at least one.
 
-A query that fails names its filter and its place in it, such as `Board: JQL query 2 failed: …`, and the panel opens the filter editor on that filter. Settings stored before filters, with JQL in Project settings, become one filter, **Tasks**, with those queries.
+A query Jira rejects names its filter and its place in it, such as `Board: JQL query 2 failed: …`, and the panel opens the filter editor on that filter. A failure that isn't about a query, such as a missing `twg` login or Jira connection, opens Project settings, as before. Settings stored before filters, with JQL in Project settings, become one filter, **Tasks**, with those queries.
 
 ## Prompt templates
 

@@ -1,5 +1,6 @@
 import { assert, test } from 'orca/testing'
-import type { RunCli } from '../cli'
+import { CliError, type RunCli } from '../cli'
+import { FilterError } from './jira'
 import { jiraOrca, JIRA_CONNECTION_ARGS, parseJiraSites } from './jira-orca'
 
 const notes = { id: 'repo:r1', name: 'notes', repo: null }
@@ -142,6 +143,7 @@ test("a blank JQL doesn't run a tracker search either", async () => {
 test("a filter whose queries are all blank doesn't run the CLI and asks for one, naming the filter", async () => {
   const { run, calls } = answering(wrap([]))
   await assert.rejects(jiraOrca.list(run, notes, config, board('  ', '\n', '')), /^Error: Board: Enter a JQL query/)
+  await assert.rejects(jiraOrca.list(run, notes, config, board('')), (error: unknown) => error instanceof FilterError && error.filterId === 'f-board')
   await assert.rejects(jiraOrca.list(run, notes, config), /Enter a JQL query/)
   assert.equal(calls.length, 0)
 })
@@ -190,12 +192,25 @@ test('the list is truncated when any query answers 100 tasks', async () => {
   assert.equal(neither.truncated, false)
 })
 
-test('a failing query fails the list, naming its filter and its position in the filter, blank rows included', async () => {
+test('a query Jira rejects fails the list, naming its filter and its position in the filter, blank rows included', async () => {
   const outputs = { 'project = WEB': wrap([issue('WEB-1')]), 'project = (': invalidJql('Error 400: La consulta JQL no es válida.') }
   await assert.rejects(
     jiraOrca.list(answeringByJql(outputs).run, notes, config, board('project = WEB', '', 'project = (')),
-    (error: unknown) => error instanceof Error && error.message === 'Board: JQL query 3 failed: orca failed: Error 400: La consulta JQL no es válida.'
+    (error: unknown) =>
+      error instanceof FilterError &&
+      error.filterId === 'f-board' &&
+      error.message === 'Board: JQL query 3 failed: orca failed: Error 400: La consulta JQL no es válida.'
   )
+})
+
+test("a failure that isn't about the query, such as no connected site, keeps Orca's message and names no filter", async () => {
+  const noSite = JSON.stringify({ ok: false, error: { code: 'invalid_argument', message: 'No matching connected Jira site. Check orca jira connection and Orca Jira settings.' } })
+  await assert.rejects(
+    jiraOrca.list(answering(noSite).run, notes, config, board('project = WEB', 'labels = ui')),
+    (error: unknown) =>
+      error instanceof CliError && !(error instanceof FilterError) && error.message === 'orca failed: No matching connected Jira site. Check orca jira connection and Orca Jira settings.'
+  )
+  await assert.rejects(jiraOrca.list(answering(wrap({ issues: [] })).run, notes, config, onWeb), (error: unknown) => !(error instanceof FilterError))
 })
 
 test('with several failing queries, the first of them is reported', async () => {

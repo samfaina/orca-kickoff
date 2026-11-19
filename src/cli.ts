@@ -12,13 +12,16 @@ export type RunOptions = { timeoutMs?: number; signal?: AbortSignal }
 export type RunCli = (tool: Tool, args: string[], options?: RunOptions) => Promise<string>
 
 /** A failure whose message is ready for the panel. `timedOut` is true when the tool didn't answer
- *  in time, so it may still be doing what it was asked. */
+ *  in time, so it may still be doing what it was asked. `code` is `error.code` of the tool's JSON
+ *  error, such as `AUTH_REQUIRED`, or null without one: it says what kind of failure it was. */
 export class CliError extends Error {
   readonly timedOut: boolean
+  readonly code: string | null
 
-  constructor(message: string, timedOut = false) {
+  constructor(message: string, timedOut = false, code: string | null = null) {
     super(message)
     this.timedOut = timedOut
+    this.code = code
   }
 }
 
@@ -44,7 +47,10 @@ export function createRunCli(environment: CliEnvironment, exec: Exec): RunCli {
         return stdout
       } catch (error) {
         const failure = describeExecError(error)
-        if (failure) throw new CliError(cliFailureMessage(tool, failure), failure.kind === 'timeout')
+        if (failure) {
+          const code = failure.kind === 'failed' ? jsonErrorCode(failure.stdout) : null
+          throw new CliError(cliFailureMessage(tool, failure), failure.kind === 'timeout', code)
+        }
       }
     }
     throw new CliError(cliFailureMessage(tool, { kind: 'not-found' }))
@@ -173,6 +179,13 @@ export function jsonErrorMessage(stdout: string): string | null {
   if (!message) return null
   const summary = text(parsed.error.summary).trim()
   return summary && summary !== message ? `${message} ${summary}` : message
+}
+
+/** `error.code` of a `{ ok: false, error }` answer on stdout, or null when there is none. */
+export function jsonErrorCode(stdout: string): string | null {
+  const parsed = parseJson(stdout)
+  if (!isRecord(parsed) || parsed.ok !== false || !isRecord(parsed.error)) return null
+  return text(parsed.error.code) || null
 }
 
 /** For a tool that answered with output of a shape Kickoff doesn't know. */

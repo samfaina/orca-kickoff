@@ -1,5 +1,6 @@
 import { assert, test } from 'orca/testing'
 import { CliError, type RunCli } from '../cli'
+import { FilterError } from './jira'
 import { decodeTwgCursor, encodeTwgCursor, jiraTwg, jiraTwgArgs } from './jira-twg'
 
 const notes = { id: 'repo:r1', name: 'notes', repo: null }
@@ -322,18 +323,30 @@ test('line breaks in a query reach twg as spaces', async () => {
   assert.deepEqual(queries, ['project = WEB AND labels = ui'])
 })
 
-test('a failing query fails the list, naming its filter and its position in the filter, even after another listed tasks', async () => {
-  const failure = new CliError('twg failed: The JQL is not valid.', true)
+test('a query Jira rejects fails the list, naming its filter and its position in the filter, even after another listed tasks', async () => {
+  const failure = new CliError('twg failed: The JQL is not valid.', false, 'TWG_TOOL_EXECUTION_FAILED')
   const { run } = answeringByJql({ 'project = WEB': response([issue('WEB-1')]), 'project = (': failure })
   await assert.rejects(
     jiraTwg.list(run, notes, config, several('', 'project = WEB', 'project = (')),
-    (error: unknown) => error instanceof CliError && error.message === 'Board: JQL query 3 failed: twg failed: The JQL is not valid.' && error.timedOut
+    (error: unknown) => error instanceof FilterError && error.filterId === 'f-board' && error.message === 'Board: JQL query 3 failed: twg failed: The JQL is not valid.'
   )
   const alone = answeringByJql({ 'project = (': failure })
   await assert.rejects(
     jiraTwg.list(alone.run, notes, config, several('project = (', ' ')),
-    (error: unknown) => error instanceof CliError && error.message === 'Board: JQL query 1 failed: twg failed: The JQL is not valid.'
+    (error: unknown) => error instanceof FilterError && error.message === 'Board: JQL query 1 failed: twg failed: The JQL is not valid.'
   )
+})
+
+test("a failure that isn't about the query, such as no login, an unknown profile or a timeout, is twg's own and names no filter", async () => {
+  for (const failure of [
+    new CliError("twg failed: authentication required. You're not signed in.", false, 'AUTH_REQUIRED'),
+    new CliError('twg failed: profile not found.', false, 'AUTH_PROFILE_MISSING'),
+    new CliError("twg didn't answer in time.", true),
+    new Error('spawn failed')
+  ]) {
+    const { run } = answeringByJql({ 'project = WEB': failure })
+    await assert.rejects(jiraTwg.list(run, notes, config, onWeb), (error: unknown) => error === failure)
+  }
 })
 
 test('the next cursor comes from pageInfo only when there is a next page', async () => {

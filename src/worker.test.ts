@@ -389,6 +389,16 @@ test("an invalid JQL query fails the whole list, naming its filter and position,
   })
 })
 
+test("a Jira failure that isn't about a query, such as no connected site, is the tool's own message and names no filter", async () => {
+  const noSite = JSON.stringify({ ok: false, error: { code: 'invalid_argument', message: 'No matching connected Jira site.' } })
+  const { worker } = await start({ ...ORCA_OK, 'orca jira search': noSite }, { storage: jiraSettings('site-9', [board]) })
+  assert.deepEqual(await worker.request('tasks.load', {}), {
+    kind: 'error',
+    project: { id: 'github:acme/web', name: 'web', repo: 'acme/web' },
+    message: 'orca failed: No matching connected Jira site.'
+  })
+})
+
 test('a filter whose queries are all blank is an error asking for one, naming the filter, and keeps the project', async () => {
   const { worker, calls } = await start({ ...ORCA_OK }, { storage: jiraSettings('', [{ ...mine, queries: ['', ' '] }]) })
   const list = await worker.request('tasks.load', {})

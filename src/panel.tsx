@@ -443,7 +443,7 @@ function newId(prefix: string, items: { id: string }[]): string {
 }
 
 /** Changes the detail's draft, while it is still the draft of the `expected` template. */
-function changeDraft(expected: TemplateDraft, changes: Partial<TemplateDraft>): void {
+function changeTemplateDraft(expected: TemplateDraft, changes: Partial<TemplateDraft>): void {
   update(templateDraft, (draft) => (draft && isSameDraft(draft, expected) ? { ...draft, ...changes } : draft))
 }
 
@@ -474,10 +474,10 @@ async function deleteTemplate(): Promise<void> {
   if (!draft || draft.saving || draft.isNew) return
   cancelConfirmDelete()
   if (!draft.confirmingDelete) {
-    changeDraft(draft, { confirmingDelete: true })
+    changeTemplateDraft(draft, { confirmingDelete: true })
     confirmDeleteTimer = setTimeout(() => {
       confirmDeleteTimer = null
-      changeDraft(draft, { confirmingDelete: false })
+      changeTemplateDraft(draft, { confirmingDelete: false })
     }, CONFIRM_DELETE_MS)
     return
   }
@@ -494,12 +494,12 @@ function cancelConfirmDelete(): void {
  *  keeps the detail open with its error and the draft. Pending Project settings are saved first, so
  *  the change applies to what the person sees. */
 async function writeTemplates(draft: TemplateDraft, change: (project: ProjectSettings) => TemplateChanges | null): Promise<void> {
-  changeDraft(draft, { saving: true, error: null, confirmingDelete: false })
+  changeTemplateDraft(draft, { saving: true, error: null, confirmingDelete: false })
   let changes: TemplateChanges | null
   try {
     changes = await settingsSave.writeProject(draft.projectId, change)
   } catch (error) {
-    changeDraft(draft, { saving: false, error: `Couldn't save the template (${errorCode(error)}). Try again.` })
+    changeTemplateDraft(draft, { saving: false, error: `Couldn't save the template (${errorCode(error)}). Try again.` })
     return
   }
   const shown = read(shownSettings)
@@ -527,8 +527,9 @@ function loadKeepingSettingsOpen(): void {
 }
 
 /** Done: goes back to the list, and loads it again when the tracker settings changed since the list
- *  shown was loaded. Editing them loads nothing by itself, so typing a JQL query asks the tracker
- *  nothing. A change of tracker settings already left any tracker search, so this loads the list. */
+ *  shown was loaded. Typing in them loads nothing by itself, so typing twg's site or profile asks
+ *  the tracker nothing. A change of tracker settings already left any tracker search, so this loads
+ *  the list. */
 function closeSettings(): void {
   set(settingsChoice, 'closed')
   if (listedTrackerSettingsVersion !== trackerSettingsVersion) void load()
@@ -567,8 +568,8 @@ async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
   const answeredProjectId = answer.kind === 'no-project' ? null : answer.project?.id
   const draft = read(templateDraft)
   if (draft && answeredProjectId !== undefined && answeredProjectId !== draft.projectId) closeTemplate()
-  const editing = read(filterDraft)
-  if (editing && answeredProjectId !== undefined && answeredProjectId !== editing.projectId) closeFilter()
+  const filterEdit = read(filterDraft)
+  if (filterEdit && answeredProjectId !== undefined && answeredProjectId !== filterEdit.projectId) closeFilter()
   // A change of active project also sends Project settings back to opening by itself and clears
   // the field. Only once a project was listed: before that, both are as they start.
   if (answeredProjectId !== undefined) {
@@ -1046,9 +1047,9 @@ export default function Panel() {
   if (draft && shown?.projectId === draft.projectId) {
     return <TemplateDetail draft={draft} templates={shown.templates} projectName={project?.name ?? ''} />
   }
-  const editing = read(filterDraft)
-  if (editing && shown?.projectId === editing.projectId) {
-    return <FilterEditor draft={editing} filters={shown.filters} projectName={project?.name ?? ''} />
+  const filterEdit = read(filterDraft)
+  if (filterEdit && shown?.projectId === filterEdit.projectId) {
+    return <FilterEditor draft={filterEdit} filters={shown.filters} projectName={project?.name ?? ''} />
   }
   const settings = project !== null && shown?.projectId === project.id ? shown : null
   const choice = read(settingsChoice)
@@ -1616,7 +1617,7 @@ function TemplateDetail({ draft, templates, projectName }: { draft: TemplateDraf
       </TitleRow>
       <Box direction="column" gap="sm" grow minHeight={0} maxHeight="100%" scroll="y">
         <Stack gap="xs">
-          <Input label="Name" value={draft.name} invalid={nameProblem !== null} onChange={(name) => changeDraft(draft, { name })} />
+          <Input label="Name" value={draft.name} invalid={nameProblem !== null} onChange={(name) => changeTemplateDraft(draft, { name })} />
           {nameProblem !== null ? (
             <Text size="sm" tone="danger">
               {nameProblem}
@@ -1629,7 +1630,7 @@ function TemplateDetail({ draft, templates, projectName }: { draft: TemplateDraf
             value={draft.text}
             rows={12}
             placeholder="Empty: the prompt is the task URL"
-            onChange={(text) => changeDraft(draft, { text })}
+            onChange={(text) => changeTemplateDraft(draft, { text })}
           />
           <Text size="sm" muted>
             An empty text gives the task URL.

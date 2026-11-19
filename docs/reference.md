@@ -230,7 +230,7 @@ Components **[Verified]**:
 
 - The multi-line text field is `Textarea` (catalog 2, since Orca 1.4.247), with the same `label`, `labelHidden`, `value`, `defaultValue`, `placeholder`, `maxLength`, `invalid`, `disabled` and `onChange` as `Input`, plus `rows?: number`, the visible lines, from 2 to 20. Its `onSubmit?: (value: string) => void` runs on Cmd+Enter on macOS and Ctrl+Enter elsewhere, so Enter alone adds a line **[Verified]** (generated types of Orca 1.4.263). In `orca/testing`, `TestPanel.submit` on a `Textarea` calls its `onSubmit` **[Verified]** with the panel tests. That Orca submits on those keys and not on Enter was not seen inside Orca **[Assumed]**.
 - `Field` (`label`, `description?`, `error?`, `required?`) wraps a control with help text or an error.
-- Kickoff's JQL queries (in Project settings until issue #107, in the filter editor since) put each query's label on a `Field` around a `Box direction="row" align="center"` that holds the `Textarea` (`labelHidden`, still labelled for the tests and screen readers) and its Remove button, so the button centres on the query's box rather than on box and label together (issue #87). The `Field` label looks like a `Textarea`'s own label, and the button draws centred on the box **[Verified]** (seen by the maintainer inside Orca 1.4.263).
+- Kickoff's JQL queries (in Project settings until issue #107, in the filter editor since) put each query's label on a `Field` around a `Box direction="row" align="center"` that holds the `Textarea` (`labelHidden`, still labelled for the tests and screen readers) and its Remove button, so the button centres on the query's box rather than on box and label together (issue #87). The `Field` label looks like a `Textarea`'s own label, and the button draws centred on the box **[Verified]** (seen by the maintainer inside Orca 1.4.263, in Project settings). The filter editor draws the same component the same way **[Assumed]**: not yet seen inside Orca.
 - Limits per render: 5000 nodes, 16 KiB per text, 500 options per `Select`.
 
 Layout and sizing, from the generated types and `references/components.md` of `orca skills get orca-plugin-authoring`, Orca 1.4.261 **[Verified]**:
@@ -499,7 +499,7 @@ No CLI command or plugin API exposes it; `orca settings` and `orca config` are u
   - `description` is already plain text, not ADF.
 - No pagination: no cursor or offset, and no hint that more results exist.
 - Errors **[Verified]**:
-  - Invalid JQL: exit 1, `{ ok: false, error: { code: 'runtime_error', message: 'Error 400: <message in the instance language>' } }` on stdout, empty stderr.
+  - Invalid JQL: exit 1, `{ ok: false, error: { code: 'runtime_error', message: 'Error 400: <message in the instance language>' } }` on stdout, empty stderr. Kickoff counts only `runtime_error` from `orca jira search` as a rejected query (issue #107). Whether Orca also answers `runtime_error` for failures that aren't about the query, such as Jira being down, was not checked **[Assumed]**.
   - Unknown site: `invalid_argument`, "No matching connected Jira site...".
   - Empty JQL: rejected with `invalid_argument`.
   - Without a Jira connection, Orca's code answers "Not connected to Jira." when creating or editing a task **[Verified]** (read in `app.asar`). `orca jira search` instead fails with the unknown-site message, "No matching connected Jira site. Check orca jira connection and Orca Jira settings." **[Verified]**, seen by the maintainer in Kickoff's panel inside Orca 1.4.259 after disconnecting Jira (issue #23). Its error code was not seen.
@@ -626,6 +626,7 @@ Errors **[Verified]**:
 
 - The message is in the Jira instance's language.
 - Take the message from `error.message` on stdout, followed by `error.summary` when present (it says how to fix it, as with `twg login`), and fall back to stderr.
+- Kickoff counts a failure as a rejected JQL query, which names its filter and opens the filter editor, only with `error.code` `TWG_TOOL_EXECUTION_FAILED`, as in the table; every other failure is about the tool, the login, the site or the profile (`src/providers/jira.ts`, issue #107).
 - `error.feedback.url` and the stderr block contain the user's email address: never show or log them.
 - Coverage: the docs describe Jira Cloud only.
 

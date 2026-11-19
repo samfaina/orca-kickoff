@@ -1,6 +1,6 @@
 // Reading the Orca CLI's answers: projects, worktrees and which worktree is active. Pure functions
 // over the `--json` stdout; the worker runs the commands.
-import { CliError, cleanMessage, jsonErrorMessage, unreadableOutput } from './cli'
+import { CliError, cleanMessage, jsonErrorCode, jsonErrorMessage, unreadableOutput } from './cli'
 import { isRecord, parseJson } from './json'
 import { githubIssueNumber, taskKeyFromWorktreeName } from './naming'
 import type { ProjectRef, Task, TaskWorktree, TrackerId } from './protocol'
@@ -161,7 +161,7 @@ export function checkOrcaAnswer(stdout: string): void {
 /** `result` of an `{ ok: true, result }` answer. An error answer or unreadable output throws. */
 export function orcaResult(stdout: string): unknown {
   const error = jsonErrorMessage(stdout)
-  if (error) throw new CliError(cleanMessage(`orca failed: ${error}`))
+  if (error) throw new CliError(cleanMessage(`orca failed: ${error}`), false, jsonErrorCode(stdout))
   const parsed = parseJson(stdout)
   if (isRecord(parsed) && parsed.ok === true && 'result' in parsed) return parsed.result
   throw unreadableOutput('orca')

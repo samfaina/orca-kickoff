@@ -126,7 +126,7 @@ const searchField = { type: 'Input', label: 'Search tasks' }
 /** The keys of `keys` whose card the panel shows, once each. */
 const keysShown = (view: TestPanel, keys: string[]) => keys.filter((key) => view.findAll({ type: 'Link', text: key }).length === 1)
 
-test('typing in the field above the list filters the loaded tasks to those whose key, title or label contains it', async () => {
+test('typing in the field above the list narrows the loaded tasks, as the text filter, to those whose key, title or label contains it', async () => {
   const view = await show(ready([task('#42', { title: 'Add dark mode', labels: ['ui'] }), task('#7', { title: 'Fix login' }), task('#8', { labels: ['UI polish'] })]))
   const field = view.find(searchField)
   assert.equal(field?.props.type, 'search')
@@ -196,7 +196,7 @@ test('Enter or "Search in GitHub" with a non-blank field asks the tracker for th
   assert.deepEqual(jira.inputs, [{}, { query: 'dark' }])
 })
 
-test('the results replace the list, without the filter, under "Results in GitHub for" and Clear search', async () => {
+test('the results replace the list, without the text filter, under "Results in GitHub for" and Clear search', async () => {
   const { view } = await showSearching(ready([task('#1', { title: 'Dark mode' }), task('#2')]), () =>
     ready([task('#90', { title: 'Settings page' }), task('#91', { title: 'Theme' })])
   )
@@ -225,7 +225,7 @@ test('a tracker search without results says that no task in the tracker matches'
   assert.ok(jira.view.find({ type: 'Text', text: 'Results in Jira for "nothing"' }))
 })
 
-test('editing the field or Clear search goes back to the loaded pages, with the filter, without loading them again', async () => {
+test('editing the field or Clear search goes back to the loaded pages, with the text filter, without loading them again', async () => {
   const inputs: LoadInput[] = []
   const view = await show(({ cursor, query }: LoadInput) => {
     inputs.push(cursor === undefined ? { query } : { cursor, query })
@@ -342,7 +342,7 @@ test('a failed tracker search shows like a load error, and Clear search goes bac
   assert.equal(view.find({ type: 'Callout' }), null)
 })
 
-test('a filter that no loaded task matches says so, and an empty project still says it has no open tasks', async () => {
+test('a text filter that no loaded task matches says so, and an empty project still says it has no open tasks', async () => {
   const view = await show(ready([task('#42')]))
   await view.type(searchField, ' dark mode ')
   assert.equal(view.find({ type: 'Link', text: '#42' }), null)
@@ -806,7 +806,7 @@ test('a change of active project goes back to the list, unless the new project n
   assert.ok(view.find({ type: 'Text', text: 'web ·' }))
 })
 
-test('the filter stays through a reload and "Load more", and a change of active project clears it', async () => {
+test('the text filter stays through a reload and "Load more", and a change of active project clears it', async () => {
   let answer: (input: { cursor?: string }) => TaskList = ({ cursor }) =>
     cursor ? ready([task('#3', { title: 'Dark theme' }), task('#4')]) : ready([task('#1', { title: 'Dark mode' }), task('#2')], { nextCursor: 'cursor-2' })
   const view = await show((input) => answer(input))

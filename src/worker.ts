@@ -43,7 +43,8 @@ import {
 } from './protocol'
 import { taskLister } from './providers'
 import { JIRA_CONNECTION_ARGS, parseJiraSites } from './providers/jira-orca'
-import type { PageRequest, TaskPage } from './providers/types'
+import { FilterError } from './providers/jira'
+import type { PageRequest } from './providers/types'
 import { buildPrompt, projectTemplates } from './template'
 
 /** After a timed-out `worktree create`, Orca may still finish it; a Start of the same task waits
@@ -103,7 +104,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
   }
 
   /** A page of the tasks of the project's filter `filterId` names (on Jira, which has filters): of
-   *  its whole list, or of a tracker search with `query`. A failure listing a filter names it. */
+   *  its whole list, or of a tracker search with `query`. A failure its queries cause names it. */
   async function loadTasks({ filterId, ...request }: { filterId?: string } & Omit<PageRequest, 'filter'>): Promise<TaskList> {
     let project: ProjectRef | null = null
     try {
@@ -114,13 +115,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
       const providerId = projectProvider(settings, project)
       if (!providerId) return { kind: 'needs-config', project }
       const filter = trackerOf(providerId) === 'jira' ? listedFilter(settings, filterId) : null
-      let page: TaskPage
-      try {
-        page = await taskLister(providerId)(run, project, settings, filter ? { ...request, filter } : request)
-      } catch (error) {
-        if (!filter) throw error
-        return { kind: 'error', project, message: messageOf(error), filterId: filter.id }
-      }
+      const page = await taskLister(providerId)(run, project, settings, filter ? { ...request, filter } : request)
       const { state } = active
       return {
         kind: 'ready',
@@ -135,6 +130,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
         warning: active.warning
       }
     } catch (error) {
+      if (error instanceof FilterError) return { kind: 'error', project, message: error.message, filterId: error.filterId }
       return { kind: 'error', project, message: messageOf(error) }
     }
   }

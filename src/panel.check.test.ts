@@ -86,18 +86,14 @@ test('truncated ends the list with the truncation notice', async () => {
   assert.ok(shown.find({ text: /^Showing the first 100 tasks — narrow your JQL/ }))
 })
 
-test('tracker-error opens Project settings on the tracker that failed, without JQL', async () => {
+test('tracker-error opens Project settings on the tracker that failed, without JQL, and Done shows the error under the filter row', async () => {
   const shown = await render('tracker-error')
   assert.ok(shown.find({ type: 'Heading', text: 'Project settings' }))
-  assert.equal(shown.valueOf({ label: 'Tracker' }), 'jira-orca')
+  assert.equal(shown.valueOf({ label: 'Tracker' }), 'jira-twg')
   assert.equal(shown.find({ type: 'Textarea' }), null)
-})
-
-test('filter-error opens the filter editor on the filter whose query failed, with its error', async () => {
-  const shown = await render('filter-error')
-  assert.ok(shown.find({ type: 'Heading', text: 'Edit filter' }))
-  assert.equal(shown.valueOf({ type: 'Input', label: 'Name' }), 'Tasks')
-  assert.ok(shown.find({ text: /Tasks: JQL query 1 failed: twg failed: authentication required/ }))
+  await shown.press({ type: 'Button', text: 'Done' })
+  assert.ok(shown.find({ text: /twg failed: authentication required/ }))
+  assert.ok(shown.find({ type: 'Select', label: 'Filter' }))
 })
 
 test('jira-filters shows the filter row with the filter shown, then ✎ and +, above the field', async () => {
