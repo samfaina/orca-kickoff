@@ -37,12 +37,16 @@ Narrowing the tasks already loaded in the panel to those whose task key, title o
 _Avoid_: Filter (that is a named set of tracker queries), search, local search
 
 **Filter**:
-A named way to ask the tracker for a project's tasks, made of tracker queries in order: JQL queries on Jira, GitHub issue searches on GitHub. A project can have several on each tracker, and the panel shows the tasks of one at a time. A task can be in several filters; its task worktree is the same in each.
+A named way to ask the tracker for a project's tasks, made of tracker queries in order: JQL queries on Jira, GitHub issue searches on GitHub. A project can have several on each tracker, its own and the global ones, and the panel shows the tasks of one at a time. A task can be in several filters; its task worktree is the same in each.
 _Avoid_: Task list, view, saved filter (on Jira that is a stored JQL query of Jira's own), board
 
 **JQL query**:
 One of the Jira queries, in order, that make up a filter on Jira. The filter shows the tasks of the first, then those of the next, each task once, where it first appears.
 _Avoid_: Filter (that is the whole named set of queries), search
+
+**Jira project key**:
+The key of the Jira project a project's tasks are in, such as `WEB`, set in its Project settings. A JQL query can name it instead of writing the key, so one filter lists each project's own tasks.
+_Avoid_: Project key (alone: a project here is an Orca project), Jira project id
 
 **JQL recipe**:
 A ready-made kind of filter on Jira, such as a board's tasks in board order, that writes the filter's JQL queries from a few answers, such as the Jira project and the statuses to leave out. The queries it writes are ordinary JQL queries the user can still edit.
@@ -57,8 +61,12 @@ Asking the tracker for the tasks of the filter shown that match the user's words
 _Avoid_: Search (alone), remote search, query
 
 **Prompt template**:
-A named text with task variables that becomes the prompt given to the agent when a task starts. A project has one or more, each with a name of its own, and each Start uses the one the user chooses for that task.
+A named text with task variables that becomes the prompt given to the agent when a task starts. A project has one or more, its own and the global ones; no two of its own share a name, nor two global ones. Each Start uses the one the user chooses for that task.
 _Avoid_: Prompt (that is the filled-in result)
+
+**Global**:
+Said of a filter or prompt template kept once and offered in every project, beside the project's own; a global filter only in the projects on its tracker. Changing or deleting it changes it in every project, and no project can hide it. A project's own filter or prompt template can be made global, and a global one can be given back to a single project.
+_Avoid_: Shared, common, default (that is the default template)
 
 **Default template**:
 The prompt template a project's tasks start with unless the user chooses another one for a task. A project has exactly one.
@@ -81,7 +89,7 @@ The per-project setting that says which agent a Start launches: Orca's default a
 _Avoid_: Default agent (that is Orca's own setting)
 
 **Project settings**:
-What Kickoff keeps for one project: its tracker and how the provider reads it, its filters, its agent choice, and its prompt templates with the default template.
+What Kickoff keeps for one project: its tracker and how the provider reads it, its Jira project key, its own filters, its agent choice, and its own prompt templates with the default template. Global filters and prompt templates are not part of any one project's settings.
 _Avoid_: Settings, Kickoff settings, plugin settings, config
 
 **Active project**:
