@@ -3159,6 +3159,27 @@ test('"Filters" stays as it was left through reloads while the panel is open, st
   await failing.view.press({ type: 'Button', text: 'Cancel' })
   assert.deepEqual(controlsInFilters(failing.view), ['Select Filter', 'IconButton Edit filter', 'IconButton New filter'])
   assert.ok(failing.view.find({ type: 'Callout' }))
+  assert.deepEqual(afterFilters(failing.view), ['Separator', 'Callout'])
+})
+
+/** The types of the nodes drawn after "Filters", beside it. */
+function afterFilters(view: TestPanel): string[] {
+  const isFilters = (node: TreeSnapshot | string) => typeof node !== 'string' && node.type === 'Collapsible' && node.props?.title === 'Filters'
+  const [parent] = nodesIn(view.tree(), (node) => (node.children ?? []).some(isFilters))
+  assert.ok(parent, 'no "Filters"')
+  const siblings = parent.children ?? []
+  return siblings.slice(siblings.findIndex(isFilters) + 1).map((node) => (typeof node === 'string' ? 'text' : node.type))
+}
+
+test('a divider parts "Filters" from the list, open or closed, and from the results row of a tracker search', async () => {
+  const { view } = await showFilters(filtersStored([tasksFilter]))
+  assert.deepEqual(afterFilters(view), ['Separator', 'Box'])
+  await view.toggle(filtersSection)
+  assert.deepEqual(afterFilters(view), ['Separator', 'Box'])
+  await view.toggle(filtersSection)
+  await view.type(searchField, 'dark', { submit: true })
+  assert.ok(view.find({ type: 'Button', text: 'Clear search' }))
+  assert.deepEqual(afterFilters(view), ['Separator', 'Box', 'Box'])
 })
 
 test('a change of active project while the choice of + on Jira is open drops it, and closing the panel drops it too', async () => {

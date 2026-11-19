@@ -1445,8 +1445,8 @@ function Body({ list }: { list: TaskList }) {
 }
 
 /** "Filters", open at first: the filter row, then `children`, Search tasks on a ready list. Closed,
- *  it says the filter shown and the trimmed `words` of the text filter, so neither is hidden. It
- *  shows nothing while it would hold nothing. */
+ *  it says the filter shown and the trimmed `words` of the text filter, so neither is hidden. A
+ *  divider follows it. It shows nothing while it would hold nothing. */
 function FiltersSection({ projectId, words = '', children }: { projectId: string; words?: string; children?: OrcaNode }) {
   const open = read(filtersOpen)
   const shown = read(shownSettings)
@@ -1454,13 +1454,17 @@ function FiltersSection({ projectId, words = '', children }: { projectId: string
   if (!current && children === undefined) return null
   const filterName = current?.filters.find((filter) => filter.id === current.shownFilterId)?.name ?? null
   const summary = [filterName, words !== '' ? `"${words}"` : null].filter((part) => part !== null).join(' · ')
+  // The divider parts the section from the list, or from the load error, below it.
   return (
-    <Collapsible title="Filters" description={open || summary === '' ? undefined : summary} open={open} onChange={(next) => set(filtersOpen, next)}>
-      <Stack gap="sm">
-        <FilterRow projectId={projectId} />
-        {children}
-      </Stack>
-    </Collapsible>
+    <>
+      <Collapsible title="Filters" description={open || summary === '' ? undefined : summary} open={open} onChange={(next) => set(filtersOpen, next)}>
+        <Stack gap="sm">
+          <FilterRow projectId={projectId} />
+          {children}
+        </Stack>
+      </Collapsible>
+      <Separator />
+    </>
   )
 }
 
