@@ -60,7 +60,8 @@ const RECIPES: Record<TrackerId, readonly FilterRecipe[]> = {
   jira: []
 }
 
-/** The recipes a new filter on `tracker` can start from. */
+/** The recipes the filter editor offers a new filter on `tracker`: GitHub's. Jira's JQL recipes come
+ *  before the editor, with + (`src/jql-recipe.ts`). */
 export function filterRecipes(tracker: TrackerId): FilterRecipe[] {
   return RECIPES[tracker].map((recipe) => ({ name: recipe.name, queries: [...recipe.queries] }))
 }

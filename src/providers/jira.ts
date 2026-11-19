@@ -3,6 +3,7 @@
 // tracker search.
 import { CliError } from '../cli'
 import { isRecord, text } from '../json'
+import { jqlStringContent } from '../jql'
 import { DEFAULT_JQL, type Filter, type FilterQuery, type Task } from '../protocol'
 import { FilterError, requireQueries } from './queries'
 import { searchWords } from './types'
@@ -117,9 +118,4 @@ export function splitJql(jql: string): { conditions: string; orderBy: string | n
  *  whole JQL fail, while a well-formed one that doesn't exist matches nothing. */
 export function isJiraTaskKey(word: string): boolean {
   return /^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(word)
-}
-
-/** `value` escaped to go between the double quotes of a JQL string. */
-function jqlStringContent(value: string): string {
-  return value.replace(/[\\"]/g, (char) => `\\${char}`)
 }

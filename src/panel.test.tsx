@@ -2777,9 +2777,116 @@ test('Save stores the filter as edited, blank queries included, shows it, goes b
   assert.ok(view.find({ type: 'Link', text: 'WEB-2' }))
 })
 
-test('+ opens the editor on a new filter, "Filter 2" or the first free number, with one blank query; Save adds it at the end and shows its tasks', async () => {
-  const { view, host } = await showFilters(filtersStored([tasksFilter, { ...boardFilter, name: 'Filter 2' }]))
+/** The choice that + offers on Jira, of the kind of filter to start from, and its Continue. */
+const startFrom = { type: 'RadioGroup', label: 'Start from' }
+const continueButton = { type: 'Button', text: 'Continue' }
+const projectKeyField = { type: 'Input', label: 'Jira project key' }
+const whoseTasks = { type: 'RadioGroup', label: 'Whose tasks' }
+const leaveOutField = { type: 'Input', label: 'Statuses to leave out' }
+
+/** The labels of the options of the RadioGroup labelled `label`. */
+const radioLabels = (view: TestPanel, label: string) =>
+  ((view.find({ type: 'RadioGroup', label })?.props.options ?? []) as { label: string }[]).map((option) => option.label)
+
+/** Presses + on a Jira project and goes on with `kind`, Custom unless told: the filter editor opens. */
+async function newJiraFilter(view: TestPanel, kind: 'custom' | 'board-order' | 'my-open-tasks' = 'custom') {
   await view.press(newFilter)
+  if (kind !== 'custom') await view.select(startFrom, kind)
+  await view.press(continueButton)
+}
+
+test('+ on Jira offers Custom, Board order and My open tasks, in place of the list, with Cancel and Continue; Cancel goes back storing nothing', async () => {
+  const { view, host, inputs } = await showFilters(filtersStored([tasksFilter]))
+  await view.press(newFilter)
+  assert.ok(view.find(filterTitle('New filter')))
+  assert.equal(view.find(searchField), null)
+  assert.equal(view.find({ type: 'Input', label: 'Name' }), null)
+  assert.deepEqual(radioLabels(view, 'Start from'), ['Custom', 'Board order', 'My open tasks'])
+  assert.equal(view.valueOf(startFrom), 'custom')
+  const { title } = detailParts(view)
+  assert.deepEqual(buttonsIn(title), ['Cancel', 'Continue'])
+  await view.press({ type: 'Button', text: 'Cancel' })
+  assert.equal(view.find(startFrom), null)
+  assert.ok(view.find({ type: 'Link', text: 'WEB-1' }))
+  assert.deepEqual((storedProject(host) as StoredFilters).filters?.jira, [tasksFilter])
+  assert.equal(inputs.length, 1)
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.warnings, [])
+})
+
+test("Board order asks for the Jira project key, whose tasks and the statuses to leave out, and can't go on without a key", async () => {
+  const { view } = await showFilters(filtersStored([tasksFilter]))
+  await view.press(newFilter)
+  assert.equal(view.find(projectKeyField), null)
+  await view.select(startFrom, 'board-order')
+  assert.equal(view.valueOf(projectKeyField), '')
+  assert.deepEqual(radioLabels(view, 'Whose tasks'), ['Mine', 'Mine or unassigned', 'Anyone'])
+  assert.equal(view.valueOf(whoseTasks), 'mine-or-unassigned')
+  assert.equal(view.valueOf(leaveOutField), 'Done')
+  assert.equal(view.find(continueButton)?.disabled, true)
+  await view.type(projectKeyField, '   ')
+  assert.equal(view.find(continueButton)?.disabled, true)
+  await view.submit(projectKeyField)
+  assert.ok(view.find(startFrom))
+  await view.type(projectKeyField, 'WEB', { replace: true })
+  assert.equal(view.find(continueButton)?.disabled, false)
+})
+
+test('Board order writes its three queries into a new filter named after it and opens the filter editor on it; Save stores it, and + starts afresh', async () => {
+  const { view, host } = await showFilters(filtersStored([tasksFilter]))
+  await view.press(newFilter)
+  await view.select(startFrom, 'board-order')
+  await view.type(projectKeyField, ' WEB ')
+  await view.select(whoseTasks, 'mine')
+  await view.type(leaveOutField, 'Done, Closed, To validate', { replace: true })
+  await view.press(continueButton)
+  assert.ok(view.find(filterTitle('New filter')))
+  assert.equal(view.find(startFrom), null)
+  assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Board order')
+  const queries = [
+    'project = WEB AND sprint in openSprints() AND assignee = currentUser() AND status NOT IN ("Done", "Closed", "To validate") ORDER BY Rank ASC',
+    'project = WEB AND sprint in futureSprints() AND assignee = currentUser() AND status NOT IN ("Done", "Closed", "To validate") ORDER BY Sprint ASC, Rank ASC',
+    'project = WEB AND (sprint IS EMPTY OR sprint NOT IN (openSprints(), futureSprints())) AND assignee = currentUser() AND status NOT IN ("Done", "Closed", "To validate") ORDER BY Rank ASC'
+  ]
+  assert.deepEqual(queryFields(view), [
+    ['JQL', queries[0], 3],
+    ['JQL 2', queries[1], 3],
+    ['JQL 3', queries[2], 3]
+  ])
+  assert.deepEqual((storedProject(host) as StoredFilters).filters?.jira, [tasksFilter])
+  await view.press(saveButton)
+  const added = (storedProject(host) as StoredFilters).filters?.jira?.[1]
+  assert.ok(added)
+  assert.deepEqual({ ...added, id: '' }, { id: '', name: 'Board order', queries })
+  assert.deepEqual(optionLabels(view, 'Filter'), ['Tasks', 'Board order'])
+
+  // The answers are not kept: + starts again from Custom, and Board order from a blank key.
+  await view.press(newFilter)
+  assert.equal(view.valueOf(startFrom), 'custom')
+  await view.select(startFrom, 'board-order')
+  assert.equal(view.valueOf(projectKeyField), '')
+  assert.equal(view.valueOf(whoseTasks), 'mine-or-unassigned')
+  assert.equal(view.valueOf(leaveOutField), 'Done')
+})
+
+test('My open tasks asks only for the statuses to leave out and writes one query, into a filter with the first free name', async () => {
+  const { view } = await showFilters(filtersStored([tasksFilter, { ...mineFilter, name: 'My open tasks' }]))
+  await view.press(newFilter)
+  await view.select(startFrom, 'my-open-tasks')
+  assert.equal(view.find(projectKeyField), null)
+  assert.equal(view.find(whoseTasks), null)
+  assert.equal(view.valueOf(leaveOutField), 'Done')
+  await view.type(leaveOutField, ' ', { replace: true })
+  await view.submit(leaveOutField)
+  assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'My open tasks 2')
+  assert.deepEqual(queryFields(view), [['JQL', 'assignee = currentUser() ORDER BY updated DESC', 3]])
+  await view.press({ type: 'Button', text: 'Cancel' })
+  assert.deepEqual(optionLabels(view, 'Filter'), ['Tasks', 'My open tasks'])
+})
+
+test('+ then Custom opens the editor on a new filter, "Filter 2" or the first free number, with one blank query; Save adds it at the end and shows its tasks', async () => {
+  const { view, host } = await showFilters(filtersStored([tasksFilter, { ...boardFilter, name: 'Filter 2' }]))
+  await newJiraFilter(view)
   assert.ok(view.find(filterTitle('New filter')))
   assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Filter 3')
   assert.deepEqual(queryFields(view), [['JQL', '', 3]])
@@ -2800,7 +2907,7 @@ test('+ opens the editor on a new filter, "Filter 2" or the first free number, w
 
 test("a filter's name can't be blank or another filter's, ignoring case, and Save waits until it can", async () => {
   const { view, host } = await showFilters(filtersStored([tasksFilter, boardFilter]))
-  await view.press(newFilter)
+  await newJiraFilter(view)
   const name = { type: 'Input', label: 'Name' }
   await view.type(name, '   ', { replace: true })
   assert.ok(view.find({ type: 'Text', text: 'Give the filter a name.' }))
@@ -2998,6 +3105,34 @@ test('a change of active project while the filter editor is open drops the draft
   assert.ok(reopened.find(filterSelect))
 })
 
+test('a change of active project while the choice of + on Jira is open drops it, and closing the panel drops it too', async () => {
+  let project = web
+  const { view } = await showWith(
+    { 'tasks.load': () => (project === web ? twgReady([twgTask('WEB-1')], { filterId: 'tasks' }) : ready([task('#9')], { project: api })) },
+    filtersStored([tasksFilter])
+  )
+  await view.press(newFilter)
+  project = api
+  await view.emit('workspace.changed', { context: { branch: 'main', displayName: 'api', terminals: [] } })
+  await view.settled()
+  assert.equal(view.find(startFrom), null)
+  assert.ok(view.find({ type: 'Link', text: '#9' }))
+  // Back on the first project, the list shows: the choice was dropped, not hidden.
+  project = web
+  await view.emit('workspace.changed', { context: { branch: 'main', displayName: 'web', terminals: [] } })
+  await view.settled()
+  assert.equal(view.find(startFrom), null)
+  assert.ok(view.find({ type: 'Link', text: 'WEB-1' }))
+  await view.unmount()
+
+  const again = await showFilters(filtersStored([tasksFilter]))
+  await again.view.press(newFilter)
+  await again.view.unmount()
+  const reopened = await mount(panel, { host: again.host })
+  assert.equal(reopened.find(startFrom), null)
+  assert.ok(reopened.find(filterSelect))
+})
+
 test('a truncated Jira list from several queries says the first 100 of each are shown, whatever the settings say since', async () => {
   const truncated = (queryCount: number) => ({
     'tasks.load': ready([task('WEB-1', { tracker: 'jira' })], { provider: 'jira-orca', truncated: true, queryCount }),
@@ -3173,12 +3308,20 @@ test('Cancel in the filter editor that opened on a failed query shows the error 
   assert.equal(view.find({ type: 'Callout' }), null)
 })
 
-test('a failed query while the filter editor or the template detail is open leaves its draft open', async () => {
+test('a failed query while the choice of + on Jira, the filter editor or the template detail is open leaves it open', async () => {
   const { view } = await showFilters(filtersStored([tasksFilter, { ...boardFilter, queries: [''] }], 'f-board'))
   await view.press({ type: 'Button', text: 'Cancel' })
   await view.press(newFilter)
-  await view.type({ type: 'Input', label: 'Name' }, 'Sprint', { replace: true })
+  await view.select(startFrom, 'board-order')
+  await view.type(projectKeyField, 'WEB')
   const reload = () => view.emit('workspace.changed', { context: { branch: 'main', displayName: 'web', terminals: [] } })
+  await reload()
+  await view.settled()
+  assert.equal(view.valueOf(startFrom), 'board-order')
+  assert.equal(view.valueOf(projectKeyField), 'WEB')
+
+  await view.press(continueButton)
+  await view.type({ type: 'Input', label: 'Name' }, 'Sprint', { replace: true })
   await reload()
   await view.settled()
   assert.ok(view.find(filterTitle('New filter')))
@@ -3379,14 +3522,20 @@ test('+ on GitHub offers the recipes Open and Assigned to me, which write the ne
   assert.deepEqual(optionLabels(view, 'Filter'), ['Open', 'Assigned to me'])
 })
 
-test('a Jira filter, and an existing GitHub filter, offer no recipes', async () => {
+test("an existing GitHub filter offers no recipes, and Jira's editor none either: its recipes come before it, with +", async () => {
   const github = await showGithubFilters(githubFiltersStored({}))
   await github.view.press(editFilter)
   assert.equal(github.view.find(recipe('Open')), null)
+  assert.equal(github.view.find({ type: 'Field', label: 'Start from a recipe' }), null)
+  await github.view.press({ type: 'Button', text: 'Cancel' })
+  await github.view.press(newFilter)
+  assert.equal(github.view.find(startFrom), null)
+  assert.ok(github.view.find({ type: 'Field', label: 'Start from a recipe' }))
   await github.view.unmount()
   const { view } = await showFilters(filtersStored([tasksFilter]))
-  await view.press(newFilter)
-  assert.equal(view.find(recipe('Open')), null)
+  await newJiraFilter(view)
+  assert.ok(view.find({ type: 'Input', label: 'Name' }))
+  assert.equal(view.find({ type: 'Field', label: 'Start from a recipe' }), null)
 })
 
 test('changing the tracker from GitHub to Jira shows the filters of Jira, and back those of GitHub', async () => {
