@@ -32,16 +32,24 @@ _Avoid_: Owner, responsible
 The tracker-independent stage of a task: to do, in progress or done. Unlike the status name, it does not change with the tracker's language or workflow.
 _Avoid_: State
 
-**Filter**:
+**Text filter**:
 Narrowing the tasks already loaded in the panel to those whose task key, title or a label contains what the user typed. It never asks the tracker.
-_Avoid_: Search, local search
+_Avoid_: Filter (that is a named set of tracker queries), search, local search
+
+**Filter**:
+A named way to ask the tracker for a project's tasks, made of tracker queries in order, such as JQL queries on Jira. A project can have several, and the panel shows the tasks of one at a time. A task can be in several filters; its task worktree is the same in each.
+_Avoid_: Task list, view, saved filter (on Jira that is a stored JQL query of Jira's own), board
 
 **JQL query**:
-One of the Jira queries, in order, that make up a Jira project's list of tasks. The list shows the tasks of the first, then those of the next, each task once, where it first appears.
-_Avoid_: Filter (that is the panel's own narrowing, and in Jira a saved filter), search
+One of the Jira queries, in order, that make up a filter on Jira. The filter shows the tasks of the first, then those of the next, each task once, where it first appears.
+_Avoid_: Filter (that is the whole named set of queries), search
+
+**JQL recipe**:
+A ready-made kind of filter on Jira, such as a board's tasks in board order, that writes the filter's JQL queries from a few answers, such as the Jira project and the statuses to leave out. The queries it writes are ordinary JQL queries the user can still edit.
+_Avoid_: Preset, template (that is a prompt template), JQL template
 
 **Tracker search**:
-Asking the tracker for the tasks of the project's own list that match the user's words, including tasks not loaded yet. It only narrows that list: it never finds tasks outside it.
+Asking the tracker for the tasks of the filter shown that match the user's words, including tasks not loaded yet. It only narrows that filter: it never finds tasks outside it.
 _Avoid_: Search (alone), remote search, query
 
 **Prompt template**:
@@ -69,7 +77,7 @@ The per-project setting that says which agent a Start launches: Orca's default a
 _Avoid_: Default agent (that is Orca's own setting)
 
 **Project settings**:
-What Kickoff keeps for one project: its tracker and how the provider reads it, its agent choice, and its prompt templates with the default template.
+What Kickoff keeps for one project: its tracker and how the provider reads it, its filters, its agent choice, and its prompt templates with the default template.
 _Avoid_: Settings, Kickoff settings, plugin settings, config
 
 **Active project**:
