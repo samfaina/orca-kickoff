@@ -105,15 +105,33 @@ test('a filter with no GitHub search, or only blank ones, asks for one by its na
   assert.equal(calls.length, 0)
 })
 
-test("a failed GitHub search fails the list with gh's message, the first failure in the filter's order, naming no filter", async () => {
-  const run: RunCli = async (_tool, args) => {
-    const search = args[args.length - 1]
-    if (search.startsWith('(label:bug)')) return '[]'
-    throw new CliError(`gh failed: ${search.startsWith('(is:pr)') ? 'cannot use pull request search qualifiers' : 'other'}`)
-  }
+const PR_REFUSED = 'gh failed: cannot use pull request search qualifiers with `gh issue list`; use `gh pr list` instead'
+
+/** gh answering each search: its refusal for one with `is:pr`, `[]` for those of `label:bug`, and
+ *  `other` as a failure for the rest. */
+const refusing = (other: string): RunCli => async (_tool, args) => {
+  const search = args[args.length - 1]
+  if (search.includes('is:pr')) throw new CliError(PR_REFUSED)
+  if (search.startsWith('(label:bug)')) return '[]'
+  throw new CliError(other)
+}
+
+test("a query gh refuses fails the list naming its filter and position, the first in the filter's order, and the answer names the filter", async () => {
   await assert.rejects(
-    github.list(run, web, {}, { filter: filter('label:bug', 'is:pr', 'assignee:@me') }),
-    (error: unknown) => error instanceof CliError && !(error instanceof FilterError) && error.message === 'gh failed: cannot use pull request search qualifiers'
+    github.list(refusing('gh failed: other'), web, {}, { filter: filter('label:bug', '', 'is:pr', 'assignee:@me') }),
+    (error: unknown) => error instanceof FilterError && error.filterId === 'f-triage' && error.message === `Triage: Query 3 failed: ${PR_REFUSED}`
+  )
+})
+
+test("any other gh failure, or a refusal of the words of a tracker search, keeps gh's message and names no filter", async () => {
+  const noLogin = 'gh failed: To get started with GitHub CLI, please run:  gh auth login'
+  await assert.rejects(
+    github.list(refusing(noLogin), web, {}, { filter: filter('label:bug', 'assignee:@me') }),
+    (error: unknown) => error instanceof CliError && !(error instanceof FilterError) && error.message === noLogin
+  )
+  await assert.rejects(
+    github.list(refusing(noLogin), web, {}, { filter: filter('label:bug'), query: 'is:pr' }),
+    (error: unknown) => error instanceof CliError && !(error instanceof FilterError) && error.message === PR_REFUSED
   )
 })
 

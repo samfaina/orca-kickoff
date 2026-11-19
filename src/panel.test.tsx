@@ -2720,18 +2720,16 @@ test("the site saves itself, keeping the other providers' settings, and lists th
   assert.deepEqual(storedProject(host), { provider: 'jira-orca', providers: { 'jira-orca': { siteId: 'site-2' }, 'jira-twg': { site: '', profile: 'work' } } })
 })
 
-const jqlField = (label: string) => ({ type: 'Textarea', label })
+const queryField = (label: string) => ({ type: 'Textarea', label })
 const removeQuery = (label: string) => ({ type: 'IconButton', label: `Remove ${label}` })
 const addJql = { type: 'Button', text: 'Add JQL' }
 const filterTitle = (title: 'Edit filter' | 'New filter') => ({ type: 'Heading', text: title })
 
-/** A GitHub filter's query field. */
-const queryField = jqlField
 /** A recipe's button in the editor of a new filter. */
 const recipe = (name: string) => ({ type: 'Button', text: name })
 
 /** The query fields shown, as [label, value, rows], in order: JQL on Jira, Query on GitHub. */
-const jqlFields = (view: TestPanel, label: 'JQL' | 'Query' = 'JQL') =>
+const queryFields = (view: TestPanel, label: 'JQL' | 'Query' = 'JQL') =>
   view.findAll({ type: 'Textarea', label: new RegExp(`^${label}`) }).map((field) => [field.label, view.valueOf(field), field.props.rows])
 
 test("✎ opens the filter editor on the filter shown, in place of the list, with its name and JQL queries, and Cancel goes back loading nothing", async () => {
@@ -2742,7 +2740,7 @@ test("✎ opens the filter editor on the filter shown, in place of the list, wit
   assert.equal(view.find(searchField), null)
   assert.equal(view.find({ type: 'Link', text: 'WEB-2' }), null)
   assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Board')
-  assert.deepEqual(jqlFields(view), [
+  assert.deepEqual(queryFields(view), [
     ['JQL', 'project = WEB ORDER BY rank', 3],
     ['JQL 2', 'project = API', 3]
   ])
@@ -2767,7 +2765,7 @@ test('Save stores the filter as edited, blank queries included, shows it, goes b
   await view.press(editFilter)
   await view.type({ type: 'Input', label: 'Name' }, ' Sprint ', { replace: true })
   await view.press(addJql)
-  await view.type(jqlField('JQL 2'), 'sprint in openSprints()', { replace: true })
+  await view.type(queryField('JQL 2'), 'sprint in openSprints()', { replace: true })
   await view.press(saveButton)
   assert.deepEqual((storedProject(host) as StoredFilters).filters, {
     jira: [tasksFilter, { id: 'f-board', name: 'Sprint', queries: ['project = WEB ORDER BY rank', 'sprint in openSprints()', ''] }]
@@ -2784,10 +2782,10 @@ test('+ opens the editor on a new filter, "Filter 2" or the first free number, w
   await view.press(newFilter)
   assert.ok(view.find(filterTitle('New filter')))
   assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Filter 3')
-  assert.deepEqual(jqlFields(view), [['JQL', '', 3]])
-  assert.equal(view.find(jqlField('JQL'))?.props.placeholder, 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC')
+  assert.deepEqual(queryFields(view), [['JQL', '', 3]])
+  assert.equal(view.find(queryField('JQL'))?.props.placeholder, 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC')
   assert.equal(detailParts(view).deleteBar, undefined)
-  await view.type(jqlField('JQL'), 'assignee = currentUser()')
+  await view.type(queryField('JQL'), 'assignee = currentUser()')
   await view.press(saveButton)
   const stored = storedProject(host) as StoredFilters
   const added = stored.filters?.jira?.[2]
@@ -2811,7 +2809,7 @@ test("a filter's name can't be blank or another filter's, ignoring case, and Sav
   await view.type(name, ' board', { replace: true })
   assert.ok(view.find({ type: 'Text', text: 'Another filter is already called "Board".' }))
   assert.equal(view.find(saveButton)?.disabled, true)
-  await view.submit(jqlField('JQL'))
+  await view.submit(queryField('JQL'))
   assert.ok(view.find(filterTitle('New filter')))
   await view.type(name, 'Board 2', { replace: true })
   assert.equal(view.find(saveButton)?.disabled, false)
@@ -2822,7 +2820,7 @@ test("a filter's name can't be blank or another filter's, ignoring case, and Sav
 test('each JQL query is a three-row field, "JQL" then "JQL 2"…, with Remove beside each while more than one is left and Add JQL below', async () => {
   const { view, host } = await showFilters(filtersStored([{ ...tasksFilter, queries: ['project = WEB', '', 'labels = ui'] }]))
   await view.press(editFilter)
-  assert.deepEqual(jqlFields(view), [
+  assert.deepEqual(queryFields(view), [
     ['JQL', 'project = WEB', 3],
     ['JQL 2', '', 3],
     ['JQL 3', 'labels = ui', 3]
@@ -2842,17 +2840,17 @@ test('each JQL query is a three-row field, "JQL" then "JQL 2"…, with Remove be
   assert.ok(view.find({ type: 'Text', text: 'Ctrl+Enter (Cmd+Enter on macOS) saves the filter and lists its tasks.' })?.props.muted)
 
   await view.press(removeQuery('JQL 2'))
-  assert.deepEqual(jqlFields(view), [
+  assert.deepEqual(queryFields(view), [
     ['JQL', 'project = WEB', 3],
     ['JQL 2', 'labels = ui', 3]
   ])
   await view.press(removeQuery('JQL'))
-  assert.deepEqual(jqlFields(view), [['JQL', 'labels = ui', 3]])
+  assert.deepEqual(queryFields(view), [['JQL', 'labels = ui', 3]])
   assert.equal(view.find(removeQuery('JQL')), null)
 
   await view.press(addJql)
-  await view.type(jqlField('JQL 2'), 'project = API')
-  assert.deepEqual(jqlFields(view), [
+  await view.type(queryField('JQL 2'), 'project = API')
+  assert.deepEqual(queryFields(view), [
     ['JQL', 'labels = ui', 3],
     ['JQL 2', 'project = API', 3]
   ])
@@ -2903,11 +2901,11 @@ test('Ctrl+Enter in any JQL field saves the filter with the queries as typed and
   ))
   await view.press(editFilter)
   await view.press(addJql)
-  await view.type(jqlField('JQL 2'), 'labels = ui\nAND status = Open')
-  await view.submit(jqlField('JQL 2'))
+  await view.type(queryField('JQL 2'), 'labels = ui\nAND status = Open')
+  await view.submit(queryField('JQL 2'))
   assert.equal(view.find(filterTitle('Edit filter')), null)
   await view.press(editFilter)
-  await view.submit(jqlField('JQL'))
+  await view.submit(queryField('JQL'))
   assert.deepEqual(seen, [
     ['project = WEB', 'labels = ui\nAND status = Open'],
     ['project = WEB', 'labels = ui\nAND status = Open']
@@ -3139,7 +3137,7 @@ test('a failed query opens the filter editor by itself on its filter, with the e
   assert.ok(view.find(filterTitle('Edit filter')))
   assert.equal(view.find(settingsTitle), null)
   assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Board')
-  assert.deepEqual(jqlFields(view), [
+  assert.deepEqual(queryFields(view), [
     ['JQL', '', 3],
     ['JQL 2', ' ', 3]
   ])
@@ -3154,7 +3152,7 @@ test('a failed query opens the filter editor by itself on its filter, with the e
 
 test('Save in the filter editor that opened on a failed query, with the query fixed, lists the tasks and shows the error no more', async () => {
   const { view, inputs } = await showFilters(filtersStored([tasksFilter, { ...boardFilter, queries: [''] }], 'f-board'))
-  await view.type(jqlField('JQL'), 'project = WEB')
+  await view.type(queryField('JQL'), 'project = WEB')
   await view.press(saveButton)
   assert.equal(view.find(filterTitle('Edit filter')), null)
   assert.equal(view.find({ type: 'Callout' }), null)
@@ -3349,7 +3347,7 @@ test("choosing another GitHub filter stores it as GitHub's shown one, keeping Ji
 test('the GitHub filter editor names each query "Query", "Query 2"…, with Add query, and says that each is a GitHub search of open issues', async () => {
   const { view } = await showGithubFilters(githubFiltersStored({ filters: { github: [{ ...triageFilter, queries: ['label:bug', 'assignee:@me'] }] } }))
   await view.press(editFilter)
-  assert.deepEqual(jqlFields(view, 'Query'), [
+  assert.deepEqual(queryFields(view, 'Query'), [
     ['Query', 'label:bug', 3],
     ['Query 2', 'assignee:@me', 3]
   ])
@@ -3358,7 +3356,7 @@ test('the GitHub filter editor names each query "Query", "Query 2"…, with Add 
   assert.equal(view.find(addJql), null)
   assert.ok(view.find({ type: 'Text', text: /GitHub issue search.*open issues only/ }))
   await view.press({ type: 'Button', text: 'Add query' })
-  assert.equal(jqlFields(view, 'Query').length, 3)
+  assert.equal(queryFields(view, 'Query').length, 3)
 })
 
 test('+ on GitHub offers the recipes Open and Assigned to me, which write the new filter\'s name and query, and Save stores it with GitHub\'s filters', async () => {
@@ -3367,10 +3365,10 @@ test('+ on GitHub offers the recipes Open and Assigned to me, which write the ne
   assert.equal(view.find(queryField('Query'))?.props.placeholder, 'is:open')
   await view.press(recipe('Open'))
   assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Open 2')
-  assert.deepEqual(jqlFields(view, 'Query'), [['Query', 'is:open', 3]])
+  assert.deepEqual(queryFields(view, 'Query'), [['Query', 'is:open', 3]])
   await view.press(recipe('Assigned to me'))
   assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Assigned to me')
-  assert.deepEqual(jqlFields(view, 'Query'), [['Query', 'is:open assignee:@me', 3]])
+  assert.deepEqual(queryFields(view, 'Query'), [['Query', 'is:open assignee:@me', 3]])
   await view.press(saveButton)
   const stored = storedProject(host) as StoredGithubFilters
   const added = stored.filters?.github?.[1]

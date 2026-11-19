@@ -732,7 +732,7 @@ function changeField(value: string): void {
  *  skipping keys already listed. A page that arrives after a reload or after the tracker search changed
  *  is dropped; one for another project or filter means the list changed, so it is loaded again.
  *  Pending settings are not saved first: the cursor belongs to the list of the filter, or the
- *  tracker search, that listed the first page, with the JQL queries saved then, so the request names
+ *  tracker search, that listed the first page, with the queries saved then, so the request names
  *  that filter, and a tracker search sends its words again with it. */
 async function loadMore(): Promise<void> {
   const current = read(list)
@@ -1194,11 +1194,13 @@ function JiraOrcaSettings({ providers }: { providers: ProviderConfigs }) {
 }
 
 /** How the filter editor names a tracker's queries: "JQL" on Jira, "Query" on GitHub, with the
- *  placeholder of the first and what the queries are, when it needs saying. */
-const QUERY_WORDING: Record<TrackerId, { label: string; placeholder: string; hint: string | null }> = {
-  jira: { label: 'JQL', placeholder: DEFAULT_JQL, hint: null },
+ *  button that adds one, the placeholder of the first and what the queries are, when it needs
+ *  saying. */
+const QUERY_WORDING: Record<TrackerId, { label: string; add: string; placeholder: string; hint: string | null }> = {
+  jira: { label: 'JQL', add: 'Add JQL', placeholder: DEFAULT_JQL, hint: null },
   github: {
     label: 'Query',
+    add: 'Add query',
     placeholder: DEFAULT_GITHUB_QUERY,
     hint: 'Each query is a GitHub issue search, such as is:open label:bug or assignee:@me. Kickoff lists open issues only.'
   }
@@ -1232,7 +1234,7 @@ function FilterQueries({
         const label = index === 0 ? wording.label : `${wording.label} ${index + 1}`
         // The label is the Field's, above the row, so Remove centres on the query's box alone.
         return (
-          <Field key={`jql-${index}`} label={label}>
+          <Field key={`query-${index}`} label={label}>
             <Box direction="row" align="center" gap="xs">
               <Box grow minWidth={0}>
                 <Textarea
@@ -1263,8 +1265,8 @@ function FilterQueries({
         )
       })}
       <Row gap="none" align="center">
-        <Button key="jql-add" icon="add" size="sm" variant="solid" onPress={() => change([...queries, ''])}>
-          {tracker === 'jira' ? 'Add JQL' : 'Add query'}
+        <Button key="query-add" icon="add" size="sm" variant="solid" onPress={() => change([...queries, ''])}>
+          {wording.add}
         </Button>
       </Row>
       <Text size="sm" muted>

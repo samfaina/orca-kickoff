@@ -111,7 +111,8 @@ const INITIAL_FILTERS: Record<TrackerId, Filter> = {
   github: { id: 'open', name: 'Open', queries: [DEFAULT_GITHUB_QUERY] }
 }
 
-const TRACKER_IDS: readonly TrackerId[] = ['github', 'jira']
+/** Every tracker, from the map above, so a new one can't be left out of reading settings. */
+const TRACKER_IDS = Object.keys(INITIAL_FILTERS) as TrackerId[]
 
 const PROVIDER_IDS: readonly ProviderId[] = ['github', 'jira-orca', 'jira-twg']
 

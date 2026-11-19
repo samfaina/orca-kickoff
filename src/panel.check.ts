@@ -4,10 +4,10 @@
 // and each list is short, since a tall panel draws unreliably in `shot` (`docs/reference.md`).
 import { defineCheck, type MockRequests } from 'orca/testing'
 import {
-  DEFAULT_GITHUB_QUERY,
   DEFAULT_JQL,
   INITIAL_FILTER_ID,
   INITIAL_FILTER_NAME,
+  projectFilters,
   type Filter,
   type JiraProviderId,
   type ProjectRef,
@@ -49,7 +49,7 @@ const web: ProjectRef = { id: 'github:acme/web', name: 'web', repo: 'acme/web' }
 const notes: ProjectRef = { id: 'repo:notes', name: 'notes', repo: null }
 
 /** The filter a GitHub project starts with. */
-const openFilter: Filter = { id: 'open', name: 'Open', queries: [DEFAULT_GITHUB_QUERY] }
+const [openFilter] = projectFilters({}, 'github')
 
 /** A GitHub filter of two queries: the issues assigned to the person, then those to triage. */
 const mineFilter: Filter = { id: 'f-mine', name: 'Mine or triage', queries: ['assignee:@me', 'label:needs-triage no:assignee'] }

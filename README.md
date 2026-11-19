@@ -72,9 +72,9 @@ The row above **Search tasks** shows the filter listed, with ✎ to edit it and 
 - **Save** (or **Ctrl+Enter**, **Cmd+Enter** on macOS, in a query) stores the filter, goes back to the list and loads it. **Cancel** goes back without storing anything.
 - **Delete filter**, clicked twice, removes the filter; a project keeps at least one.
 
-A GitHub query is any issue search, such as `label:needs-triage`, `assignee:@me` or `label:bug OR label:ui`. Kickoff runs it as `gh issue list --state open --search "(<query>) is:open"`, so it lists open issues only, even with `is:closed`; `is:pr` fails, since gh lists issues only.
+A GitHub query is any issue search, such as `label:needs-triage`, `assignee:@me` or `label:bug OR label:ui`. Kickoff runs it as `gh issue list --state open --search "(<query>) is:open"`, so it lists open issues only, even with `is:closed`; `is:pr` fails, since gh lists issues only. A malformed query lists nothing rather than failing: GitHub answers it with no issues.
 
-A query Jira rejects names its filter and its place in it, such as `Board: JQL query 2 failed: …`, and the panel opens the filter editor on that filter. A filter whose queries are all blank opens it too. Any other failure, such as a missing `twg` or `gh` login, a Jira connection or a GitHub query gh refuses, shows the tool's own message and opens Project settings. Settings stored before filters, with JQL in Project settings, become one filter, **Tasks**, with those queries.
+A query the tracker rejects names its filter and its place in it, such as `Board: JQL query 2 failed: …` on Jira or `Mine: Query 2 failed: …` on GitHub, and the panel opens the filter editor on that filter. A filter whose queries are all blank opens it too. Any other failure, such as a missing `twg` or `gh` login or Jira connection, shows the tool's own message and opens Project settings. Settings stored before filters, with JQL in Project settings, become one filter, **Tasks**, with those queries.
 
 ## Prompt templates
 
@@ -124,7 +124,7 @@ For a tracker Kickoff already knows (another way to read Jira, say), adding a pr
 3. **A configuration entry**: the id in `ProviderId` and `PROVIDER_IDS`, and its settings in `ProviderConfigs`, `readProviderConfigs` and the defaults of `providerConfig`, all in `src/protocol.ts`.
 4. **Its panel settings**: an entry in `PROVIDER_OPTIONS` and the fields its configuration needs in `TrackerFields`, in `src/panel.tsx`.
 
-The type check points at most of these once the id is added to `ProviderId`. A provider for a new tracker, such as Linear or GitLab, also adds the tracker to `TrackerId` and `trackerOf` (`src/protocol.ts`), says how its worktrees are named and read back (`src/naming.ts`), how a Start links the worktree to the task and how a linked worktree is found (`src/orca.ts`), and how the panel names the tracker (`src/panel.tsx`).
+The type check points at most of these once the id is added to `ProviderId`. A provider for a new tracker, such as Linear or GitLab, also adds the tracker to `TrackerId` and `trackerOf`, with the filter a project starts with in `INITIAL_FILTERS` (`src/protocol.ts`), its recipes in `RECIPES` (`src/filter.ts`), says how its worktrees are named and read back (`src/naming.ts`), how a Start links the worktree to the task and how a linked worktree is found (`src/orca.ts`), and how the panel names the tracker and its queries, in `QUERY_WORDING` (`src/panel.tsx`).
 
 ## Known limitations
 
