@@ -3105,78 +3105,112 @@ test('a change of active project while the filter editor is open drops the draft
   assert.ok(reopened.find(filterSelect))
 })
 
-const filtersSection = { type: 'Collapsible', label: 'Filters' }
+/** The button that opens and closes "Filters", the header of its section. */
+const filtersToggle = { type: 'Button', text: 'Filters' }
 
-/** The kinds and labels of the controls drawn inside "Filters", in order. */
+/** Whether `node` is the section "Filters": its first child is the header row, which holds the
+ *  toggle, then, while it is open, what it holds. Orca keeps the keys of controls only, so the
+ *  toggle's key finds it. */
+function isFiltersSection(node: TreeSnapshot | string): node is TreeSnapshot {
+  if (typeof node === 'string') return false
+  const [header] = node.children ?? []
+  return (
+    header !== undefined &&
+    typeof header !== 'string' &&
+    header.type === 'Box' &&
+    header.props?.direction === 'row' &&
+    nodesIn(header, (inner) => inner.key === 'filters-toggle').length > 0
+  )
+}
+
+/** The kinds and labels of the controls drawn in "Filters", its header first, in order. */
 function controlsInFilters(view: TestPanel): string[] {
-  const [section] = nodesIn(view.tree(), (node) => node.type === 'Collapsible' && node.props?.title === 'Filters')
+  const [section] = nodesIn(view.tree(), isFiltersSection)
   assert.ok(section, 'no "Filters"')
   const controls = nodesIn(section, (node) => ['Select', 'IconButton', 'Input', 'Button'].includes(node.type))
   return controls.map((node) => `${node.type} ${String(node.props?.label ?? wordsOf(node))}`)
 }
 
-test('"Filters", open at first, holds the filter row and Search tasks, with its hint and Search in Jira; closed, it says the filter and the text', async () => {
+/** Whether "Filters" is open, as its header's icon and tooltip say. */
+function filtersOpen(view: TestPanel): boolean {
+  const toggle = view.find(filtersToggle)
+  assert.ok(toggle, 'no "Filters" header')
+  const open = toggle.props.icon === 'collapse'
+  assert.equal(toggle.props.tooltip, open ? 'Hide filters' : 'Show filters')
+  if (!open) assert.equal(toggle.props.icon, 'expand')
+  return open
+}
+
+test('"Filters", open at first, holds the filter row and Search tasks, with its hint and Search in Jira, flush under its own header; closed, it says the filter and the text', async () => {
   const { view } = await showFilters(filtersStored([tasksFilter, boardFilter], 'f-board'))
-  assert.equal(view.find(filtersSection)?.props.open, true)
-  assert.equal(view.find(filtersSection)?.props.description, undefined)
+  assert.equal(filtersOpen(view), true)
+  assert.equal(view.find(filtersToggle)?.props.variant, 'ghost')
+  assert.equal(view.find(filtersToggle)?.props.size, 'sm')
+  // No Collapsible: it would indent what it holds.
+  assert.equal(view.find({ type: 'Collapsible' }), null)
   await view.type(searchField, 'dark')
   assert.deepEqual(controlsInFilters(view), [
+    'Button Filters',
     'Select Filter',
     'IconButton Edit filter',
     'IconButton New filter',
     'Input Search tasks',
     'Button Search in Jira'
   ])
+  assert.equal(view.find({ type: 'Text', text: 'Board · "dark"' }), null)
   await view.press({ type: 'Button', text: 'Search in Jira' })
   // The tracker search's results row stays outside, so Clear search is at hand while it is closed.
-  await view.toggle(filtersSection)
-  assert.equal(view.find(filtersSection)?.props.open, false)
+  await view.press(filtersToggle)
+  assert.equal(filtersOpen(view), false)
   assert.equal(view.find(filterSelect), null)
   assert.equal(view.find(searchField), null)
-  assert.equal(view.find(filtersSection)?.props.description, 'Board · "dark"')
+  assert.deepEqual(controlsInFilters(view), ['Button Filters'])
+  assert.equal(view.find({ type: 'Text', text: 'Board · "dark"' })?.props.muted, true)
   assert.ok(view.find({ type: 'Button', text: 'Clear search' }))
   await view.press({ type: 'Button', text: 'Clear search' })
-  assert.equal(view.find(filtersSection)?.props.description, 'Board')
+  assert.ok(view.find({ type: 'Text', text: 'Board' }))
+  await view.press(filtersToggle)
+  assert.equal(filtersOpen(view), true)
+  assert.equal(view.find({ type: 'Text', text: 'Board' }), null)
 })
 
 test('"Filters" stays as it was left through reloads while the panel is open, starts open in a panel opened again, and holds the filter row above a load error', async () => {
   const { view, host } = await showFilters(filtersStored([tasksFilter, boardFilter], 'f-board'))
-  await view.toggle(filtersSection)
+  await view.press(filtersToggle)
   await view.press({ type: 'IconButton', label: 'Reload tasks' })
-  assert.equal(view.find(filtersSection)?.props.open, false)
+  assert.equal(filtersOpen(view), false)
   assert.ok(view.find({ type: 'Link', text: 'WEB-2' }))
-  await view.toggle(filtersSection)
+  await view.press(filtersToggle)
   await view.select(filterSelect, 'tasks')
-  assert.equal(view.find(filtersSection)?.props.open, true)
-  await view.toggle(filtersSection)
+  assert.equal(filtersOpen(view), true)
+  await view.press(filtersToggle)
   await view.unmount()
 
   const reopened = await mount(panel, { host })
-  assert.equal(reopened.find(filtersSection)?.props.open, true)
+  assert.ok(reopened.find(filterSelect))
   await reopened.unmount()
 
   const failing = await showFilters(filtersStored([tasksFilter, { ...boardFilter, queries: [''] }], 'f-board'))
   await failing.view.press({ type: 'Button', text: 'Cancel' })
-  assert.deepEqual(controlsInFilters(failing.view), ['Select Filter', 'IconButton Edit filter', 'IconButton New filter'])
+  assert.deepEqual(controlsInFilters(failing.view), ['Button Filters', 'Select Filter', 'IconButton Edit filter', 'IconButton New filter'])
   assert.ok(failing.view.find({ type: 'Callout' }))
   assert.deepEqual(afterFilters(failing.view), ['Separator', 'Callout'])
 })
 
 /** The types of the nodes drawn after "Filters", beside it. */
 function afterFilters(view: TestPanel): string[] {
-  const isFilters = (node: TreeSnapshot | string) => typeof node !== 'string' && node.type === 'Collapsible' && node.props?.title === 'Filters'
-  const [parent] = nodesIn(view.tree(), (node) => (node.children ?? []).some(isFilters))
+  const [parent] = nodesIn(view.tree(), (node) => (node.children ?? []).some(isFiltersSection))
   assert.ok(parent, 'no "Filters"')
   const siblings = parent.children ?? []
-  return siblings.slice(siblings.findIndex(isFilters) + 1).map((node) => (typeof node === 'string' ? 'text' : node.type))
+  return siblings.slice(siblings.findIndex(isFiltersSection) + 1).map((node) => (typeof node === 'string' ? 'text' : node.type))
 }
 
 test('a divider parts "Filters" from the list, open or closed, and from the results row of a tracker search', async () => {
   const { view } = await showFilters(filtersStored([tasksFilter]))
   assert.deepEqual(afterFilters(view), ['Separator', 'Box'])
-  await view.toggle(filtersSection)
+  await view.press(filtersToggle)
   assert.deepEqual(afterFilters(view), ['Separator', 'Box'])
-  await view.toggle(filtersSection)
+  await view.press(filtersToggle)
   await view.type(searchField, 'dark', { submit: true })
   assert.ok(view.find({ type: 'Button', text: 'Clear search' }))
   assert.deepEqual(afterFilters(view), ['Separator', 'Box', 'Box'])
