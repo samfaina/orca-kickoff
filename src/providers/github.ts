@@ -1,8 +1,10 @@
-// GitHub Issues through `gh`. gh has no cursor for this list, so a page is the first 100 issues, of
-// the whole list or of a tracker search.
-import { CliError, unreadableOutput } from '../cli'
+// GitHub Issues through `gh`. gh has no cursor for this list, so the only page is the first 100
+// issues of each GitHub search of the filter, of its whole list or of a tracker search, joined in
+// query order.
+import { CliError, unreadableOutput, type RunCli } from '../cli'
 import { isRecord, parseJson, text } from '../json'
-import type { ProviderConfigs, Task } from '../protocol'
+import { DEFAULT_GITHUB_QUERY, type ProviderConfigs, type Task } from '../protocol'
+import { mergeQueryTasks, requireQueries } from './queries'
 import { searchWords, type Provider } from './types'
 
 const LIMIT = 100
@@ -12,27 +14,47 @@ export const github: Provider<Required<ProviderConfigs>['github']> = {
   tracker: 'github',
   label: 'GitHub',
   async list(run, project, _config, request = {}) {
-    if (!project.repo) {
+    const { repo } = project
+    if (!repo) {
       throw new CliError('This project has no GitHub repository. Choose a Jira tracker for it instead.')
     }
-    const args = [
-      'issue', 'list',
-      '--repo', project.repo,
-      '--state', 'open',
-      '--limit', String(LIMIT),
-      '--json', 'number,title,url,body,labels,assignees'
-    ]
-    const search = githubSearch(request.query)
-    if (search !== null) args.push('--search', search)
-    const stdout = await run('gh', args)
-    const issues = parseJson(stdout)
-    if (!Array.isArray(issues)) throw unreadableOutput('gh')
-    // Counted before dropping unusable issues: 100 from gh means there may be more.
-    return { tasks: toTasks(issues), nextCursor: null, truncated: issues.length >= LIMIT }
+    const { queries } = requireQueries(request.filter, `Enter a GitHub search to list issues, for example: ${DEFAULT_GITHUB_QUERY}`)
+    // All at once; the first query that failed, in the filter's order, fails the list.
+    const searches = await Promise.allSettled(queries.map((query) => search(run, repo, githubFilterSearch(query.text, request.query))))
+    const pages = searches.map((outcome) => {
+      if (outcome.status === 'rejected') throw outcome.reason
+      return outcome.value
+    })
+    return { tasks: mergeQueryTasks(pages.map((page) => page.tasks)), nextCursor: null, truncated: pages.some((page) => page.truncated) }
   }
 }
 
-/** The `--search` value of a tracker search: each word in double quotes, so none can act as a
+/** The tasks of one `gh issue list --search`, and whether there may be more than it answered. */
+async function search(run: RunCli, repo: string, value: string): Promise<{ tasks: Task[]; truncated: boolean }> {
+  const args = [
+    'issue', 'list',
+    '--repo', repo,
+    '--state', 'open',
+    '--limit', String(LIMIT),
+    '--json', 'number,title,url,body,labels,assignees',
+    '--search', value
+  ]
+  const issues = parseJson(await run('gh', args))
+  if (!Array.isArray(issues)) throw unreadableOutput('gh')
+  // Counted before dropping unusable issues: 100 from gh means there may be more.
+  return { tasks: toTasks(issues), truncated: issues.length >= LIMIT }
+}
+
+/** The `--search` value for one GitHub search of a filter, narrowed by the words of a tracker
+ *  search when `query` has any. The filter's search goes in parentheses, so an `OR` in it can't
+ *  reach the rest, and `is:open` follows: gh drops its own `state:open` when the search holds
+ *  `is:closed` (`docs/reference.md`), and Kickoff lists open tasks only. */
+export function githubFilterSearch(filterSearch: string, query = ''): string {
+  const words = githubSearch(query)
+  return `(${filterSearch}) is:open${words === null ? '' : ` ${words}`}`
+}
+
+/** The words of a tracker search for `--search`: each in double quotes, so none can act as a
  *  qualifier such as `is:closed`, after removing the quotes it holds. `#42` becomes `42`, which
  *  finds that issue. Null when no word is left. */
 export function githubSearch(query = ''): string | null {

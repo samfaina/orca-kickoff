@@ -60,7 +60,7 @@ export const jiraTwg: Provider<Config> = {
     let tasks: Task[] = []
     for (;;) {
       const query = queries[index]
-      const jql = jiraSearchJql(query.jql, request.query)
+      const jql = jiraSearchJql(query.text, request.query)
       const page = await queryPage(run, config, jql, after, LIMIT - tasks.length).catch((error: unknown) => {
         throw jqlQueryFailure(filter, query, error)
       })

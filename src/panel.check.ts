@@ -4,6 +4,7 @@
 // and each list is short, since a tall panel draws unreliably in `shot` (`docs/reference.md`).
 import { defineCheck, type MockRequests } from 'orca/testing'
 import {
+  DEFAULT_GITHUB_QUERY,
   DEFAULT_JQL,
   INITIAL_FILTER_ID,
   INITIAL_FILTER_NAME,
@@ -47,6 +48,17 @@ const web: ProjectRef = { id: 'github:acme/web', name: 'web', repo: 'acme/web' }
 /** A project with no GitHub repository, so it has no tracker until one is chosen. */
 const notes: ProjectRef = { id: 'repo:notes', name: 'notes', repo: null }
 
+/** The filter a GitHub project starts with. */
+const openFilter: Filter = { id: 'open', name: 'Open', queries: [DEFAULT_GITHUB_QUERY] }
+
+/** A GitHub filter of two queries: the issues assigned to the person, then those to triage. */
+const mineFilter: Filter = { id: 'f-mine', name: 'Mine or triage', queries: ['assignee:@me', 'label:needs-triage no:assignee'] }
+
+/** The stored settings of `web` on GitHub with its two filters, the second shown. */
+const githubSettings = {
+  settings: { version: 1, projects: { [web.id]: { providers: {}, filters: { github: [openFilter, mineFilter] }, shownFilterId: { github: mineFilter.id } } } }
+}
+
 /** A ready list, with no task worktree unless `fields` says otherwise. */
 const ready = (project: ProjectRef, provider: ProviderId, tasks: Task[], fields: Partial<ReadyList> = {}): ReadyList => ({
   kind: 'ready',
@@ -55,7 +67,7 @@ const ready = (project: ProjectRef, provider: ProviderId, tasks: Task[], fields:
   tasks,
   nextCursor: null,
   truncated: false,
-  filterId: provider === 'github' ? null : INITIAL_FILTER_ID,
+  filterId: provider === 'github' ? openFilter.id : INITIAL_FILTER_ID,
   queryCount: 1,
   worktrees: {},
   worktreesError: null,
@@ -183,6 +195,11 @@ export default defineCheck({
   // Project settings opens by itself, with a tracker to choose.
   'needs-config': { requests: answers({ kind: 'needs-config', project: notes }) },
   'github-ready': { requests: answers(ready(web, 'github', githubTasks)) },
+  // Two GitHub filters, the second of two queries shown: the filter row shows it, with ✎ and +.
+  'github-filters': {
+    storage: githubSettings,
+    requests: answers(ready(web, 'github', githubTasks.slice(0, 2), { filterId: mineFilter.id, queryCount: 2 }))
+  },
   'jira-started': { storage: jiraSettings('jira-twg'), requests: answers(jiraStarted) },
   // Five tasks stand for the 100 Orca's Jira search answers at most.
   truncated: {

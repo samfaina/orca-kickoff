@@ -547,6 +547,14 @@ On Windows all three tools are `.exe` and on PATH **[Verified]**:
   - Qualifiers in the query override the other flags: `--state open --search "is:closed"` returns closed issues. Quoted, `"\"is:closed\""` is searched as text and only open issues come back.
   - `is:pr` fails: "cannot use pull request search qualifiers with `gh issue list`".
   - An unterminated `"` returns no results, not an error.
+- How `--state` and `--search` make one query, **[Verified]** with `gh` 2.103.3 and `GH_DEBUG=api` on a public repository (issue #109):
+  - With `--search`, gh asks GitHub's issue search (GraphQL `search`, type `ISSUE_ADVANCED`) for `( <search> ) repo:<owner/name> state:open type:issue`: the words go in parentheses, so a filter's query adds to `--state open`. Without `--search` it lists issues with `states: ["OPEN"]` instead, not through search.
+  - gh leaves `state:open` out when the search text holds `is:closed` or `state:closed`, even inside double quotes: `--state open --search '"is:closed"'` sends `( "is:closed" ) repo:… type:issue`, which can list closed issues that contain those words. `--state closed --search is:open` keeps `state:closed` and lists nothing. So Kickoff adds `is:open` to every search itself: `(is:closed) is:open` lists nothing.
+  - gh refuses `is:pr` before asking GitHub, also inside double quotes: `--search '"is:pr"'` fails with the same "cannot use pull request search qualifiers" message.
+  - Parentheses and `OR` work inside the search, and nest inside gh's own: `--search '(label:bug OR label:docs) is:open "gh"'` lists open issues with either label that match `gh`. `sort:updated-asc` inside parentheses still sorts.
+  - An unbalanced `(` or an unknown qualifier such as `foo:bar` gives an empty list, not an error.
+  - With no keyword, such as `is:open` or `assignee:@me`, the results come newest first, in the order of the plain list; with keywords, by relevance.
+  - `@me` in `assignee:@me` is the logged-in user.
 - Logged out (no stored login, no `GH_TOKEN`): exit 4, empty stdout, and stderr starting `To get started with GitHub CLI, please run:  gh auth login`, then a line about `GH_TOKEN` **[Verified]**.
 - For GitHub Enterprise, `--repo` takes `<host>/<owner>/<repo>` **[Assumed]**; it is the documented `gh` form, but not run here.
 

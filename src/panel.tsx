@@ -33,11 +33,21 @@ import {
   type OrcaNode,
   type PanelContext
 } from 'orca'
-import { filterNameProblem, newFilterName, withFilterDeleted, withFilterSaved, type FilterChanges } from './filter'
+import {
+  filterNameProblem,
+  filterRecipes,
+  newFilterName,
+  recipeFilterName,
+  withFilterDeleted,
+  withFilterSaved,
+  type FilterChanges,
+  type FilterRecipe
+} from './filter'
 import { isRecord } from './json'
 import {
   appendTasks,
   chooseProvider,
+  DEFAULT_GITHUB_QUERY,
   DEFAULT_JQL,
   listedFilter,
   projectFilters,
@@ -61,7 +71,8 @@ import {
   type StartResult,
   type Task,
   type TaskList,
-  type TaskWorktree
+  type TaskWorktree,
+  type TrackerId
 } from './protocol'
 import type { TaskPage } from './providers/types'
 import { matchesSearch } from './search'
@@ -115,21 +126,22 @@ const NO_TRACKER = ':none'
 const DEFAULT_SITE = ':default'
 
 /** The listed project's settings, as the person sees them. `provider` is null while none is set.
- *  `filters` and `shownFilterId` are the Jira filters and the one the filter row shows. */
+ *  `filterSettings` holds every tracker's filters and the one each showed last, as stored; the
+ *  filter row shows those of the provider's tracker (`trackerFilters`). */
 type ShownSettings = {
   projectId: string
   provider: ProviderId | null
   providers: ProviderConfigs
-  filters: Filter[]
-  shownFilterId: string
+  filterSettings: FilterSettings
   agent: string
   templates: PromptTemplate[]
   defaultTemplateId: string
 }
 
-/** The filter editor's draft: a filter of `projectId` being edited, or a new one. */
+/** The filter editor's draft: a filter of `projectId` on `tracker` being edited, or a new one. */
 type FilterDraft = {
   projectId: string
+  tracker: TrackerId
   id: string
   isNew: boolean
   name: string
@@ -307,26 +319,34 @@ async function showSettings(project: ProjectRef): Promise<void> {
     projectId: project.id,
     provider,
     providers: settings.providers,
-    ...shownFilters(settings),
+    filterSettings: { filters: settings.filters, shownFilterId: settings.shownFilterId },
     agent: settings.agent ?? 'orca-default',
     templates: projectTemplates(settings),
     defaultTemplateId: defaultTemplate(settings).id
   })
 }
 
-/** A project's Jira filters and the one the filter row shows, as the person sees them. */
-function shownFilters(settings: FilterSettings): Pick<ShownSettings, 'filters' | 'shownFilterId'> {
-  return { filters: projectFilters(settings), shownFilterId: listedFilter(settings).id }
+/** The filters of the shown project's tracker and the one the filter row shows, or null while the
+ *  project has no tracker. */
+type TrackerFilters = { tracker: TrackerId; filters: Filter[]; shownFilterId: string }
+
+function trackerFilters(shown: ShownSettings): TrackerFilters | null {
+  if (shown.provider === null) return null
+  const tracker = trackerOf(shown.provider)
+  return { tracker, filters: projectFilters(shown.filterSettings, tracker), shownFilterId: listedFilter(shown.filterSettings, tracker).id }
 }
 
 /** Chooses the filter the panel shows, saves that choice, and loads its tasks from the tracker,
  *  as Reload does. It leaves any tracker search, but the field keeps its words. */
 function chooseFilter(id: string): void {
   const shown = read(shownSettings)
-  if (!shown || id === shown.shownFilterId || !shown.filters.some((filter) => filter.id === id)) return
+  const current = shown ? trackerFilters(shown) : null
+  if (!shown || !current || id === current.shownFilterId || !current.filters.some((filter) => filter.id === id)) return
   leaveTrackerSearch()
-  set(shownSettings, { ...shown, shownFilterId: id })
-  settingsSave.change(shown.projectId, { shownFilterId: { jira: id } })
+  // A change replaces `shownFilterId` whole, so it keeps the filter each other tracker shows.
+  const shownFilterId = { ...shown.filterSettings.shownFilterId, [current.tracker]: id }
+  set(shownSettings, { ...shown, filterSettings: { ...shown.filterSettings, shownFilterId } })
+  settingsSave.change(shown.projectId, { shownFilterId })
   void load()
 }
 
@@ -335,15 +355,17 @@ function chooseFilter(id: string): void {
  *  that opened it. */
 function openFilter(id: string | null, loadError: string | null = null): void {
   const shown = read(shownSettings)
-  if (!shown) return
-  const filter = id === null ? null : shown.filters.find((candidate) => candidate.id === id)
+  const current = shown ? trackerFilters(shown) : null
+  if (!shown || !current) return
+  const filter = id === null ? null : current.filters.find((candidate) => candidate.id === id)
   if (id !== null && !filter) return
   closeTemplate()
   set(filterDraft, {
     projectId: shown.projectId,
-    id: filter?.id ?? newId('f', shown.filters),
+    tracker: current.tracker,
+    id: filter?.id ?? newId('f', current.filters),
     isNew: !filter,
-    name: filter?.name ?? newFilterName(shown.filters),
+    name: filter?.name ?? newFilterName(current.filters),
     queries: filter ? [...filter.queries] : [''],
     loadError,
     error: null,
@@ -355,6 +377,11 @@ function openFilter(id: string | null, loadError: string | null = null): void {
 /** Changes the editor's draft, while it is still the draft of the `expected` filter. */
 function changeFilterDraft(expected: FilterDraft, changes: Partial<FilterDraft>): void {
   update(filterDraft, (draft) => (draft && isSameDraft(draft, expected) ? { ...draft, ...changes } : draft))
+}
+
+/** Writes a recipe's name and queries into the draft of a new filter, the name made free. */
+function useRecipe(draft: FilterDraft, filters: Filter[], recipe: FilterRecipe): void {
+  changeFilterDraft(draft, { name: recipeFilterName(filters, recipe.name), queries: [...recipe.queries] })
 }
 
 /** Leaves the filter editor without saving. */
@@ -369,8 +396,8 @@ async function saveFilter(): Promise<void> {
   const draft = read(filterDraft)
   const shown = read(shownSettings)
   if (!draft || draft.saving || shown?.projectId !== draft.projectId) return
-  if (filterNameProblem(shown.filters, draft.name, draft.id) !== null) return
-  await writeFilters(draft, (project) => withFilterSaved(project, { id: draft.id, name: draft.name, queries: draft.queries }))
+  if (filterNameProblem(projectFilters(shown.filterSettings, draft.tracker), draft.name, draft.id) !== null) return
+  await writeFilters(draft, (project) => withFilterSaved(project, draft.tracker, { id: draft.id, name: draft.name, queries: draft.queries }))
 }
 
 /** The first click asks for a second within a few seconds; the second deletes the filter, then
@@ -387,7 +414,7 @@ async function deleteFilter(): Promise<void> {
     }, CONFIRM_DELETE_MS)
     return
   }
-  await writeFilters(draft, (project) => withFilterDeleted(project, draft.id))
+  await writeFilters(draft, (project) => withFilterDeleted(project, draft.tracker, draft.id))
 }
 
 /** Writes a change to the draft project's filters, then shows them, goes back to the list and
@@ -403,7 +430,7 @@ async function writeFilters(draft: FilterDraft, change: (project: ProjectSetting
     return
   }
   const shown = read(shownSettings)
-  if (changes && shown?.projectId === draft.projectId) set(shownSettings, { ...shown, ...shownFilters(changes) })
+  if (changes && shown?.projectId === draft.projectId) set(shownSettings, { ...shown, filterSettings: changes })
   const current = read(filterDraft)
   if (!current || !isSameDraft(current, draft)) return
   set(filterDraft, null)
@@ -716,7 +743,7 @@ async function loadMore(): Promise<void> {
   const mine = generation
   set(loadingMore, true)
   set(moreError, null)
-  const page = current.filterId !== null ? { filterId: current.filterId, cursor } : { cursor }
+  const page = { filterId: current.filterId, cursor }
   let answer: TaskList
   try {
     answer = await plugin.request('tasks.load', found ? { ...page, query: found.query } : page, { timeoutMs: LOAD_TIMEOUT_MS })
@@ -1049,7 +1076,7 @@ export default function Panel() {
   }
   const filterEdit = read(filterDraft)
   if (filterEdit && shown?.projectId === filterEdit.projectId) {
-    return <FilterEditor draft={filterEdit} filters={shown.filters} projectName={project?.name ?? ''} />
+    return <FilterEditor draft={filterEdit} filters={projectFilters(shown.filterSettings, filterEdit.tracker)} projectName={project?.name ?? ''} />
   }
   const settings = project !== null && shown?.projectId === project.id ? shown : null
   const choice = read(settingsChoice)
@@ -1166,15 +1193,43 @@ function JiraOrcaSettings({ providers }: { providers: ProviderConfigs }) {
   )
 }
 
-/** The JQL queries of a filter, each with its Remove button while more than one is left, then Add
- *  JQL. Ctrl+Enter (Cmd+Enter on macOS) in any of them runs `onSubmit`. */
-function JqlQueries({ queries: stored, onChange: change, onSubmit }: { queries: string[]; onChange: (queries: string[]) => void; onSubmit: () => void }) {
+/** How the filter editor names a tracker's queries: "JQL" on Jira, "Query" on GitHub, with the
+ *  placeholder of the first and what the queries are, when it needs saying. */
+const QUERY_WORDING: Record<TrackerId, { label: string; placeholder: string; hint: string | null }> = {
+  jira: { label: 'JQL', placeholder: DEFAULT_JQL, hint: null },
+  github: {
+    label: 'Query',
+    placeholder: DEFAULT_GITHUB_QUERY,
+    hint: 'Each query is a GitHub issue search, such as is:open label:bug or assignee:@me. Kickoff lists open issues only.'
+  }
+}
+
+/** The queries of a filter on `tracker`, each with its Remove button while more than one is left,
+ *  then Add JQL (Add query on GitHub). Ctrl+Enter (Cmd+Enter on macOS) in any of them runs
+ *  `onSubmit`. */
+function FilterQueries({
+  tracker,
+  queries: stored,
+  onChange: change,
+  onSubmit
+}: {
+  tracker: TrackerId
+  queries: string[]
+  onChange: (queries: string[]) => void
+  onSubmit: () => void
+}) {
+  const wording = QUERY_WORDING[tracker]
   // A filter stored with no query at all still shows one field to type into.
   const queries = stored.length > 0 ? stored : ['']
   return (
     <Stack gap="sm">
+      {wording.hint !== null ? (
+        <Text size="sm" muted>
+          {wording.hint}
+        </Text>
+      ) : null}
       {queries.map((query, index) => {
-        const label = index === 0 ? 'JQL' : `JQL ${index + 1}`
+        const label = index === 0 ? wording.label : `${wording.label} ${index + 1}`
         // The label is the Field's, above the row, so Remove centres on the query's box alone.
         return (
           <Field key={`jql-${index}`} label={label}>
@@ -1185,7 +1240,7 @@ function JqlQueries({ queries: stored, onChange: change, onSubmit }: { queries: 
                   labelHidden
                   rows={3}
                   value={query}
-                  placeholder={index === 0 ? DEFAULT_JQL : undefined}
+                  placeholder={index === 0 ? wording.placeholder : undefined}
                   onChange={(value) => change(queries.map((other, at) => (at === index ? value : other)))}
                   onSubmit={onSubmit}
                 />
@@ -1209,7 +1264,7 @@ function JqlQueries({ queries: stored, onChange: change, onSubmit }: { queries: 
       })}
       <Row gap="none" align="center">
         <Button key="jql-add" icon="add" size="sm" variant="solid" onPress={() => change([...queries, ''])}>
-          Add JQL
+          {tracker === 'jira' ? 'Add JQL' : 'Add query'}
         </Button>
       </Row>
       <Text size="sm" muted>
@@ -1303,24 +1358,25 @@ function Body({ list }: { list: TaskList }) {
   }
 }
 
-/** On a Jira project, the filter shown, ✎ to edit it and + to add one. */
+/** On a project with a tracker, the filter shown, ✎ to edit it and + to add one. */
 function FilterRow({ projectId }: { projectId: string }) {
   const shown = read(shownSettings)
-  if (shown?.projectId !== projectId || shown.provider === null || trackerOf(shown.provider) !== 'jira') return null
+  const current = shown?.projectId === projectId ? trackerFilters(shown) : null
+  if (!current) return null
   return (
     <Box direction="row" align="center" gap="xs">
       <Box grow minWidth={0}>
         <Select
           label="Filter"
           labelHidden
-          value={shown.shownFilterId}
-          options={shown.filters.map((filter) => ({ value: filter.id, label: filter.name }))}
+          value={current.shownFilterId}
+          options={current.filters.map((filter) => ({ value: filter.id, label: filter.name }))}
           onChange={chooseFilter}
         />
       </Box>
       <Box shrink={false}>
         <Row gap="none" align="center">
-          <IconButton icon="edit" label="Edit filter" tooltip="Edit filter" size="sm" variant="ghost" onPress={() => openFilter(shown.shownFilterId)} />
+          <IconButton icon="edit" label="Edit filter" tooltip="Edit filter" size="sm" variant="ghost" onPress={() => openFilter(current.shownFilterId)} />
           <IconButton icon="add" label="New filter" tooltip="New filter" size="sm" variant="ghost" onPress={() => openFilter(null)} />
         </Row>
       </Box>
@@ -1445,9 +1501,9 @@ function LoadedTasks({ list, words }: { list: ReadyTaskList; words: string }) {
   )
 }
 
-/** What a truncated list says: a Jira list from several JQL queries has the first 100 tasks of each. */
+/** What a truncated list says: a list from several queries has the first 100 tasks of each. */
 function truncationNotice(list: ReadyTaskList): string {
-  if (list.provider === 'github') return "Showing the first 100 of your repository's issues."
+  if (list.provider === 'github') return list.queryCount > 1 ? 'Showing the first 100 issues of each query.' : "Showing the first 100 of your repository's issues."
   return list.queryCount > 1 ? 'Showing the first 100 tasks of each query — narrow your JQL.' : 'Showing the first 100 tasks — narrow your JQL.'
 }
 
@@ -1681,6 +1737,7 @@ function TemplateDetail({ draft, templates, projectName }: { draft: TemplateDraf
 function FilterEditor({ draft, filters, projectName }: { draft: FilterDraft; filters: Filter[]; projectName: string }) {
   const nameProblem = filterNameProblem(filters, draft.name, draft.id)
   const save = () => void saveFilter()
+  const recipes = filterRecipes(draft.tracker)
   return (
     <Box direction="column" gap="sm" height="100%">
       <TitleRow prefix={projectName !== '' ? `${projectName} ·` : null} title={draft.isNew ? 'New filter' : 'Edit filter'} level={3}>
@@ -1704,7 +1761,18 @@ function FilterEditor({ draft, filters, projectName }: { draft: FilterDraft; fil
             </Text>
           ) : null}
         </Stack>
-        <JqlQueries queries={draft.queries} onChange={(queries) => changeFilterDraft(draft, { queries })} onSubmit={save} />
+        {draft.isNew && recipes.length > 0 ? (
+          <Field label="Start from a recipe">
+            <Row gap="xs" align="center" wrap>
+              {recipes.map((recipe) => (
+                <Button key={`recipe-${recipe.name}`} size="sm" variant="outline" onPress={() => useRecipe(draft, filters, recipe)}>
+                  {recipe.name}
+                </Button>
+              ))}
+            </Row>
+          </Field>
+        ) : null}
+        <FilterQueries tracker={draft.tracker} queries={draft.queries} onChange={(queries) => changeFilterDraft(draft, { queries })} onSubmit={save} />
         {draft.error !== null ? (
           <Callout tone="danger" icon="error">
             <Text>{draft.error}</Text>

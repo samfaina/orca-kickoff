@@ -5,7 +5,8 @@ import { unreadableOutput, type RunCli } from '../cli'
 import { isRecord, text } from '../json'
 import { orcaResult } from '../orca'
 import type { ProviderConfigs, Task } from '../protocol'
-import { jiraSearchJql, jiraTask, jqlQueryFailure, mergeQueryTasks, requireJql } from './jira'
+import { jiraSearchJql, jiraTask, jqlQueryFailure, requireJql } from './jira'
+import { mergeQueryTasks } from './queries'
 import type { Provider } from './types'
 
 const LIMIT = 100
@@ -19,7 +20,7 @@ export const jiraOrca: Provider<Config> = {
   async list(run, _project, config, request = {}) {
     const { filter, queries } = requireJql(request.filter)
     // All at once; the first query that failed, in the filter's order, fails the list.
-    const searches = await Promise.allSettled(queries.map((query) => search(run, config, jiraSearchJql(query.jql, request.query))))
+    const searches = await Promise.allSettled(queries.map((query) => search(run, config, jiraSearchJql(query.text, request.query))))
     const pages = searches.map((outcome, index) => {
       if (outcome.status === 'rejected') throw jqlQueryFailure(filter, queries[index], outcome.reason)
       return outcome.value

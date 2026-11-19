@@ -1,6 +1,6 @@
 import { assert, test } from 'orca/testing'
 import { CliError, type RunCli } from '../cli'
-import { FilterError } from './jira'
+import { FilterError } from './queries'
 import { decodeTwgCursor, encodeTwgCursor, jiraTwg, jiraTwgArgs } from './jira-twg'
 
 const notes = { id: 'repo:r1', name: 'notes', repo: null }

@@ -43,7 +43,7 @@ import {
 } from './protocol'
 import { taskLister } from './providers'
 import { JIRA_CONNECTION_ARGS, parseJiraSites } from './providers/jira-orca'
-import { FilterError } from './providers/jira'
+import { FilterError } from './providers/queries'
 import type { PageRequest } from './providers/types'
 import { buildPrompt, projectTemplates } from './template'
 
@@ -103,8 +103,8 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
     }
   }
 
-  /** A page of the tasks of the project's filter `filterId` names (on Jira, which has filters): of
-   *  its whole list, or of a tracker search with `query`. A failure its queries cause names it. */
+  /** A page of the tasks of the project's filter `filterId` names, on its tracker: of its whole
+   *  list, or of a tracker search with `query`. A failure its queries cause names it. */
   async function loadTasks({ filterId, ...request }: { filterId?: string } & Omit<PageRequest, 'filter'>): Promise<TaskList> {
     let project: ProjectRef | null = null
     try {
@@ -114,16 +114,16 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
       const settings = await readProjectSettings(project.id)
       const providerId = projectProvider(settings, project)
       if (!providerId) return { kind: 'needs-config', project }
-      const filter = trackerOf(providerId) === 'jira' ? listedFilter(settings, filterId) : null
-      const page = await taskLister(providerId)(run, project, settings, filter ? { ...request, filter } : request)
+      const filter = listedFilter(settings, trackerOf(providerId), filterId)
+      const page = await taskLister(providerId)(run, project, settings, { ...request, filter })
       const { state } = active
       return {
         kind: 'ready',
         project,
         provider: providerId,
         ...page,
-        filterId: filter?.id ?? null,
-        queryCount: queryCount(settings, providerId, filter?.id),
+        filterId: filter.id,
+        queryCount: queryCount(settings, providerId, filter.id),
         worktrees: state ? findTaskWorktrees(trackerOf(providerId), project.id, state.worktrees, state.statuses) : null,
         worktreesError: state ? null : active.orcaError,
         starting: startsUnderWay(project.id),

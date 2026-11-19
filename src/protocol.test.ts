@@ -55,6 +55,23 @@ test('settings stored before filters read as one filter "Tasks" with the JQL que
   assert.deepEqual(saved.projects[web.id], { ...read, agent: 'codex' })
 })
 
+test("a GitHub project's stored filters and the one shown are read apart from Jira's, and those of an unexpected shape are dropped", () => {
+  const triage = { id: 'f-triage', name: 'Triage', queries: ['is:open label:needs-triage', ''] }
+  const read = readProject({
+    provider: 'github',
+    providers: { github: {} },
+    filters: { github: [triage, { id: 'f-x', name: 'No queries' }, { id: 'f-y', name: ' triage ', queries: [] }], jira: [{ id: 'tasks', name: 'Tasks', queries: ['project = WEB'] }] },
+    shownFilterId: { github: 'f-triage', jira: 'tasks' }
+  })
+  assert.deepEqual(read, {
+    provider: 'github',
+    providers: { github: {} },
+    filters: { github: [triage], jira: [{ id: 'tasks', name: 'Tasks', queries: ['project = WEB'] }] },
+    shownFilterId: { github: 'f-triage', jira: 'tasks' }
+  })
+  assert.deepEqual(readProject({ providers: {}, filters: { github: 'none' }, shownFilterId: { github: 3 } }), { providers: {} })
+})
+
 test("without a Jira provider chosen, settings stored before filters take Jira (Orca connection)'s JQL, else Jira (twg)'s, one string as a list of one", () => {
   const both = { 'jira-orca': { jql: 'project = WEB', siteId: '' }, 'jira-twg': { jql: ['project = OLD'], site: '', profile: '' } }
   assert.deepEqual(readProject({ provider: 'github', providers: both }).filters, tasksFilter(['project = WEB']))
@@ -132,13 +149,15 @@ test("a Jira provider starts with its tool's defaults, and switching between the
   assert.deepEqual(chooseProvider(other, 'jira-orca'), { ...other, provider: 'jira-orca' })
 })
 
-test("a Jira list runs its filter's non-blank queries, and GitHub's one", () => {
-  const settings = { providers: {}, filters: { jira: [mine, { ...board, queries: ['project = WEB', '  ', 'labels = ui'] }] } }
+test("a list runs the non-blank queries of its filter, on Jira and on GitHub", () => {
+  const triage = { id: 'f-triage', name: 'Triage', queries: ['is:open label:needs-triage', '', 'is:open assignee:@me'] }
+  const settings = { providers: {}, filters: { jira: [mine, { ...board, queries: ['project = WEB', '  ', 'labels = ui'] }], github: [triage] } }
   assert.equal(queryCount(settings, 'jira-twg', 'f-board'), 2)
   assert.equal(queryCount(settings, 'jira-orca'), 1)
   assert.equal(queryCount({ providers: {} }, 'jira-orca'), 1)
   assert.equal(queryCount({ providers: {}, filters: { jira: [{ ...mine, queries: [''] }] } }, 'jira-orca'), 0)
-  assert.equal(queryCount(settings, 'github'), 1)
+  assert.equal(queryCount(settings, 'github'), 2)
+  assert.equal(queryCount({ providers: {} }, 'github'), 1)
 })
 
 test("project changes keep the other projects, fields and providers' configurations", () => {
