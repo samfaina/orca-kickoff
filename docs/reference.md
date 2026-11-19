@@ -544,9 +544,20 @@ On Windows all three tools are `.exe` and on PATH **[Verified]**:
 - `--search <query>` uses GitHub's issue search syntax **[Verified]** (issue #48):
   - It matches whole words: `pag` and `pag*` find nothing where `pager` finds issues.
   - A bare issue number finds that issue.
-  - Qualifiers in the query override the other flags: `--state open --search "is:closed"` returns closed issues. Quoted, `"\"is:closed\""` is searched as text and only open issues come back.
+  - Qualifiers in the query override the other flags: `--state open --search "is:closed"` returns closed issues. Quoted, `"\"is:closed\""` is searched as text, and the issues seen then were open; gh still drops its `state:open` for it, so closed issues can come back too (see below, issue #109).
   - `is:pr` fails: "cannot use pull request search qualifiers with `gh issue list`".
   - An unterminated `"` returns no results, not an error.
+- How `--state` and `--search` make one query, **[Verified]** with `gh` 2.103.3 and `GH_DEBUG=api` on a public repository (issue #109):
+  - With `--search`, gh asks GitHub's issue search (GraphQL `search`, type `ISSUE_ADVANCED`) for `( <search> ) repo:<owner/name> state:open type:issue`: the words go in parentheses, so a filter's query adds to `--state open`. Without `--search` it lists issues with `states: ["OPEN"]` instead, not through search.
+  - gh leaves `state:open` out when the search text holds `is:closed` or `state:closed`, even inside double quotes: `--state open --search '"is:closed"'` sends `( "is:closed" ) repo:… type:issue`, which can list closed issues that contain those words. `--state closed --search is:open` keeps `state:closed` and lists nothing. So Kickoff adds `is:open` to every search itself: `(is:closed) is:open` lists nothing.
+  - gh refuses `is:pr` before asking GitHub, also inside double quotes: `--search '"is:pr"'` fails with the same "cannot use pull request search qualifiers" message. So do `"IS:PR"`, `"type:pr"` and `"is:pull-request"`, while `"is:prx"`, `"xis:pr"` and `"is pr"` go through: gh matches whole tokens, in any case.
+  - Inside double quotes GitHub reads `:` as a word break: `"type:issue"` and `"type issue"` gave the same issues, in the same order. So a tracker search sends each word with its `:` as spaces, which gh neither refuses nor reads as `is:closed`.
+  - Parentheses and `OR` work inside the search, and nest inside gh's own: `--search '(label:bug OR label:docs) is:open "gh"'` lists open issues with either label that match `gh`. `sort:updated-asc` inside parentheses still sorts.
+  - An unbalanced `(` or an unknown qualifier such as `foo:bar` gives an empty list, not an error.
+  - With no keyword, such as `is:open` or `assignee:@me`, the results come newest first, in the order of the plain list; with keywords, by relevance.
+  - `@me` in `assignee:@me` is the logged-in user.
+  - Of the searches tried, gh's `is:pr` refusal was the only failure: GitHub answered every malformed search with an empty list.
+- Going through GitHub's search for every list, rather than the plain list, may bring the search's own rate limit and a short delay before a new issue is found, and each query of a filter is one more search **[Assumed]**: not measured.
 - Logged out (no stored login, no `GH_TOKEN`): exit 4, empty stdout, and stderr starting `To get started with GitHub CLI, please run:  gh auth login`, then a line about `GH_TOKEN` **[Verified]**.
 - For GitHub Enterprise, `--repo` takes `<host>/<owner>/<repo>` **[Assumed]**; it is the documented `gh` form, but not run here.
 

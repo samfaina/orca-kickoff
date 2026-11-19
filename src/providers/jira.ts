@@ -1,9 +1,10 @@
-// What both Jira providers share: the task shape, the status category, the rule that a blank
-// JQL never runs, how the tasks and failures of a filter's JQL queries make one list, and the JQL
-// of a tracker search.
+// What both Jira providers share: the task shape, the status category, asking for a JQL query when
+// a filter has none, how a failure of a filter's JQL queries fails the list, and the JQL of a
+// tracker search.
 import { CliError } from '../cli'
 import { isRecord, text } from '../json'
-import { appendTasks, DEFAULT_JQL, jqlQueries, type Filter, type JqlQuery, type Task } from '../protocol'
+import { DEFAULT_JQL, type Filter, type FilterQuery, type Task } from '../protocol'
+import { FilterError, requireQueries } from './queries'
 import { searchWords } from './types'
 
 /** The fields of one Jira issue, as each provider finds them in its tool's output. */
@@ -54,43 +55,23 @@ export function jiraStatusCategory(key: unknown): Task['statusCategory'] {
   }
 }
 
-/** A failure that the queries of the filter `filterId` cause, which the person fixes in the filter
- *  editor: one of them that Jira rejected, or none to run. */
-export class FilterError extends CliError {
-  readonly filterId: string
-
-  constructor(message: string, filterId: string) {
-    super(message)
-    this.filterId = filterId
-  }
-}
-
 /** The codes of the JSON error with which each tool answers a JQL query Jira rejected
  *  (`docs/reference.md`): `orca jira search` and `twg jira workitem query`. Any other failure, such
  *  as no login, an unknown site or profile, a missing tool or a timeout, isn't about the query. */
 const JQL_REJECTED = new Set(['runtime_error', 'TWG_TOOL_EXECUTION_FAILED'])
 
-/** The filter to list and its JQL queries to run (see `jqlQueries`). With no filter, or none of its
- *  queries that isn't blank, it throws, asking for one by the filter's name, so the tool never runs
- *  without one. */
-export function requireJql(filter: Filter | undefined): { filter: Filter; queries: JqlQuery[] } {
-  const queries = jqlQueries(filter?.queries ?? [])
-  if (filter && queries.length > 0) return { filter, queries }
-  const ask = `Enter a JQL query to list Jira tasks, for example: ${DEFAULT_JQL}`
-  throw filter ? new FilterError(`${filter.name}: ${ask}`, filter.id) : new CliError(ask)
+/** The filter to list and its JQL queries to run (see `requireQueries`), asking for one by the
+ *  filter's name when none is left. */
+export function requireJql(filter: Filter | undefined): { filter: Filter; queries: FilterQuery[] } {
+  return requireQueries(filter, `Enter a JQL query to list Jira tasks, for example: ${DEFAULT_JQL}`)
 }
 
 /** `error`, from running `query` of `filter`, as the failure of the whole list. When Jira rejected
  *  the query, it names the filter and the query's position in it, so the person knows which query
  *  to fix; any other failure is `error` unchanged. */
-export function jqlQueryFailure(filter: Filter, query: JqlQuery, error: unknown): unknown {
+export function jqlQueryFailure(filter: Filter, query: FilterQuery, error: unknown): unknown {
   if (!(error instanceof CliError) || error.code === null || !JQL_REJECTED.has(error.code)) return error
   return new FilterError(`${filter.name}: JQL query ${query.position} failed: ${error.message}`, filter.id)
-}
-
-/** The tasks of each query's page, in query order, each task once, where it first appears. */
-export function mergeQueryTasks(pages: readonly Task[][]): Task[] {
-  return pages.reduce<Task[]>((tasks, page) => appendTasks(tasks, page), [])
 }
 
 /** The JQL that narrows the user's `jql` to the tasks matching the words of `query`, or `jql`

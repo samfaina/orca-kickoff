@@ -30,13 +30,13 @@ Kickoff looks each tool up on your `PATH`, then at its usual install folder. If 
 
 Open the **Kickoff** panel from its icon (a lightning bolt) in Orca's right sidebar, and select a worktree in Orca: the panel lists the open tasks of that worktree's project.
 
-- **A project with a GitHub repository** lists its open issues with no setup.
+- **A project with a GitHub repository** lists its open issues with no setup, through its first [filter](#filters), **Open**.
 - **Any other project** opens **Project settings** by itself. Choose a tracker:
   - **GitHub**, for a project whose repository Orca knows.
   - **Jira (Orca connection)**: the site, when Orca is connected to more than one (Orca's default site otherwise).
   - **Jira (twg)**: optionally `twg`'s site and profile.
 
-  **Done** shows the project's tasks: on Jira, those of its first [filter](#filters-jira), **Tasks**. The gear in the panel's header opens Project settings again later, and **Done** goes back to the list, loading it again when a tracker setting changed.
+  **Done** shows the project's tasks: those of its first [filter](#filters), **Tasks** on Jira and **Open** on GitHub. The gear in the panel's header opens Project settings again later, and **Done** goes back to the list, loading it again when a tracker setting changed.
 
 Each task shows as a card with its key and title, then its labels, after its status on Jira, then its assignees, if any. **Start** (the play button):
 
@@ -53,22 +53,28 @@ Creating the worktree can take a minute. Once it exists, the card shows the work
 
 The **Search tasks** field above the list narrows the loaded tasks as you type, by key, title or label. **Enter** (or **Search in GitHub** / **Search in Jira**) asks the tracker instead, for the tasks of the same list that match your words, including those not loaded yet. **Clear search** goes back to the list.
 
-GitHub lists up to 100 tasks, and Orca's Jira connection up to 100 per JQL query, and both say so when there are more. With `twg`, a page holds up to 50 tasks, filled from each query in turn, and **Load more** reads the next one.
+GitHub lists up to 100 tasks per query, and Orca's Jira connection up to 100 per JQL query, and both say so when there are more. With `twg`, a page holds up to 50 tasks, filled from each query in turn, and **Load more** reads the next one.
 
-### Filters (Jira)
+### Filters
 
-A filter is a named way to ask Jira for the project's tasks, made of one or more JQL queries in order. A Jira project starts with one, **Tasks**, whose query is `assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC`, and can have several: for example the board's tasks in board order, and the tasks assigned to you.
+A filter is a named way to ask the tracker for the project's tasks, made of one or more queries in order: JQL queries on Jira, GitHub issue searches on GitHub. A project can have several, for example the board's tasks in board order and the tasks assigned to you, and each tracker keeps its own.
 
-The row above **Search tasks** shows the filter listed, with ✎ to edit it and **+** to add one. Choosing another filter loads its tasks from Jira, keeping the words in **Search tasks**; the panel opens on the filter shown last. Both Jira providers list the same filters.
+- A Jira project starts with one, **Tasks**, whose query is `assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC`.
+- A GitHub project starts with one, **Open**, whose query is `is:open`: its open issues, as before filters.
+
+The row above **Search tasks** shows the filter listed, with ✎ to edit it and **+** to add one. Choosing another filter loads its tasks from the tracker, keeping the words in **Search tasks**; the panel opens on the filter shown last. Both Jira providers list the same filters.
 
 ✎ and **+** open the filter editor in place of the list. A new filter is named **Filter 2**, **Filter 3**…, with one blank query. In the editor:
 
 - **Name**: not empty, and unique in the project, ignoring case.
-- **JQL**, **JQL 2**…: the list shows the tasks of the first query, then those of the next that the earlier ones didn't list, each in Jira's order; a blank query is kept and skipped. **Add JQL** adds a query and the trash can removes one. A query can span several lines.
+- **JQL**, **JQL 2**… on Jira, **Query**, **Query 2**… on GitHub: the list shows the tasks of the first query, then those of the next that the earlier ones didn't list, each in the tracker's order; a blank query is kept and skipped. **Add JQL** (**Add query**) adds a query and the trash can removes one. A query can span several lines.
+- On GitHub, a new filter can start from a recipe: **Open** (`is:open`) or **Assigned to me** (`is:open assignee:@me`), which write the filter's name and query for you to change before saving.
 - **Save** (or **Ctrl+Enter**, **Cmd+Enter** on macOS, in a query) stores the filter, goes back to the list and loads it. **Cancel** goes back without storing anything.
 - **Delete filter**, clicked twice, removes the filter; a project keeps at least one.
 
-A query Jira rejects names its filter and its place in it, such as `Board: JQL query 2 failed: …`, and the panel opens the filter editor on that filter. A failure that isn't about a query, such as a missing `twg` login or Jira connection, opens Project settings, as before. Settings stored before filters, with JQL in Project settings, become one filter, **Tasks**, with those queries.
+A GitHub query is any issue search, such as `label:needs-triage`, `assignee:@me` or `label:bug OR label:ui`. Kickoff runs it as `gh issue list --state open --search "(<query>) is:open"`, so it lists open issues only, even with `is:closed`; `is:pr` fails, since gh lists issues only. A malformed query lists nothing rather than failing: GitHub answers it with no issues.
+
+A query the tracker rejects names its filter and its place in it, such as `Board: JQL query 2 failed: …` on Jira or `Mine: Query 2 failed: …` on GitHub, and the panel opens the filter editor on that filter. A filter whose queries are all blank opens it too. Any other failure, such as a missing `twg` or `gh` login or Jira connection, shows the tool's own message and opens Project settings. Settings stored before filters, with JQL in Project settings, become one filter, **Tasks**, with those queries.
 
 ## Prompt templates
 
@@ -103,7 +109,7 @@ A **provider** is the code that reads one tracker through one tool. Each lives i
 
 | Provider | Tracker | Tool | Pages |
 | --- | --- | --- | --- |
-| `github` (`github.ts`) | GitHub Issues | `gh issue list` | No: the first 100 |
+| `github` (`github.ts`) | GitHub Issues | `gh issue list --search` | No: the first 100 per query |
 | `jira-orca` (`jira-orca.ts`) | Jira | `orca jira search` | No: the first 100 |
 | `jira-twg` (`jira-twg.ts`) | Jira | `twg jira workitem query` | Yes, 50 at a time |
 
@@ -118,13 +124,13 @@ For a tracker Kickoff already knows (another way to read Jira, say), adding a pr
 3. **A configuration entry**: the id in `ProviderId` and `PROVIDER_IDS`, and its settings in `ProviderConfigs`, `readProviderConfigs` and the defaults of `providerConfig`, all in `src/protocol.ts`.
 4. **Its panel settings**: an entry in `PROVIDER_OPTIONS` and the fields its configuration needs in `TrackerFields`, in `src/panel.tsx`.
 
-The type check points at most of these once the id is added to `ProviderId`. A provider for a new tracker, such as Linear or GitLab, also adds the tracker to `TrackerId` and `trackerOf` (`src/protocol.ts`), says how its worktrees are named and read back (`src/naming.ts`), how a Start links the worktree to the task and how a linked worktree is found (`src/orca.ts`), and how the panel names the tracker (`src/panel.tsx`).
+The type check points at most of these once the id is added to `ProviderId`. A provider for a new tracker, such as Linear or GitLab, also adds the tracker to `TrackerId` and `trackerOf`, with the filter a project starts with in `INITIAL_FILTERS` (`src/protocol.ts`), its recipes in `RECIPES` (`src/filter.ts`), says how its worktrees are named and read back (`src/naming.ts`), how a Start links the worktree to the task and how a linked worktree is found (`src/orca.ts`), and how the panel names the tracker and its queries, in `QUERY_WORDING` (`src/panel.tsx`).
 
 ## Known limitations
 
 - **The same task can be started in two projects.** Kickoff looks for a task's worktree in the active project only, so two Orca projects that read the same tracker can each start it.
 - **A renamed worktree without an Orca link isn't found.** A worktree counts as started for a task when Orca links it to the task, or, as a fallback, when its name starts with the task's key (`web-12-…`, `issue-42-…`). A worktree that has no link and was renamed is seen by neither.
-- GitHub lists at most 100 tasks, and Orca's Jira connection at most 100 per JQL query; a tracker search with them gives at most as many results: narrow the filter's JQL on Jira, or refine the search. Only `twg` pages, 50 tasks at a time, filled from each query in turn.
+- GitHub lists at most 100 tasks per query, and Orca's Jira connection at most 100 per JQL query; a tracker search with them gives at most as many results: narrow the filter's queries, or refine the search. Only `twg` pages, 50 tasks at a time, filled from each query in turn.
 - On Windows, Kickoff gives the tools the default `APPDATA` folder, which Orca leaves out of the worker's environment. If yours is redirected elsewhere, the tools can't find their login or Orca.
 
 ## Development

@@ -106,6 +106,16 @@ test('jira-filters shows the filter row with the filter shown, then ✎ and +, a
   assert.ok(shown.find({ type: 'Input', label: 'Search tasks' }))
 })
 
+test('github-filters shows the filter row of a GitHub project with its second filter shown, of two queries', async () => {
+  const shown = await render('github-filters')
+  assert.equal(shown.valueOf({ type: 'Select', label: 'Filter' }), 'f-mine')
+  const options = shown.find({ type: 'Select', label: 'Filter' })?.props.options as { label: string }[]
+  assert.deepEqual(options.map((option) => option.label), ['Open', 'Mine or triage'])
+  assert.ok(shown.find({ type: 'Link', text: '#42' }))
+  await shown.press({ type: 'IconButton', label: 'Edit filter' })
+  assert.ok(shown.find({ type: 'Textarea', label: 'Query 2' }))
+})
+
 test('jira-queries opens the filter editor on each JQL query with its Remove button, adds and removes queries, and Ctrl+Enter saves and lists the tasks', async () => {
   const shown = await render('jira-queries')
   assert.ok(shown.find({ type: 'Heading', text: 'Edit filter' }))

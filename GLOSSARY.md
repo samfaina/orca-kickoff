@@ -37,7 +37,7 @@ Narrowing the tasks already loaded in the panel to those whose task key, title o
 _Avoid_: Filter (that is a named set of tracker queries), search, local search
 
 **Filter**:
-A named way to ask the tracker for a project's tasks, made of tracker queries in order, such as JQL queries on Jira. A project can have several, and the panel shows the tasks of one at a time. A task can be in several filters; its task worktree is the same in each.
+A named way to ask the tracker for a project's tasks, made of tracker queries in order: JQL queries on Jira, GitHub issue searches on GitHub. A project can have several on each tracker, and the panel shows the tasks of one at a time. A task can be in several filters; its task worktree is the same in each.
 _Avoid_: Task list, view, saved filter (on Jira that is a stored JQL query of Jira's own), board
 
 **JQL query**:
@@ -47,6 +47,10 @@ _Avoid_: Filter (that is the whole named set of queries), search
 **JQL recipe**:
 A ready-made kind of filter on Jira, such as a board's tasks in board order, that writes the filter's JQL queries from a few answers, such as the Jira project and the statuses to leave out. The queries it writes are ordinary JQL queries the user can still edit.
 _Avoid_: Preset, template (that is a prompt template), JQL template
+
+**GitHub recipe**:
+A ready-made filter on GitHub, **Open** or **Assigned to me**, that writes a new filter's name and GitHub search for the user to change before saving it.
+_Avoid_: Preset, template (that is a prompt template)
 
 **Tracker search**:
 Asking the tracker for the tasks of the filter shown that match the user's words, including tasks not loaded yet. It only narrows that filter: it never finds tasks outside it.

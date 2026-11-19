@@ -8,15 +8,15 @@ test("the queries to run are the filter's non-blank ones, trimmed, each with its
   assert.deepEqual(requireJql(filter), {
     filter,
     queries: [
-      { jql: 'project = WEB', position: 1 },
-      { jql: 'project = API', position: 4 }
+      { text: 'project = WEB', position: 1 },
+      { text: 'project = API', position: 4 }
     ]
   })
 })
 
 test('each line break in a query becomes a space', () => {
   assert.deepEqual(requireJql(board('project = WEB\nAND labels = ui\r\nORDER BY rank\r', '\n\r\n')).queries, [
-    { jql: 'project = WEB AND labels = ui ORDER BY rank', position: 1 }
+    { text: 'project = WEB AND labels = ui ORDER BY rank', position: 1 }
   ])
 })
 

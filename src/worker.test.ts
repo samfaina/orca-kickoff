@@ -128,7 +128,7 @@ test('a project with a GitHub repo lists its open issues with no configuration',
     ],
     nextCursor: null,
     truncated: false,
-    filterId: null,
+    filterId: 'open',
     queryCount: 1,
     worktrees: {},
     worktreesError: null,
@@ -230,7 +230,42 @@ test('tasks.load with a query searches GitHub with the quoted words', async () =
   const found = await worker.request('tasks.load', { query: 'dark #42' })
   assert.ok(found.kind === 'ready')
   const gh = calls.find((call) => call.tool === 'gh')
-  assert.deepEqual(gh?.args.slice(-2), ['--search', '"dark" "42"'])
+  assert.deepEqual(gh?.args.slice(-2), ['--search', '(is:open) is:open "dark" "42"'])
+})
+
+test("a GitHub project lists the filter tasks.load names, else GitHub's one shown last, with its count of searches that run", async () => {
+  const triage = { id: 'f-triage', name: 'Triage', queries: ['label:needs-triage', '', 'assignee:@me'] }
+  const mineOnJira = { id: 'f-mine', name: 'Mine', queries: ['assignee = currentUser()'] }
+  const settings = {
+    version: 1,
+    projects: {
+      'github:acme/web': {
+        providers: {},
+        filters: { github: [{ id: 'open', name: 'Open', queries: ['is:open'] }, triage], jira: [mineOnJira] },
+        shownFilterId: { github: 'f-triage', jira: 'f-mine' }
+      }
+    }
+  }
+  const { worker, calls } = await start({ ...ORCA_OK, 'gh issue list': GH_ISSUES }, { storage: { settings } })
+  const searches = () => calls.splice(0).filter((call) => call.tool === 'gh').map((call) => call.args.at(-1))
+  const shown = await worker.request('tasks.load', {})
+  assert.ok(shown.kind === 'ready')
+  assert.deepEqual([shown.filterId, shown.queryCount], ['f-triage', 2])
+  assert.deepEqual(searches(), ['(label:needs-triage) is:open', '(assignee:@me) is:open'])
+  const named = await worker.request('tasks.load', { filterId: 'open', query: 'dark' })
+  assert.ok(named.kind === 'ready')
+  assert.deepEqual([named.filterId, named.queryCount], ['open', 1])
+  assert.deepEqual(searches(), ['(is:open) is:open "dark"'])
+})
+
+test('a GitHub filter whose searches are all blank is an error asking for one, naming the filter, without running gh', async () => {
+  const settings = { version: 1, projects: { 'github:acme/web': { providers: {}, filters: { github: [{ id: 'f-empty', name: 'Empty', queries: [' '] }] } } } }
+  const { worker, calls } = await start({ ...ORCA_OK, 'gh issue list': GH_ISSUES }, { storage: { settings } })
+  const list = await worker.request('tasks.load', {})
+  assert.ok(list.kind === 'error')
+  assert.match(list.message, /^Empty: Enter a GitHub search/)
+  assert.equal(list.filterId, 'f-empty')
+  assert.equal(calls.some((call) => call.tool === 'gh'), false)
 })
 
 test("when Orca fails, its real message is shown, or the last known project is used with a warning", async () => {
