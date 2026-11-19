@@ -3105,6 +3105,62 @@ test('a change of active project while the filter editor is open drops the draft
   assert.ok(reopened.find(filterSelect))
 })
 
+const filtersSection = { type: 'Collapsible', label: 'Filters' }
+
+/** The kinds and labels of the controls drawn inside "Filters", in order. */
+function controlsInFilters(view: TestPanel): string[] {
+  const [section] = nodesIn(view.tree(), (node) => node.type === 'Collapsible' && node.props?.title === 'Filters')
+  assert.ok(section, 'no "Filters"')
+  const controls = nodesIn(section, (node) => ['Select', 'IconButton', 'Input', 'Button'].includes(node.type))
+  return controls.map((node) => `${node.type} ${String(node.props?.label ?? wordsOf(node))}`)
+}
+
+test('"Filters", open at first, holds the filter row and Search tasks, with its hint and Search in Jira; closed, it says the filter and the text', async () => {
+  const { view } = await showFilters(filtersStored([tasksFilter, boardFilter], 'f-board'))
+  assert.equal(view.find(filtersSection)?.props.open, true)
+  assert.equal(view.find(filtersSection)?.props.description, undefined)
+  await view.type(searchField, 'dark')
+  assert.deepEqual(controlsInFilters(view), [
+    'Select Filter',
+    'IconButton Edit filter',
+    'IconButton New filter',
+    'Input Search tasks',
+    'Button Search in Jira'
+  ])
+  await view.press({ type: 'Button', text: 'Search in Jira' })
+  // The tracker search's results row stays outside, so Clear search is at hand while it is closed.
+  await view.toggle(filtersSection)
+  assert.equal(view.find(filtersSection)?.props.open, false)
+  assert.equal(view.find(filterSelect), null)
+  assert.equal(view.find(searchField), null)
+  assert.equal(view.find(filtersSection)?.props.description, 'Board · "dark"')
+  assert.ok(view.find({ type: 'Button', text: 'Clear search' }))
+  await view.press({ type: 'Button', text: 'Clear search' })
+  assert.equal(view.find(filtersSection)?.props.description, 'Board')
+})
+
+test('"Filters" stays as it was left through reloads while the panel is open, starts open in a panel opened again, and holds the filter row above a load error', async () => {
+  const { view, host } = await showFilters(filtersStored([tasksFilter, boardFilter], 'f-board'))
+  await view.toggle(filtersSection)
+  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  assert.equal(view.find(filtersSection)?.props.open, false)
+  assert.ok(view.find({ type: 'Link', text: 'WEB-2' }))
+  await view.toggle(filtersSection)
+  await view.select(filterSelect, 'tasks')
+  assert.equal(view.find(filtersSection)?.props.open, true)
+  await view.toggle(filtersSection)
+  await view.unmount()
+
+  const reopened = await mount(panel, { host })
+  assert.equal(reopened.find(filtersSection)?.props.open, true)
+  await reopened.unmount()
+
+  const failing = await showFilters(filtersStored([tasksFilter, { ...boardFilter, queries: [''] }], 'f-board'))
+  await failing.view.press({ type: 'Button', text: 'Cancel' })
+  assert.deepEqual(controlsInFilters(failing.view), ['Select Filter', 'IconButton Edit filter', 'IconButton New filter'])
+  assert.ok(failing.view.find({ type: 'Callout' }))
+})
+
 test('a change of active project while the choice of + on Jira is open drops it, and closing the panel drops it too', async () => {
   let project = web
   const { view } = await showWith(

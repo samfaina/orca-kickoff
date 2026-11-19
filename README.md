@@ -51,7 +51,7 @@ Creating the worktree can take a minute. Once it exists, the card shows the work
 - **Agent**: Orca's default agent, a named one (`claude`, `codex`, `gemini`, `opencode`, `copilot`), or none. If Orca's default can't be read, Start says so and asks you to pick one.
 - **Prompt templates**: a project can have several, each with a name. The default template is used unless you choose another on a task's card. The pencil edits the template chosen as default, and **+** adds one.
 
-The **Search tasks** field above the list narrows the loaded tasks as you type, by key, title or label. **Enter** (or **Search in GitHub** / **Search in Jira**) asks the tracker instead, for the tasks of the same list that match your words, including those not loaded yet. **Clear search** goes back to the list.
+**Filters**, above the list and open at first, holds the filter row and the **Search tasks** field; closed, it says the filter listed and the words typed. The field narrows the loaded tasks as you type, by key, title or label. **Enter** (or **Search in GitHub** / **Search in Jira**) asks the tracker instead, for the tasks of the same list that match your words, including those not loaded yet. **Clear search** goes back to the list.
 
 GitHub lists up to 100 tasks per query, and Orca's Jira connection up to 100 per JQL query, and both say so when there are more. With `twg`, a page holds up to 50 tasks, filled from each query in turn, and **Load more** reads the next one.
 
@@ -62,7 +62,7 @@ A filter is a named way to ask the tracker for the project's tasks, made of one 
 - A Jira project starts with one, **Tasks**, whose query is `assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC`.
 - A GitHub project starts with one, **Open**, whose query is `is:open`: its open issues, as before filters.
 
-The row above **Search tasks** shows the filter listed, with ✎ to edit it and **+** to add one. Choosing another filter loads its tasks from the tracker, keeping the words in **Search tasks**; the panel opens on the filter shown last. Both Jira providers list the same filters.
+The filter row, in **Filters** above **Search tasks**, shows the filter listed, with ✎ to edit it and **+** to add one. Choosing another filter loads its tasks from the tracker, keeping the words in **Search tasks**; the panel opens on the filter shown last. Both Jira providers list the same filters.
 
 ✎ and **+** open the filter editor in place of the list. On Jira, **+** first asks what the new filter starts from:
 

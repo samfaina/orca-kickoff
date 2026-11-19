@@ -237,6 +237,10 @@ const cardTemplates = atom<Record<string, string>>({})
 /** Whether the template detail's Variables list is open, while the panel is open. */
 const variablesOpen = atom(false)
 
+/** Whether "Filters", the filter row and Search tasks above the list, is open, while the panel is
+ *  open. */
+const filtersOpen = atom(true)
+
 /** The key of a task's card in `cardTemplates`. */
 const cardKey = (projectId: string, taskKey: string) => `${projectId}\n${taskKey}`
 
@@ -1110,6 +1114,7 @@ export function setup(ctx: PanelContext): void {
   set(filterDraft, null)
   set(newFilterChoice, null)
   set(variablesOpen, false)
+  set(filtersOpen, true)
   set(settingsChoice, 'auto')
   viewStateFor = undefined
   set(fieldText, '')
@@ -1430,13 +1435,33 @@ function Body({ list }: { list: TaskList }) {
     case 'error':
       return (
         <>
-          {list.project ? <FilterRow projectId={list.project.id} /> : null}
+          {list.project ? <FiltersSection projectId={list.project.id} /> : null}
           <LoadError message={list.message} />
         </>
       )
     case 'ready':
       return <ReadyList list={list} />
   }
+}
+
+/** "Filters", open at first: the filter row, then `children`, Search tasks on a ready list. Closed,
+ *  it says the filter shown and the trimmed `words` of the text filter, so neither is hidden. It
+ *  shows nothing while it would hold nothing. */
+function FiltersSection({ projectId, words = '', children }: { projectId: string; words?: string; children?: OrcaNode }) {
+  const open = read(filtersOpen)
+  const shown = read(shownSettings)
+  const current = shown?.projectId === projectId ? trackerFilters(shown) : null
+  if (!current && children === undefined) return null
+  const filterName = current?.filters.find((filter) => filter.id === current.shownFilterId)?.name ?? null
+  const summary = [filterName, words !== '' ? `"${words}"` : null].filter((part) => part !== null).join(' · ')
+  return (
+    <Collapsible title="Filters" description={open || summary === '' ? undefined : summary} open={open} onChange={(next) => set(filtersOpen, next)}>
+      <Stack gap="sm">
+        <FilterRow projectId={projectId} />
+        {children}
+      </Stack>
+    </Collapsible>
+  )
 }
 
 /** On a project with a tracker, the filter shown, ✎ to edit it and + to add one. */
@@ -1490,9 +1515,10 @@ type ReadyTaskList = Extract<TaskList, { kind: 'ready' }>
 /** The tracker's name, as the panel says it. */
 const trackerName = (provider: ProviderId) => (trackerOf(provider) === 'github' ? 'GitHub' : 'Jira')
 
-/** The warnings, the filter row, the field and the tracker search's title, which stay in place,
- *  then the list, which scrolls inside the rest of the panel's height: the loaded tasks that match
- *  the text filter, or the tracker search's results, then "Load more" and the truncation notice. */
+/** The warnings, "Filters" with the filter row and the field, and the tracker search's title, which
+ *  stay in place, then the list, which scrolls inside the rest of the panel's height: the loaded
+ *  tasks that match the text filter, or the tracker search's results, then "Load more" and the
+ *  truncation notice. */
 function ReadyList({ list }: { list: ReadyTaskList }) {
   const text = read(fieldText)
   const query = text.trim()
@@ -1510,34 +1536,35 @@ function ReadyList({ list }: { list: ReadyTaskList }) {
           <Text>{`Couldn't read Orca's worktrees, so Start is off. ${list.worktreesError ?? ''}`.trim()}</Text>
         </Callout>
       ) : null}
-      <FilterRow projectId={list.project.id} />
-      <Stack gap="xs">
-        <Input
-          type="search"
-          label="Search tasks"
-          labelHidden
-          value={text}
-          placeholder="Filter loaded tasks · Enter searches the tracker"
-          onChange={changeField}
-          onSubmit={(value) => void searchTracker(value.trim())}
-        />
-        {query !== '' ? (
-          <Box direction="row" justify="between" align="center" gap="xs">
-            <Box grow minWidth={0}>
-              {found === null ? (
-                <Text size="sm" muted>
-                  {`Filtering ${list.tasks.length} loaded tasks · Enter searches ${tracker}`}
-                </Text>
-              ) : null}
+      <FiltersSection projectId={list.project.id} words={query}>
+        <Stack gap="xs">
+          <Input
+            type="search"
+            label="Search tasks"
+            labelHidden
+            value={text}
+            placeholder="Filter loaded tasks · Enter searches the tracker"
+            onChange={changeField}
+            onSubmit={(value) => void searchTracker(value.trim())}
+          />
+          {query !== '' ? (
+            <Box direction="row" justify="between" align="center" gap="xs">
+              <Box grow minWidth={0}>
+                {found === null ? (
+                  <Text size="sm" muted>
+                    {`Filtering ${list.tasks.length} loaded tasks · Enter searches ${tracker}`}
+                  </Text>
+                ) : null}
+              </Box>
+              <Box shrink={false}>
+                <Button key="tracker-search" size="sm" variant="outline" onPress={() => void searchTracker(query)}>
+                  {`Search in ${tracker}`}
+                </Button>
+              </Box>
             </Box>
-            <Box shrink={false}>
-              <Button key="tracker-search" size="sm" variant="outline" onPress={() => void searchTracker(query)}>
-                {`Search in ${tracker}`}
-              </Button>
-            </Box>
-          </Box>
-        ) : null}
-      </Stack>
+          ) : null}
+        </Stack>
+      </FiltersSection>
       {found !== null ? (
         <Box direction="row" justify="between" align="center" gap="xs">
           <Box grow minWidth={0}>
