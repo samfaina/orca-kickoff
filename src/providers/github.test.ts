@@ -123,15 +123,18 @@ test("a query gh refuses fails the list naming its filter and position, the firs
   )
 })
 
-test("any other gh failure, or a refusal of the words of a tracker search, keeps gh's message and names no filter", async () => {
+test("a tracker search in a filter whose query gh refuses names the filter too, since its words can't cause the refusal", async () => {
+  await assert.rejects(
+    github.list(refusing('gh failed: other'), web, {}, { filter: filter('is:pr'), query: 'dark' }),
+    (error: unknown) => error instanceof FilterError && error.message === `Triage: Query 1 failed: ${PR_REFUSED}`
+  )
+})
+
+test("any other gh failure keeps gh's message and names no filter", async () => {
   const noLogin = 'gh failed: To get started with GitHub CLI, please run:  gh auth login'
   await assert.rejects(
     github.list(refusing(noLogin), web, {}, { filter: filter('label:bug', 'assignee:@me') }),
     (error: unknown) => error instanceof CliError && !(error instanceof FilterError) && error.message === noLogin
-  )
-  await assert.rejects(
-    github.list(refusing(noLogin), web, {}, { filter: filter('label:bug'), query: 'is:pr' }),
-    (error: unknown) => error instanceof CliError && !(error instanceof FilterError) && error.message === PR_REFUSED
   )
 })
 
@@ -144,10 +147,10 @@ test("a tracker search adds each word quoted, without its quotes, and #42 as a b
   ])
 })
 
-test('a qualifier typed in a tracker search is searched as text', async () => {
+test('a qualifier typed in a tracker search is searched as text, its colons as spaces, so gh neither refuses it nor lists closed issues', async () => {
   const { run, calls } = answering('[]')
-  await github.list(run, web, {}, { ...open, query: 'is:closed is:pr' })
-  assert.deepEqual(calls[0].args.slice(-2), ['--search', '(is:open) is:open "is:closed" "is:pr"'])
+  await github.list(run, web, {}, { ...open, query: 'is:closed IS:PR type:pull-request : a::b' })
+  assert.deepEqual(calls[0].args.slice(-2), ['--search', '(is:open) is:open "is closed" "IS PR" "type pull-request" "a b"'])
 })
 
 test("a blank tracker search, or one of quotes only, lists the filter's whole list", async () => {

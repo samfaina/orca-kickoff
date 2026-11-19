@@ -19,12 +19,10 @@ export const github: Provider<Required<ProviderConfigs>['github']> = {
       throw new CliError('This project has no GitHub repository. Choose a Jira tracker for it instead.')
     }
     const { filter, queries } = requireQueries(request.filter, `Enter a GitHub search to list issues, for example: ${DEFAULT_GITHUB_QUERY}`)
-    // Words of a tracker search can make gh refuse the search too; then the filter isn't at fault.
-    const searching = githubSearchWords(request.query) !== null
     return searchEveryQuery(
       queries,
       (query) => searchIssues(run, repo, githubSearch(query.text, request.query)),
-      (query, error) => (searching ? error : githubQueryFailure(filter, query, error))
+      (query, error) => githubQueryFailure(filter, query, error)
     )
   }
 }
@@ -36,7 +34,8 @@ const PR_QUALIFIER_REFUSED = 'cannot use pull request search qualifiers'
 
 /** `error`, from running `query` of `filter`, as the failure of the whole list. When gh refused the
  *  query, it names the filter and the query's position in it, so the person knows which query to
- *  fix; any other failure, such as no login, is `error` unchanged. */
+ *  fix: the words of a tracker search can't cause the refusal (`githubSearchWords`). Any other
+ *  failure, such as no login, is `error` unchanged. */
 export function githubQueryFailure(filter: Filter, query: FilterQuery, error: unknown): unknown {
   if (!(error instanceof CliError) || !error.message.includes(PR_QUALIFIER_REFUSED)) return error
   return new FilterError(`${filter.name}: Query ${query.position} failed: ${error.message}`, filter.id)
@@ -68,12 +67,15 @@ export function githubSearch(filterQuery: string, trackerSearch = ''): string {
 }
 
 /** The words of a tracker search for `--search`: each in double quotes, after removing the quotes
- *  it holds, so GitHub reads a qualifier such as `is:closed` as text; gh still refuses one with
- *  `is:pr`. `#42` becomes `42`, which finds that issue. Null when no word is left. */
+ *  it holds, so GitHub reads a qualifier such as `is:closed` as text. Each `:` becomes a space:
+ *  gh reads `is:pr` and `is:closed` even inside quotes, refusing the search or dropping its
+ *  `state:open`, while GitHub matches `"is closed"` as it does `"is:closed"` (`docs/reference.md`).
+ *  `#42` becomes `42`, which finds that issue. Null when no word is left. */
 export function githubSearchWords(trackerSearch = ''): string | null {
   const words = searchWords(trackerSearch)
     .map((word) => word.replace(/"/g, ''))
     .map((word) => (/^#\d+$/.test(word) ? word.slice(1) : word))
+    .map((word) => word.split(':').filter((part) => part !== '').join(' '))
     .filter((word) => word !== '')
   return words.length > 0 ? words.map((word) => `"${word}"`).join(' ') : null
 }
