@@ -618,7 +618,7 @@ test('the gear opens Project settings in place of the list, and Done goes back t
   assert.equal(view.find({ type: 'Text', text: 'web ·' })?.props.muted, true)
   assert.equal(view.find({ type: 'Link', text: '#42' }), null)
   assert.equal(view.find(gear), null)
-  // Done looks like the template detail's Save.
+  // Done looks like the Prompt templates view's Save.
   const doneProps = view.find(done)?.props
   assert.deepEqual([doneProps?.variant, doneProps?.size, doneProps?.icon], ['solid', 'sm', undefined])
   assert.ok(view.find({ type: 'Text', text: 'Tracker' }))
@@ -1015,14 +1015,26 @@ function optionLabels(view: TestPanel, label: string): string[] {
   return (options ?? []).map((option) => option.label)
 }
 
-test('Project settings show the agent choice, the default template and the buttons to edit or add one', async () => {
+test('Project settings show the agent choice, and the default template with "Manage templates" beside it, in the same row', async () => {
   const { view } = await showWith({ 'tasks.load': ready([task('#42')]) })
   await view.press(gear)
   assert.equal(view.valueOf({ type: 'Select', label: 'Agent' }), 'orca-default')
   assert.equal(view.valueOf({ type: 'Select', label: 'Default template' }), 'default')
   assert.deepEqual(optionLabels(view, 'Default template'), ['Default'])
-  assert.ok(view.find({ type: 'IconButton', label: 'Edit template' }))
-  assert.ok(view.find({ type: 'IconButton', label: 'New template' }))
+  const [row] = nodesIn(
+    view.tree(),
+    (node) => node.type === 'Box' && node.props?.direction === 'row' && nodesIn(node, (inner) => inner.props?.label === 'Default template').length > 0
+  )
+  const [select, button] = elementsIn(row)
+  assertProps(select, { grow: true, minWidth: 0 })
+  assert.deepEqual(nodesIn(select, (node) => node.type === 'Select').map((node) => node.props?.label), ['Default template'])
+  assertProps(button, { shrink: false })
+  assert.deepEqual(nodesIn(button, (node) => node.type === 'IconButton').map((node) => node.props?.label), ['Manage templates'])
+  assertProps(view.find(manageTemplates)!, { icon: 'layers', tooltip: 'Manage templates', size: 'sm', variant: 'ghost' })
+  // No preview of the default's text, no pencil and no + any more.
+  assert.equal(view.find({ type: 'CodeView' }), null)
+  assert.equal(view.find({ label: 'Edit template' }), null)
+  assert.equal(view.find(newTemplate), null)
   assert.equal(view.find({ type: 'Textarea' }), null)
   assert.deepEqual(view.errors, [])
   assert.deepEqual(view.warnings, [])
@@ -1048,7 +1060,7 @@ test('a project with a template stored before several templates shows it as "Def
   const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, stored({ template: 'Fix {{task_key}}' }))
   await view.press(gear)
   assert.deepEqual(optionLabels(view, 'Default template'), ['Default'])
-  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.press(manageTemplates)
   assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Default')
   assert.equal(view.valueOf({ type: 'Textarea', label: 'Text' }), 'Fix {{task_key}}')
 })
@@ -1171,63 +1183,245 @@ const saveButton = { type: 'Button', text: 'Save' }
 /** How long Delete waits for its second click. */
 const CONFIRM_DELETE_MS = 4_000
 
-test("Project settings shows the default template's text, read-only, or says that an empty one gives the task URL", async () => {
-  const empty = { id: 't-empty', name: 'Empty', text: '' }
-  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, stored({ templates: [implement, empty], defaultTemplateId: 't-impl' }))
-  await view.press(gear)
-  const code = view.find({ type: 'CodeView' })
-  assert.equal(code?.props.code, '/acme-skills:tdd {{task_url}}')
-  assert.equal(code?.props.wrap, true)
-  assert.equal(code?.props.maxHeight, 'sm')
-  assert.equal(view.find({ type: 'Text', text: 'Empty: the prompt is the task URL.' }), null)
+/** The header button that opens the Prompt templates view, and the one beside the Default template
+ *  `Select` of Project settings. */
+const promptTemplates = { type: 'IconButton', label: 'Prompt templates' }
+const manageTemplates = { type: 'IconButton', label: 'Manage templates' }
+const templatesTitle = { type: 'Heading', text: 'Prompt templates' }
+const templateSelect = { type: 'Select', label: 'Template' }
+const newTemplate = { type: 'IconButton', label: 'New template' }
+const cancelButton = { type: 'Button', text: 'Cancel' }
 
-  await view.select({ type: 'Select', label: 'Default template' }, 't-empty')
-  assert.equal(view.find({ type: 'CodeView' }), null)
-  assert.ok(view.find({ type: 'Text', text: 'Empty: the prompt is the task URL.' }))
+test('the header has "Prompt templates", with the layers icon, between Reload tasks and Project settings', async () => {
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
+  const header = elementsIn(view.tree() as TreeSnapshot)[0]
+  assert.deepEqual(
+    nodesIn(header, (node) => node.type === 'IconButton').map((node) => node.props?.label),
+    ['Reload tasks', 'Prompt templates', 'Project settings']
+  )
+  assertProps(view.find(promptTemplates)!, { icon: 'layers', tooltip: 'Prompt templates', size: 'sm', variant: 'ghost' })
+  assert.deepEqual(view.warnings, [])
 })
 
-test('the template detail opened from Project settings goes back to it on Save, Cancel and Delete', async () => {
+test('"Prompt templates" opens the view on the default template, in place of the list, and Cancel and Save go back to the list', async () => {
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
+  const backInList = () => {
+    assert.equal(view.find(templatesTitle), null)
+    assert.equal(view.find(settingsTitle), null)
+    assert.ok(view.find({ type: 'Link', text: '#42' }))
+  }
+  await view.press(promptTemplates)
+  assert.equal(view.find({ type: 'Text', text: 'web ·' })?.props.muted, true)
+  assert.equal(view.find(templatesTitle)?.props.level, 3)
+  assert.equal(view.find({ type: 'Link', text: '#42' }), null)
+  assert.equal(view.valueOf(templateSelect), 't-triage')
+  assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Triage')
+  await view.press(cancelButton)
+  backInList()
+
+  await view.press(promptTemplates)
+  await view.press(saveButton)
+  backInList()
+  assert.deepEqual(view.errors, [])
+})
+
+test('"Manage templates" opens the view on the default template, and Cancel and Save go back to Project settings', async () => {
   const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
   await view.press(gear)
   const backInSettings = () => {
-    assert.equal(view.find({ type: 'Input', label: 'Name' }), null)
+    assert.equal(view.find(templatesTitle), null)
     assert.ok(view.find(settingsTitle))
     assert.equal(view.find({ type: 'Link', text: '#42' }), null)
   }
 
-  await view.press({ type: 'IconButton', label: 'New template' })
+  await view.press(manageTemplates)
+  assert.ok(view.find(templatesTitle))
+  assert.equal(view.valueOf(templateSelect), 't-triage')
+  await view.press(newTemplate)
   await view.type({ type: 'Input', label: 'Name' }, 'Review')
   await view.press(saveButton)
   backInSettings()
+  assert.deepEqual(optionLabels(view, 'Default template'), ['Implement', 'Triage', 'Review'])
 
-  await view.press({ type: 'IconButton', label: 'Edit template' })
-  await view.press({ type: 'Button', text: 'Cancel' })
+  await view.press(manageTemplates)
+  await view.press(cancelButton)
   backInSettings()
-
-  await view.press({ type: 'IconButton', label: 'Edit template' })
-  await view.press({ type: 'Button', text: 'Delete template' })
-  await view.press({ type: 'Button', text: 'Confirm delete' })
-  backInSettings()
-  assert.deepEqual(optionLabels(view, 'Default template'), ['Implement', 'Review'])
 })
 
-test('the template detail\'s title says "Edit template" or "New template", after the project\'s name', async () => {
+test('after the view opened from the list, a load that needs Project settings still opens them by itself', async () => {
+  let failing = false
+  const { view } = await showWith(
+    { 'tasks.load': () => (failing ? { kind: 'error', project: web, message: 'gh failed.' } : ready([task('#42')])) },
+    twoTemplates
+  )
+  await view.press(promptTemplates)
+  await view.press(cancelButton)
+  assert.ok(view.find({ type: 'Link', text: '#42' }))
+  failing = true
+  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  assert.ok(view.find(settingsTitle))
+})
+
+test('the title says "Prompt templates" after the project\'s name, also on a new template', async () => {
   const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
-  await view.press(gear)
-  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.press(promptTemplates)
   assert.equal(view.find({ type: 'Text', text: 'web ·' })?.props.muted, true)
-  assert.equal(view.find({ type: 'Heading', text: 'Edit template' })?.props.level, 3)
+  assert.equal(view.find(templatesTitle)?.props.level, 3)
   assert.equal(view.find({ type: 'Heading', text: 'web' }), null)
-
-  await view.press({ type: 'Button', text: 'Cancel' })
-  await view.press({ type: 'IconButton', label: 'New template' })
-  assert.equal(view.find({ type: 'Text', text: 'web ·' })?.props.muted, true)
-  assert.equal(view.find({ type: 'Heading', text: 'New template' })?.props.level, 3)
-  assert.equal(view.find({ type: 'Heading', text: 'Edit template' }), null)
+  await view.press(newTemplate)
+  assert.equal(view.find(templatesTitle)?.props.level, 3)
+  assert.equal(view.find({ type: 'Heading', text: 'New template' }), null)
 })
 
-/** The parts of the template detail: its title row, its form, and its Delete bar when it has one. */
-function detailParts(view: TestPanel) {
+test('the Template Select lists every template, own first then global, marked Global, and + beside it adds one', async () => {
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, storedWithGlobal({ templates: [implement, triage], defaultTemplateId: 't-triage' }, [review]))
+  await view.press(promptTemplates)
+  const { picker } = viewParts(view)
+  assertProps(picker, { direction: 'row', align: 'center' })
+  const [select, plus] = elementsIn(picker)
+  assertProps(select, { grow: true, minWidth: 0 })
+  assertProps(plus, { shrink: false })
+  assert.equal(view.find(templateSelect)?.props.labelHidden, true)
+  assert.deepEqual(optionLabels(view, 'Template'), ['Implement', 'Triage', 'Review (Global)'])
+  assertProps(view.find(newTemplate)!, { icon: 'add', tooltip: 'New template', size: 'sm', variant: 'ghost' })
+  await view.press(newTemplate)
+  assert.deepEqual(optionLabels(view, 'Template'), ['New template', 'Implement', 'Triage', 'Review (Global)'])
+  assert.equal(optionLabels(view, 'Template')[0], 'New template')
+  assert.deepEqual(view.warnings, [])
+})
+
+test('any template can be chosen and edited without changing the default template', async () => {
+  const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, storedWithGlobal({ templates: [implement, triage], defaultTemplateId: 't-triage' }, [review]))
+  await view.press(promptTemplates)
+  await view.select(templateSelect, 't-impl')
+  assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Implement')
+  assert.equal(view.valueOf({ type: 'Textarea', label: 'Text' }), '/acme-skills:tdd {{task_url}}')
+  assert.equal(view.find(defaultSwitch)?.props.checked, false)
+  await view.select(templateSelect, 't-review')
+  assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Review')
+  assert.equal(view.find(globalSwitch)?.props.checked, true)
+  await view.type({ type: 'Textarea', label: 'Text' }, 'Look at {{task_key}}', { replace: true })
+  await view.press(saveButton)
+  assert.deepEqual(storedGlobal(host), [{ ...review, text: 'Look at {{task_key}}' }])
+  assert.equal((storedProject(host) as { defaultTemplateId: string }).defaultTemplateId, 't-triage')
+  assert.equal(view.valueOf(cardTemplate('#42')), 't-triage')
+})
+
+const defaultSwitch = { type: 'Switch', label: 'Default template' }
+
+test('the Default template switch makes the template the default on Save, and is on and disabled on the current default', async () => {
+  const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
+  await view.press(promptTemplates)
+  assert.equal(view.find(defaultSwitch)?.props.checked, true)
+  assert.equal(view.find(defaultSwitch)?.disabled, true)
+  await view.select(templateSelect, 't-impl')
+  assert.equal(view.find(defaultSwitch)?.props.checked, false)
+  assert.equal(view.find(defaultSwitch)?.disabled, false)
+  await view.toggle(defaultSwitch)
+  assert.equal(view.find(defaultSwitch)?.props.checked, true)
+  assert.equal((storedProject(host) as { defaultTemplateId: string }).defaultTemplateId, 't-triage')
+
+  await view.press(saveButton)
+  assert.equal((storedProject(host) as { defaultTemplateId: string }).defaultTemplateId, 't-impl')
+  assert.equal(view.valueOf(cardTemplate('#42')), 't-impl')
+  await view.press(promptTemplates)
+  assert.equal(view.valueOf(templateSelect), 't-impl')
+  assert.equal(view.find(defaultSwitch)?.disabled, true)
+})
+
+test('a new template made the default template is the default once saved', async () => {
+  const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
+  await view.press(promptTemplates)
+  await view.press(newTemplate)
+  assert.equal(view.find(defaultSwitch)?.props.checked, false)
+  assert.equal(view.find(defaultSwitch)?.disabled, false)
+  await view.type({ type: 'Input', label: 'Name' }, 'Review')
+  await view.toggle(defaultSwitch)
+  await view.press(saveButton)
+  const { templates, defaultTemplateId } = storedProject(host) as { templates: { id: string; name: string }[]; defaultTemplateId: string }
+  assert.equal(templates[2].name, 'Review')
+  assert.equal(defaultTemplateId, templates[2].id)
+})
+
+/** The bar under the form: its text and its buttons. */
+const barOf = (view: TestPanel) => {
+  const { bar } = viewParts(view)
+  assert.ok(bar)
+  return { words: nodesIn(bar, (node) => node.type === 'Text').map(wordsOf), buttons: buttonsIn(bar) }
+}
+
+test('choosing another template, or +, with unsaved changes asks first; Keep editing keeps the draft, and Discard switches', async () => {
+  const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
+  await view.press(promptTemplates)
+  await view.type({ type: 'Input', label: 'Name' }, 'Triage now', { replace: true })
+  await view.select(templateSelect, 't-impl')
+  assert.deepEqual(barOf(view), { words: ['Discard your changes to Triage?'], buttons: ['Keep editing', 'Discard'] })
+  assert.equal(view.find(templateSelect)?.props.value, 't-triage')
+  assert.equal(view.find(templateSelect)?.disabled, true)
+  assert.equal(view.find(newTemplate)?.disabled, true)
+
+  await view.press({ type: 'Button', text: 'Keep editing' })
+  assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Triage now')
+  assert.deepEqual(barOf(view).buttons, ['Delete template'])
+  assert.equal(view.find(templateSelect)?.disabled, false)
+
+  await view.press(newTemplate)
+  assert.deepEqual(barOf(view).buttons, ['Keep editing', 'Discard'])
+  await view.press({ type: 'Button', text: 'Discard' })
+  assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), '')
+  assert.equal(optionLabels(view, 'Template')[0], 'New template')
+
+  // A change to a new template asks too, naming it as new.
+  await view.type({ type: 'Input', label: 'Name' }, 'Review')
+  await view.select(templateSelect, 't-impl')
+  assert.deepEqual(barOf(view).words, ['Discard your changes to the new template?'])
+  await view.press({ type: 'Button', text: 'Discard' })
+  assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Implement')
+  assert.deepEqual(storedProject(host), twoTemplates.settings.projects['github:acme/web'])
+})
+
+test('without unsaved changes another template, or +, opens at once, and a change of the Global or Default template switch counts as one', async () => {
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
+  await view.press(promptTemplates)
+  await view.select(templateSelect, 't-impl')
+  assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Implement')
+  await view.press(newTemplate)
+  assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), '')
+  await view.select(templateSelect, 't-impl')
+  assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Implement')
+  // A name typed and typed back is no change.
+  await view.type({ type: 'Input', label: 'Name' }, 'Build', { replace: true })
+  await view.type({ type: 'Input', label: 'Name' }, 'Implement', { replace: true })
+  await view.select(templateSelect, 't-triage')
+  assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Triage')
+
+  await view.select(templateSelect, 't-impl')
+  await view.toggle(globalSwitch)
+  await view.select(templateSelect, 't-triage')
+  assert.deepEqual(barOf(view).words, ['Discard your changes to Implement?'])
+  await view.press({ type: 'Button', text: 'Discard' })
+  await view.select(templateSelect, 't-impl')
+  await view.toggle(defaultSwitch)
+  await view.press(newTemplate)
+  assert.deepEqual(barOf(view).words, ['Discard your changes to Implement?'])
+})
+
+/** The parts of the Prompt templates view: its title row, the Template `Select` with +, its form, and
+ *  the bar under the form when it has one. */
+function viewParts(view: TestPanel) {
+  const frame = view.tree()
+  assert.ok(frame && typeof frame !== 'string')
+  assert.equal(frame.type, 'Box')
+  assertProps(frame, { direction: 'column', height: '100%' })
+  const [title, picker, form, bar, ...extra] = elementsIn(frame) as (TreeSnapshot | undefined)[]
+  assert.ok(title && picker && form)
+  assert.deepEqual(extra, [])
+  return { frame, title, picker, form, bar }
+}
+
+/** The parts of the filter editor and of what + offers on Jira: the title row, the form, and the
+ *  Delete bar when there is one. */
+function editorParts(view: TestPanel) {
   const frame = view.tree()
   assert.ok(frame && typeof frame !== 'string')
   assert.equal(frame.type, 'Box')
@@ -1248,22 +1442,29 @@ function buttonIn(node: TreeSnapshot, text: string): TreeSnapshot {
   return button
 }
 
-test('Cancel and Save are on the right of the title row, and only the form scrolls', async () => {
+test('Cancel and Save are on the right of the title row, the Template Select is under it, and only the form scrolls, from Name to "Run a skill"', async () => {
   const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
-  await view.press(gear)
-  await view.press({ type: 'IconButton', label: 'Edit template' })
-  const { frame, title, form } = detailParts(view)
-  assert.deepEqual(nodesIn(title, (node) => node.type === 'Text' || node.type === 'Heading').map(wordsOf), ['web ·', 'Edit template'])
+  await view.press(promptTemplates)
+  const { frame, title, picker, form, bar } = viewParts(view)
+  assert.deepEqual(nodesIn(title, (node) => node.type === 'Text' || node.type === 'Heading').map(wordsOf), ['web ·', 'Prompt templates'])
   assert.deepEqual(buttonsIn(title), ['Cancel', 'Save'])
   assertProps(buttonIn(title, 'Cancel'), { variant: 'ghost', size: 'sm' })
   assertProps(buttonIn(title, 'Save'), { variant: 'solid', size: 'sm' })
+  assert.deepEqual(nodesIn(picker, (node) => node.type === 'Select' || node.type === 'IconButton').map((node) => node.props?.label), ['Template', 'New template'])
   assertProps(form, { direction: 'column', grow: true, minHeight: 0, maxHeight: '100%', scroll: 'y' })
   assert.deepEqual(
     nodesIn(frame, (node) => node.props?.scroll !== undefined),
     [form]
   )
-  assert.equal(nodesIn(form, (node) => node.type === 'Input' && node.props?.label === 'Name').length, 1)
+  assert.deepEqual(
+    nodesIn(form, (node) => ['Input', 'Switch', 'Textarea', 'Collapsible', 'Callout'].includes(node.type)).map((node) => node.props?.label ?? node.props?.title),
+    ['Name', 'Global', 'Default template', 'Text', 'Variables', 'Run a skill']
+  )
   assert.equal(nodesIn(form, (node) => node.type === 'Button').length, 0)
+  // The bar stays in place under the form, however far the form scrolls.
+  assert.ok(bar)
+  assertProps(bar, { shrink: false })
+  assert.equal(bar.props?.scroll, undefined)
 })
 
 /** Finders take a Collapsible's `title` as its label. */
@@ -1272,8 +1473,8 @@ const variables = { type: 'Collapsible', label: 'Variables' }
 test('the hint follows the text, and the closed Variables list gives each variable with what it gives', async () => {
   const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
   await view.press(gear)
-  await view.press({ type: 'IconButton', label: 'Edit template' })
-  const { form } = detailParts(view)
+  await view.press(manageTemplates)
+  const { form } = viewParts(view)
   const parts = elementsIn(form)
   const textPart = parts.findIndex((part) => nodesIn(part, (node) => node.type === 'Textarea').length > 0)
   const [field] = nodesIn(parts[textPart], (node) => node.type === 'Textarea')
@@ -1312,17 +1513,18 @@ test('the hint follows the text, and the closed Variables list gives each variab
 test('the Variables list stays as it was left while the panel is open, and starts closed in a panel opened again', async () => {
   const first = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
   await first.view.press(gear)
-  await first.view.press({ type: 'IconButton', label: 'Edit template' })
+  await first.view.press(manageTemplates)
   await first.view.toggle(variables)
   await first.view.press({ type: 'Button', text: 'Cancel' })
-  await first.view.press({ type: 'IconButton', label: 'New template' })
+  await first.view.press(manageTemplates)
+  await first.view.press(newTemplate)
   assert.equal(first.view.find(variables)?.props.open, true)
   assert.ok(first.view.find({ type: 'Code', text: '{{branch}}' }))
   await first.view.unmount()
 
   const again = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
   await again.view.press(gear)
-  await again.view.press({ type: 'IconButton', label: 'Edit template' })
+  await again.view.press(manageTemplates)
   assert.equal(again.view.find(variables)?.props.open, false)
 })
 
@@ -1339,15 +1541,15 @@ test('the "Run a skill" Callout ends the form, after the error of a failed write
   })
   const view = await mount(panel, { host })
   await view.press(gear)
-  await view.press({ type: 'IconButton', label: 'Edit template' })
-  const skill = detailParts(view).form.children?.at(-1)
+  await view.press(manageTemplates)
+  const skill = viewParts(view).form.children?.at(-1)
   assert.ok(skill && typeof skill !== 'string')
   assert.equal(skill.type, 'Callout')
   assertProps(skill, { icon: 'info', title: 'Run a skill' })
   assert.match(wordsOf(skill), /^To run a Claude Code skill, start the template with its command, for example `\/tdd \{\{task_key\}\}`/)
 
   await view.press(saveButton)
-  const parts = elementsIn(detailParts(view).form)
+  const parts = elementsIn(viewParts(view).form)
   assert.deepEqual(
     parts.slice(-2).map((part) => [part.type, part.props?.tone ?? null, part.props?.title ?? null]),
     [
@@ -1361,40 +1563,41 @@ test('the "Run a skill" Callout ends the form, after the error of a failed write
 test('"Delete template" sits in a bar of its own under the form, on the right, and asks for a second click', async () => {
   const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
   await view.press(gear)
-  await view.press({ type: 'IconButton', label: 'Edit template' })
-  const { form, deleteBar } = detailParts(view)
-  assert.ok(deleteBar)
-  assertProps(deleteBar, { direction: 'row', justify: 'end' })
-  assert.equal(deleteBar.props?.scroll, undefined)
-  assert.deepEqual(buttonsIn(deleteBar), ['Delete template'])
+  await view.press(manageTemplates)
+  const { form, bar } = viewParts(view)
+  assert.ok(bar)
+  assertProps(bar, { direction: 'row', justify: 'end', shrink: false })
+  assert.equal(bar.props?.scroll, undefined)
+  assert.deepEqual(buttonsIn(bar), ['Delete template'])
   assert.equal(nodesIn(form, (node) => node.type === 'Button').length, 0)
-  assertProps(buttonIn(deleteBar, 'Delete template'), { variant: 'ghost', tone: 'danger', icon: 'delete', size: 'sm' })
+  assertProps(buttonIn(bar, 'Delete template'), { variant: 'ghost', tone: 'danger', icon: 'delete', size: 'sm' })
 
   await view.press({ type: 'Button', text: 'Delete template' })
-  assert.deepEqual(buttonsIn(detailParts(view).deleteBar!), ['Confirm delete'])
+  assert.deepEqual(buttonsIn(viewParts(view).bar!), ['Confirm delete'])
   assert.deepEqual(storedProject(host), twoTemplates.settings.projects['github:acme/web'])
 })
 
 test('a new template has no Delete bar', async () => {
   const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
-  await view.press(gear)
-  await view.press({ type: 'IconButton', label: 'New template' })
-  assert.equal(detailParts(view).deleteBar, undefined)
+  await view.press(promptTemplates)
+  await view.press(newTemplate)
+  assert.equal(viewParts(view).bar, undefined)
   assert.equal(view.find({ type: 'Button', text: /Delete/ }), null)
 })
 
-test('the template detail opened from Project settings that opened by itself goes back to it', async () => {
+test('the Prompt templates view opened from Project settings that opened by itself goes back to it', async () => {
   const { view } = await showWith({ 'tasks.load': { kind: 'error', project: web, message: 'gh failed.' } }, twoTemplates)
-  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.press(manageTemplates)
   await view.press({ type: 'Button', text: 'Cancel' })
   assert.ok(view.find(settingsTitle))
 })
 
-test('"New template" opens the detail with an empty name and the initial text; Save adds it at the end and goes back to Project settings', async () => {
+test('"New template" opens an empty name and the initial text; Save adds it at the end and goes back to Project settings', async () => {
   const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
   await view.press(gear)
-  await view.press({ type: 'IconButton', label: 'New template' })
-  assert.ok(view.find({ type: 'Heading', text: 'New template' }))
+  await view.press(manageTemplates)
+  await view.press(newTemplate)
+  assert.ok(view.find(templatesTitle))
   assert.equal(view.find({ type: 'Link', text: '#42' }), null)
   assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), '')
   assert.equal(view.valueOf({ type: 'Textarea', label: 'Text' }), 'Complete {{task_key}}: {{task_url}}')
@@ -1424,11 +1627,11 @@ test('"New template" opens the detail with an empty name and the initial text; S
   assert.deepEqual(view.warnings, [])
 })
 
-test('the pencil edits the template chosen as default, and Save stores it in its place', async () => {
+test('"Manage templates" opens the template chosen as default, and Save stores it in its place', async () => {
   const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
   await view.press(gear)
   await view.select({ type: 'Select', label: 'Default template' }, 't-impl')
-  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.press(manageTemplates)
   assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Implement')
   assert.equal(view.valueOf({ type: 'Textarea', label: 'Text' }), '/acme-skills:tdd {{task_url}}')
   // Its own name in another case is fine.
@@ -1446,7 +1649,7 @@ test('the pencil edits the template chosen as default, and Save stores it in its
 test('saving a template of a project that stored none stores it, without the earlier field', async () => {
   const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, stored({ template: 'Fix {{task_key}}', agent: 'codex' }))
   await view.press(gear)
-  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.press(manageTemplates)
   await view.type({ type: 'Input', label: 'Name' }, 'Implement', { replace: true })
   await view.press(saveButton)
   assert.deepEqual(storedProject(host), {
@@ -1460,16 +1663,16 @@ test('saving a template of a project that stored none stores it, without the ear
 test('Cancel goes back to Project settings without storing anything', async () => {
   const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
   await view.press(gear)
-  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.press(manageTemplates)
   await view.type({ type: 'Input', label: 'Name' }, 'Changed', { replace: true })
   await view.press({ type: 'Button', text: 'Cancel' })
   assert.ok(view.find(settingsTitle))
   assert.deepEqual(storedProject(host), twoTemplates.settings.projects['github:acme/web'])
-  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.press(manageTemplates)
   assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Triage')
 })
 
-test('a failed write keeps the detail open with the error and the draft', async () => {
+test('a failed write keeps the view open with the error and the draft', async () => {
   const host = mockHost({
     capabilities: ['storage:own', 'workspace:read'],
     requests: { 'tasks.load': ready([task('#42')]) },
@@ -1481,8 +1684,8 @@ test('a failed write keeps the detail open with the error and the draft', async 
     }
   })
   const view = await mount(panel, { host })
-  await view.press(gear)
-  await view.press({ type: 'IconButton', label: 'New template' })
+  await view.press(promptTemplates)
+  await view.press(newTemplate)
   await view.type({ type: 'Input', label: 'Name' }, 'Review')
   await view.press(saveButton)
   assert.ok(view.find({ type: 'Text', text: /Couldn't save the template/ }))
@@ -1490,25 +1693,42 @@ test('a failed write keeps the detail open with the error and the draft', async 
   assert.equal(view.find({ type: 'Link', text: '#42' }), null)
 })
 
-test('Delete needs a second click, and deleting the default template makes the first remaining one the default', async () => {
+test('Delete needs a second click, and deleting the default template makes the first remaining one the default, which the view then shows', async () => {
   const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
   await view.press(gear)
-  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.press(manageTemplates)
   await view.press({ type: 'Button', text: 'Delete template' })
   assert.ok(view.find({ type: 'Button', text: 'Confirm delete' }))
   assert.deepEqual(storedProject(host), twoTemplates.settings.projects['github:acme/web'])
   await view.press({ type: 'Button', text: 'Confirm delete' })
   assert.deepEqual(storedProject(host), { providers: {}, templates: [implement], defaultTemplateId: 't-impl' })
+  assert.ok(view.find(templatesTitle))
+  assert.deepEqual(optionLabels(view, 'Template'), ['Implement'])
+  assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Implement')
+  assert.equal(view.find(defaultSwitch)?.props.checked, true)
+  await view.press(cancelButton)
   assert.ok(view.find(settingsTitle))
   assert.deepEqual(optionLabels(view, 'Default template'), ['Implement'])
   assert.equal(view.valueOf({ type: 'Select', label: 'Default template' }), 't-impl')
+})
+
+test('deleting a template that is not the default keeps the default, which the view then shows', async () => {
+  const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
+  await view.press(promptTemplates)
+  await view.select(templateSelect, 't-impl')
+  await view.press({ type: 'Button', text: 'Delete template' })
+  await view.press({ type: 'Button', text: 'Confirm delete' })
+  assert.deepEqual(storedProject(host), { providers: {}, templates: [triage], defaultTemplateId: 't-triage' })
+  assert.equal(view.valueOf(templateSelect), 't-triage')
+  await view.press(cancelButton)
+  assert.ok(view.find({ type: 'Link', text: '#42' }))
 })
 
 test('Delete turns back after a few seconds without the second click', async () => {
   await withTimeouts(CONFIRM_DELETE_MS, async ({ fire }) => {
     const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
     await view.press(gear)
-    await view.press({ type: 'IconButton', label: 'Edit template' })
+    await view.press(manageTemplates)
     await view.press({ type: 'Button', text: 'Delete template' })
     await fire(view)
     assert.ok(view.find({ type: 'Button', text: 'Delete template' }))
@@ -1521,7 +1741,7 @@ test('Delete turns back after a few seconds without the second click', async () 
 test('Delete is disabled for the only template', async () => {
   const { view } = await showWith({ 'tasks.load': ready([task('#42')]) })
   await view.press(gear)
-  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.press(manageTemplates)
   assert.equal(view.find({ type: 'Button', text: 'Delete template' })?.disabled, true)
 })
 
@@ -1535,9 +1755,10 @@ test("a card whose template is deleted falls back to the default template", asyn
   await view.select(cardTemplate('#42'), 't-triage')
   await view.press(gear)
   await view.select({ type: 'Select', label: 'Default template' }, 't-triage')
-  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.press(manageTemplates)
   await view.press({ type: 'Button', text: 'Delete template' })
   await view.press({ type: 'Button', text: 'Confirm delete' })
+  await view.press(cancelButton)
   await view.press(done)
   assert.equal(view.valueOf(cardTemplate('#42')), 't-impl')
   await view.press({ testId: 'start:#42' })
@@ -1562,7 +1783,6 @@ test("Project settings list the project's own templates first, then the global o
   await view.press(gear)
   assert.deepEqual(optionLabels(view, 'Default template'), ['Implement', 'Triage', 'Review (Global)'])
   await view.select({ type: 'Select', label: 'Default template' }, 't-review')
-  assert.equal(view.find({ type: 'CodeView' })?.props.code, 'Review {{task_key}}')
   await view.press(done)
   assert.equal(view.valueOf(cardTemplate('#42')), 't-review')
   await wait(800)
@@ -1578,14 +1798,11 @@ test('a project with no template of its own lists the global ones, without "Defa
   assert.equal(view.valueOf({ type: 'Select', label: 'Default template' }), 't-review')
 })
 
-test('the template detail has a Global switch, off for an own template and on for a global one', async () => {
+test('the view has a Global switch, off for an own template and on for a global one', async () => {
   const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, storedWithGlobal({ templates: [implement], defaultTemplateId: 't-impl' }, [review]))
-  await view.press(gear)
-  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.press(promptTemplates)
   assert.equal(view.find(globalSwitch)?.props.checked, false)
-  await view.press({ type: 'Button', text: 'Cancel' })
-  await view.select({ type: 'Select', label: 'Default template' }, 't-review')
-  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.select(templateSelect, 't-review')
   assert.equal(view.find(globalSwitch)?.props.checked, true)
   assert.deepEqual(view.warnings, [])
 })
@@ -1601,14 +1818,15 @@ test('a template made global in one project is listed, marked Global, in another
     { settings: { version: 1, projects: { [web.id]: { providers: {}, templates: [implement, triage] }, [api.id]: { providers: {}, templates: [triage] } } } }
   )
   await view.press(gear)
-  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.press(manageTemplates)
   await view.toggle(globalSwitch)
-  // The move is stored at once, and the detail stays open on the template, now global.
+  // Nothing moves before Save.
+  assert.deepEqual(storedGlobal(host), undefined)
+  assert.equal(view.find(globalSwitch)?.props.checked, true)
+  await view.press(saveButton)
   assert.deepEqual(storedProject(host), { providers: {}, templates: [triage], defaultTemplateId: 't-impl' })
   assert.deepEqual(storedGlobal(host), [implement])
-  assert.equal(view.find(globalSwitch)?.props.checked, true)
-  assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Implement')
-  await view.press({ type: 'Button', text: 'Cancel' })
+  assert.ok(view.find(settingsTitle))
   assert.deepEqual(optionLabels(view, 'Default template'), ['Triage', 'Implement (Global)'])
   assert.equal(view.valueOf({ type: 'Select', label: 'Default template' }), 't-impl')
 
@@ -1622,18 +1840,19 @@ test('a template made global in one project is listed, marked Global, in another
 
   await view.press(gear)
   await view.select({ type: 'Select', label: 'Default template' }, 't-impl')
-  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.press(manageTemplates)
   await view.type({ type: 'Textarea', label: 'Text' }, 'Build {{task_key}}', { replace: true })
   await view.press(saveButton)
   assert.deepEqual(storedGlobal(host), [{ ...implement, text: 'Build {{task_key}}' }])
 
-  await view.press({ type: 'IconButton', label: 'Edit template' })
-  const { deleteBar } = detailParts(view)
-  assert.ok(deleteBar)
-  assert.ok(nodesIn(deleteBar, (node) => node.type === 'Text' && wordsOf(node) === 'Deletes it in every project.').length === 1)
+  await view.press(manageTemplates)
+  const { bar } = viewParts(view)
+  assert.ok(bar)
+  assert.ok(nodesIn(bar, (node) => node.type === 'Text' && wordsOf(node) === 'Deletes it in every project.').length === 1)
   await view.press({ type: 'Button', text: 'Delete template' })
   await view.press({ type: 'Button', text: 'Confirm delete' })
   assert.deepEqual(storedGlobal(host), [])
+  await view.press(cancelButton)
   assert.deepEqual(optionLabels(view, 'Default template'), ['Triage'])
 
   project = web
@@ -1648,79 +1867,145 @@ test('a template made global in one project is listed, marked Global, in another
 test('an own template says nothing about other projects in its Delete bar', async () => {
   const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
   await view.press(gear)
-  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.press(manageTemplates)
   assert.equal(view.find({ type: 'Text', text: 'Deletes it in every project.' }), null)
 })
 
-test('turning Global off asks first, then moves the template to the active project only', async () => {
+test('turning Global off asks first, and Save then moves the template to the active project only', async () => {
   const { view, host } = await showWith(
     { 'tasks.load': ready([task('#42')]) },
     storedWithGlobal({ templates: [implement], defaultTemplateId: 't-review' }, [review, triage])
   )
   await view.press(gear)
-  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.press(manageTemplates)
   await view.toggle(globalSwitch)
   // A confirmation bar in place of the Delete bar; nothing is stored yet.
-  const { deleteBar } = detailParts(view)
-  assert.ok(deleteBar)
-  assert.ok(nodesIn(deleteBar, (node) => node.type === 'Text' && wordsOf(node) === 'Other projects will stop offering it.').length === 1)
-  assert.deepEqual(buttonsIn(deleteBar), ['Keep global', 'Confirm'])
+  const { bar } = viewParts(view)
+  assert.ok(bar)
+  assert.ok(nodesIn(bar, (node) => node.type === 'Text' && wordsOf(node) === 'Other projects will stop offering it.').length === 1)
+  assert.deepEqual(buttonsIn(bar), ['Keep global', 'Confirm'])
   assert.equal(view.find(globalSwitch)?.props.checked, false)
   assert.deepEqual(storedGlobal(host), [review, triage])
 
   await view.press({ type: 'Button', text: 'Keep global' })
   assert.equal(view.find(globalSwitch)?.props.checked, true)
-  assert.deepEqual(buttonsIn(detailParts(view).deleteBar!), ['Delete template'])
+  assert.deepEqual(buttonsIn(viewParts(view).bar!), ['Delete template'])
   assert.deepEqual(storedGlobal(host), [review, triage])
 
   await view.toggle(globalSwitch)
   await view.press({ type: 'Button', text: 'Confirm' })
+  // Confirm changes only the draft: the Delete bar is back, still about the global template.
+  assert.equal(view.find(globalSwitch)?.props.checked, false)
+  assert.deepEqual(buttonsIn(viewParts(view).bar!), ['Delete template'])
+  assert.deepEqual(storedGlobal(host), [review, triage])
+  await view.press(saveButton)
   assert.deepEqual(storedGlobal(host), [triage])
   assert.deepEqual(storedProject(host), { providers: {}, templates: [implement, review], defaultTemplateId: 't-review' })
-  assert.equal(view.find(globalSwitch)?.props.checked, false)
-  assert.deepEqual(buttonsIn(detailParts(view).deleteBar!), ['Delete template'])
-  await view.press({ type: 'Button', text: 'Cancel' })
   assert.deepEqual(optionLabels(view, 'Default template'), ['Implement', 'Review', 'Triage (Global)'])
   assert.equal(view.valueOf({ type: 'Select', label: 'Default template' }), 't-review')
 })
 
-test('a move whose name the destination group already has is refused with a message, and changes nothing', async () => {
-  const settings = storedWithGlobal({ templates: [implement, { ...triage, name: 'Review' }], defaultTemplateId: 't-triage' }, [review])
-  const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, settings)
-  await view.press(gear)
-  await view.press({ type: 'IconButton', label: 'Edit template' })
+test('Save is disabled while the bar asks to confirm Global off, or to discard the changes', async () => {
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, storedWithGlobal({ templates: [implement], defaultTemplateId: 't-review' }, [review]))
+  await view.press(promptTemplates)
   await view.toggle(globalSwitch)
-  assert.ok(view.find({ type: 'Text', text: 'A global template is already called "Review". Rename one of them first.' }))
-  assert.equal(view.find(globalSwitch)?.props.checked, false)
-  assert.deepEqual(storedProject(host), settings.settings.projects['github:acme/web'])
-  assert.deepEqual(storedGlobal(host), [review])
+  assert.equal(view.find(saveButton)?.disabled, true)
+  await view.press({ type: 'Button', text: 'Confirm' })
+  assert.equal(view.find(saveButton)?.disabled, false)
+  await view.select(templateSelect, 't-impl')
+  assert.deepEqual(barOf(view).buttons, ['Keep editing', 'Discard'])
+  assert.equal(view.find(saveButton)?.disabled, true)
+  await view.press({ type: 'Button', text: 'Keep editing' })
+  assert.equal(view.find(saveButton)?.disabled, false)
 })
 
-test('a failed move keeps the template where it was, and the detail open with the error', async () => {
+test('turning Global on or off, then Cancel, leaves the template where it was', async () => {
+  const settings = storedWithGlobal({ templates: [implement, triage], defaultTemplateId: 't-triage' }, [review])
+  const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, settings)
+  await view.press(promptTemplates)
+  await view.toggle(globalSwitch)
+  await view.press(cancelButton)
+  await view.press(promptTemplates)
+  await view.select(templateSelect, 't-review')
+  await view.toggle(globalSwitch)
+  await view.press({ type: 'Button', text: 'Confirm' })
+  await view.press(cancelButton)
+  assert.deepEqual(host.calls.filter((call) => call.method === 'storage.set'), [])
+  assert.deepEqual(storedGlobal(host), [review])
+  assert.deepEqual(optionLabels(view, 'Template for #42'), ['Implement', 'Triage', 'Review (Global)'])
+})
+
+test('Save writes a template moved, renamed, edited and made the default template in a single write', async () => {
+  const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, storedWithGlobal({ templates: [implement, triage], defaultTemplateId: 't-triage' }, [review]))
+  await view.press(promptTemplates)
+  await view.select(templateSelect, 't-impl')
+  await view.toggle(globalSwitch)
+  await view.toggle(defaultSwitch)
+  await view.type({ type: 'Input', label: 'Name' }, 'Build', { replace: true })
+  await view.type({ type: 'Textarea', label: 'Text' }, 'Build {{task_key}}', { replace: true })
+  await view.press(saveButton)
+  assert.equal(host.calls.filter((call) => call.method === 'storage.set').length, 1)
+  assert.deepEqual(storedGlobal(host), [review, { id: 't-impl', name: 'Build', text: 'Build {{task_key}}' }])
+  assert.deepEqual(storedProject(host), { providers: {}, templates: [triage], defaultTemplateId: 't-impl' })
+  assert.deepEqual(optionLabels(view, 'Template for #42'), ['Triage', 'Review (Global)', 'Build (Global)'])
+  assert.equal(view.valueOf(cardTemplate('#42')), 't-impl')
+})
+
+test('a Save whose write fails leaves the template where it was, with the change still in the view', async () => {
+  let failing = true
+  const { host, project } = failingWritesHost(() => failing)
+  const view = await mount(panel, { host })
+  await view.press(promptTemplates)
+  await view.select(templateSelect, 't-impl')
+  await view.toggle(globalSwitch)
+  await view.toggle(defaultSwitch)
+  await view.press(saveButton)
+  assert.ok(view.find({ type: 'Text', text: "Couldn't save the template (quota_exceeded). Try again." }))
+  assert.deepEqual(project(), twoTemplates.settings.projects['github:acme/web'])
+  assert.equal(view.find(globalSwitch)?.props.checked, true)
+  assert.equal(view.find(defaultSwitch)?.props.checked, true)
+  assert.equal(view.valueOf(templateSelect), 't-impl')
+  assert.deepEqual(optionLabels(view, 'Template'), ['Implement', 'Triage'])
+
+  failing = false
+  await view.press(saveButton)
+  assert.deepEqual(project(), { providers: {}, templates: [triage], defaultTemplateId: 't-impl' })
+  assert.ok(view.find({ type: 'Link', text: '#42' }))
+})
+
+test('a move whose name the destination group already has is refused on Save with a message, and changes nothing', async () => {
+  const settings = storedWithGlobal({ templates: [implement, triage], defaultTemplateId: 't-triage' }, [])
+  let data: JsonValue = settings.settings
   const host = mockHost({
     capabilities: ['storage:own', 'workspace:read'],
     requests: { 'tasks.load': ready([task('#42')]) },
-    storage: twoTemplates,
     results: {
-      'storage.set': () => {
-        throw hostError('quota_exceeded', 'Storage is full')
+      'storage.get': () => ({ value: data }),
+      'storage.set': (params: { key: string; value: JsonValue }) => {
+        data = params.value
+        return { ok: true }
       }
     }
   })
   const view = await mount(panel, { host })
-  await view.press(gear)
-  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.press(promptTemplates)
   await view.toggle(globalSwitch)
-  assert.ok(view.find({ type: 'Text', text: /Couldn't move the template/ }))
-  assert.equal(view.find(globalSwitch)?.props.checked, false)
-  await view.press({ type: 'Button', text: 'Cancel' })
-  assert.deepEqual(optionLabels(view, 'Default template'), ['Implement', 'Triage'])
+  // Another project made a template called "Triage" global meanwhile.
+  data = storedWithGlobal({ templates: [implement, triage], defaultTemplateId: 't-triage' }, [{ ...review, name: 'triage' }]).settings
+  await view.press(saveButton)
+  assert.ok(view.find({ type: 'Text', text: 'A global template is already called "triage". Rename one of them first.' }))
+  assert.equal(view.find(globalSwitch)?.props.checked, true)
+  assert.ok(view.find(templatesTitle))
+  const stored = data as { projects: Record<string, unknown>; global: { templates: unknown[] } }
+  assert.deepEqual(stored.projects['github:acme/web'], settings.settings.projects['github:acme/web'])
+  assert.deepEqual(stored.global.templates, [{ ...review, name: 'triage' }])
 })
 
 test('a new template with Global on is saved among the global ones, and a project that listed only "Default" keeps it', async () => {
   const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) })
   await view.press(gear)
-  await view.press({ type: 'IconButton', label: 'New template' })
+  await view.press(manageTemplates)
+  await view.press(newTemplate)
   await view.toggle(globalSwitch)
   assert.equal(view.find(globalSwitch)?.props.checked, true)
   assert.equal(storedGlobal(host), undefined)
@@ -1736,10 +2021,16 @@ test('a new template with Global on is saved among the global ones, and a projec
   assert.deepEqual(optionLabels(view, 'Default template'), ['Default', 'Review (Global)'])
 })
 
-test("a global template's name is checked against the global ones only", async () => {
-  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, storedWithGlobal({ templates: [implement] }, [review]))
-  await view.press(gear)
-  await view.press({ type: 'IconButton', label: 'New template' })
+test("a global template's name is checked against the global ones only, also when Global is turned on for a stored one", async () => {
+  const globalTriage = { id: 't-global-triage', name: 'Triage', text: '' }
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, storedWithGlobal({ templates: [implement, triage] }, [review, globalTriage]))
+  await view.press(promptTemplates)
+  await view.select(templateSelect, 't-triage')
+  await view.toggle(globalSwitch)
+  assert.ok(view.find({ type: 'Text', text: 'Another global template is already called "Triage".' }))
+  assert.equal(view.find(saveButton)?.disabled, true)
+  await view.toggle(globalSwitch)
+  await view.press(newTemplate)
   await view.type({ type: 'Input', label: 'Name' }, 'Review')
   assert.equal(view.find(saveButton)?.disabled, false)
   await view.toggle(globalSwitch)
@@ -1758,12 +2049,13 @@ test("the initial template made global keeps being the project's default templat
   await view.select(cardTemplate('#7'), 'default')
   await view.press(gear)
   await view.select({ type: 'Select', label: 'Default template' }, 'default')
-  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.press(manageTemplates)
   await view.toggle(globalSwitch)
+  await view.press(saveButton)
   const [moved] = storedGlobal(host) as { id: string }[]
   assert.notEqual(moved.id, 'default')
   assert.equal((storedProject(host) as { defaultTemplateId: string }).defaultTemplateId, moved.id)
-  await view.press({ type: 'Button', text: 'Cancel' })
+  assert.ok(view.find(settingsTitle))
   assert.equal(view.valueOf({ type: 'Select', label: 'Default template' }), moved.id)
   // Only the card's own choice can keep #7 on the moved template now.
   await view.select({ type: 'Select', label: 'Default template' }, 't-triage')
@@ -1774,14 +2066,15 @@ test("the initial template made global keeps being the project's default templat
   assert.deepEqual(starts.map((start) => start.templateId), [moved.id])
 })
 
-test("a change of active project while the detail is open drops the draft and shows the new project's list", async () => {
+test("a change of active project while the view is open drops the draft and shows the new project's list", async () => {
   let project = web
   const { view, host } = await showWith(
     { 'tasks.load': () => ready([task(project === web ? '#42' : '#9')], { project }) },
     twoTemplates
   )
   await view.press(gear)
-  await view.press({ type: 'IconButton', label: 'New template' })
+  await view.press(manageTemplates)
+  await view.press(newTemplate)
   await view.type({ type: 'Input', label: 'Name' }, 'Review')
   project = api
   await view.emit('workspace.changed', { context: { branch: 'main', displayName: 'api', terminals: [] } })
@@ -1797,10 +2090,10 @@ test("a change of active project while the detail is open drops the draft and sh
   assert.deepEqual(storedProject(host), twoTemplates.settings.projects['github:acme/web'])
 })
 
-test('a reload of the same project keeps the detail open with its draft', async () => {
+test('a reload of the same project keeps the view open with its draft', async () => {
   const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
-  await view.press(gear)
-  await view.press({ type: 'IconButton', label: 'New template' })
+  await view.press(promptTemplates)
+  await view.press(newTemplate)
   await view.type({ type: 'Input', label: 'Name' }, 'Review')
   await view.emit('workspace.changed', { context: { branch: 'main', displayName: 'web', terminals: [] } })
   assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Review')
@@ -1809,8 +2102,8 @@ test('a reload of the same project keeps the detail open with its draft', async 
 test('closing the panel drops the draft', async () => {
   const host = mockHost({ capabilities: ['storage:own', 'workspace:read'], requests: { 'tasks.load': ready([task('#42')]) }, storage: twoTemplates })
   const first = await mount(panel, { host })
-  await first.press(gear)
-  await first.press({ type: 'IconButton', label: 'New template' })
+  await first.press(promptTemplates)
+  await first.press(newTemplate)
   await first.type({ type: 'Input', label: 'Name' }, 'Review')
   await first.unmount()
   const second = await mount(panel, { host })
@@ -1873,7 +2166,8 @@ test('a pending Project settings change survives a failed template write, and th
   const view = await mount(panel, { host })
   await view.press(gear)
   await view.select({ type: 'Select', label: 'Agent' }, 'codex')
-  await view.press({ type: 'IconButton', label: 'New template' })
+  await view.press(manageTemplates)
+  await view.press(newTemplate)
   await view.type({ type: 'Input', label: 'Name' }, 'Review')
   await view.press(saveButton)
   assert.ok(view.find({ type: 'Text', text: /Couldn't save the template/ }))
@@ -2984,8 +3278,8 @@ test("✎ opens the filter editor on the filter shown, in place of the list, wit
     ['JQL', 'project = WEB ORDER BY rank', 3],
     ['JQL 2', 'project = API', 3]
   ])
-  // As the template detail: Cancel and Save in the title row, Delete in a bar of its own.
-  const { title, deleteBar } = detailParts(view)
+  // As the Prompt templates view: Cancel and Save in the title row, Delete in a bar of its own.
+  const { title, deleteBar } = editorParts(view)
   assert.deepEqual(buttonsIn(title), ['Cancel', 'Save'])
   assert.ok(deleteBar)
   assertProps(buttonIn(deleteBar, 'Delete filter'), { tone: 'danger', icon: 'delete', variant: 'ghost' })
@@ -3043,7 +3337,7 @@ test('+ on Jira offers Custom, Board order and My open tasks, in place of the li
   assert.equal(view.find({ type: 'Input', label: 'Name' }), null)
   assert.deepEqual(radioLabels(view, 'Start from'), ['Custom', 'Board order', 'My open tasks'])
   assert.equal(view.valueOf(startFrom), 'custom')
-  const { title } = detailParts(view)
+  const { title } = editorParts(view)
   assert.deepEqual(buttonsIn(title), ['Cancel', 'Continue'])
   await view.press({ type: 'Button', text: 'Cancel' })
   assert.equal(view.find(startFrom), null)
@@ -3131,7 +3425,7 @@ test('+ then Custom opens the editor on a new filter, "Filter 2" or the first fr
   assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Filter 3')
   assert.deepEqual(queryFields(view), [['JQL', '', 3]])
   assert.equal(view.find(queryField('JQL'))?.props.placeholder, 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC')
-  assert.equal(detailParts(view).deleteBar, undefined)
+  assert.equal(editorParts(view).deleteBar, undefined)
   await view.type(queryField('JQL'), 'assignee = currentUser()')
   await view.press(saveButton)
   const stored = storedProject(host) as StoredFilters
@@ -3425,7 +3719,7 @@ test('a Jira filter made global in one project is offered, marked Global, in eve
   assert.deepEqual(optionLabels(view, 'Filter'), ['Tasks', 'Sprint board (Global)'])
   assert.equal(view.valueOf(filterSelect), 'f-board')
   await view.press(editFilter)
-  const { deleteBar } = detailParts(view)
+  const { deleteBar } = editorParts(view)
   assert.ok(deleteBar)
   assert.ok(nodesIn(deleteBar, (node) => node.type === 'Text' && wordsOf(node) === 'Deletes it in every project.').length === 1)
   await view.press({ type: 'Button', text: 'Delete filter' })
@@ -3458,7 +3752,7 @@ test('turning Global off asks first, then moves the filter to the active project
   await view.press(editFilter)
   await view.toggle(globalSwitch)
   // A confirmation bar in place of the Delete bar; nothing is stored yet.
-  const { deleteBar } = detailParts(view)
+  const { deleteBar } = editorParts(view)
   assert.ok(deleteBar)
   assert.ok(nodesIn(deleteBar, (node) => node.type === 'Text' && wordsOf(node) === 'Other projects will stop offering it.').length === 1)
   assert.deepEqual(buttonsIn(deleteBar), ['Keep global', 'Confirm'])
@@ -3467,7 +3761,7 @@ test('turning Global off asks first, then moves the filter to the active project
 
   await view.press({ type: 'Button', text: 'Keep global' })
   assert.equal(view.find(globalSwitch)?.props.checked, true)
-  assert.deepEqual(buttonsIn(detailParts(view).deleteBar!), ['Delete filter'])
+  assert.deepEqual(buttonsIn(editorParts(view).deleteBar!), ['Delete filter'])
   assert.deepEqual(storedGlobalFilters(host), { jira: [boardFilter, sprintGlobal] })
 
   await view.toggle(globalSwitch)
@@ -3783,7 +4077,7 @@ test('a load failure that names no filter opens Project settings by itself on th
   assert.ok(view.find(filterSelect))
 })
 
-test('Project settings that opened by itself stays open once a load from it, or from its template detail, lists the tasks', async () => {
+test('Project settings that opened by itself stays open once a load from it, or from the Prompt templates view opened from it, lists the tasks', async () => {
   let fixed = false
   const { view } = await showWith(
     { 'tasks.load': () => (fixed ? jiraReady([task('WEB-1', { tracker: 'jira' })]) : { kind: 'error', project: web, message: 'orca failed: Orca is not running.' }), 'jira.sites': SITES },
@@ -3798,7 +4092,7 @@ test('Project settings that opened by itself stays open once a load from it, or 
 
   fixed = false
   const second = await showWith({ 'tasks.load': () => (fixed ? jiraReady() : { kind: 'error', project: web, message: 'orca failed.' }), 'jira.sites': SITES })
-  await second.view.press({ type: 'IconButton', label: 'Edit template' })
+  await second.view.press(manageTemplates)
   fixed = true
   await second.view.emit('workspace.changed', { context: { branch: 'main', displayName: 'web', terminals: [] } })
   await second.view.press({ type: 'Button', text: 'Cancel' })
@@ -3885,7 +4179,7 @@ test('a failed query opens the filter editor by itself on its filter, with the e
   const error = view.find({ type: 'Callout', text: /^Couldn't load tasks / })
   assert.match(error?.text ?? '', /^Couldn't load tasks Board: Enter a JQL query/)
   // The error opens the form, above the name.
-  const { form } = detailParts(view)
+  const { form } = editorParts(view)
   assert.equal(elementsIn(form)[0]?.type, 'Callout')
   assert.deepEqual(view.errors, [])
   assert.deepEqual(view.warnings, [])
@@ -3914,7 +4208,7 @@ test('Cancel in the filter editor that opened on a failed query shows the error 
   assert.equal(view.find({ type: 'Callout' }), null)
 })
 
-test('a failed query while the choice of + on Jira, the filter editor or the template detail is open leaves it open', async () => {
+test('a failed query while the choice of + on Jira, the filter editor or the Prompt templates view is open leaves it open', async () => {
   const { view } = await showFilters(filtersStored([tasksFilter, { ...boardFilter, queries: [''] }], 'f-board'))
   await view.press({ type: 'Button', text: 'Cancel' })
   await view.press(newFilter)
@@ -3935,10 +4229,10 @@ test('a failed query while the choice of + on Jira, the filter editor or the tem
 
   await view.press({ type: 'Button', text: 'Cancel' })
   await view.press(gear)
-  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.press(manageTemplates)
   await reload()
   await view.settled()
-  assert.ok(view.find({ type: 'Heading', text: 'Edit template' }))
+  assert.ok(view.find(templatesTitle))
 })
 
 test('after a site list failure or no connected site, reloading the tasks asks for the sites again', async () => {
@@ -4572,7 +4866,7 @@ test('a Jira project shows the filter row above the search field: the filter sho
   assertProps(row, { direction: 'row', align: 'center' })
   const order = nodesIn(view.tree(), (node) => (node.type === 'Select' && node.props?.label === 'Filter') || (node.type === 'Input' && node.props?.label === 'Search tasks') || node.type === 'IconButton')
     .map((node) => node.props?.label)
-    .filter((label) => label !== 'Reload tasks' && label !== 'Project settings' && !String(label).startsWith('Start'))
+    .filter((label) => label !== 'Reload tasks' && label !== 'Prompt templates' && label !== 'Project settings' && !String(label).startsWith('Start'))
   assert.deepEqual(order, ['Filter', 'Edit filter', 'New filter', 'Search tasks'])
   assert.deepEqual(view.errors, [])
   assert.deepEqual(view.warnings, [])

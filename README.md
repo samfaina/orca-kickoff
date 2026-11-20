@@ -51,7 +51,7 @@ Creating the worktree can take a minute. Once it exists, the card shows the work
 **Project settings** also hold, under **Start**:
 
 - **Agent**: Orca's default agent, a named one (`claude`, `codex`, `gemini`, `opencode`, `copilot`), or none. If Orca's default can't be read, Start says so and asks you to pick one.
-- **Prompt templates**: a project can have several, each with a name, its own and the [global](#global-templates) ones. The default template is used unless you choose another on a task's card. The pencil edits the template chosen as default, and **+** adds one.
+- **Default template**: the [prompt template](#prompt-templates) a Start uses unless you choose another on a task's card. A change saves itself like the other settings. **Manage templates**, beside it, opens the [Prompt templates](#the-prompt-templates-view) view; **Cancel** and **Save** there come back to Project settings.
 
 Under **Branch**, they hold how a Start names its git branch, or say that the project uses the global branch settings (see [Branch](#branch)).
 
@@ -129,12 +129,24 @@ To run a Claude Code skill, start the template with its command, for example:
 
 Only blank lines may come before the command, and the new worktree must see the skill: a plugin installed with `local` scope is not seen in a new worktree on Windows, while `user` scope is.
 
+### The Prompt templates view
+
+A project can have several prompt templates, each with a name, its own and the [global](#global-templates) ones. **Prompt templates** (the layers button in the panel's header, between Reload tasks and Project settings) and **Manage templates** in Project settings open the view in place of the panel, on the default template. **Cancel** and **Save** go back where it was opened from: the task list or Project settings.
+
+- **Template**, under the title, chooses the template to edit, among every template of the project, its own first, then the global ones, marked **(Global)**; **+** beside it starts a new one. Choosing another, or **+**, while the form has changes not saved yet, asks first in the bar at the bottom: *Discard your changes to …?* **Keep editing** keeps them; **Discard** opens the other one. Without changes it opens at once.
+- **The form**: **Name**, the **Global** switch, the **Default template** switch, **Text**, the **Variables** and how to run a skill.
+- **Save** stores the name, the text, Global and Default template at once, in one write, and leaves the view; it waits while the bar at the bottom asks a question. **Cancel** drops all of it.
+- **Default template**: on, **Save** makes the template the project's default. On the current default it is on and can't be turned off: the default changes by turning it on in another template.
+- **Delete template**, in the bar at the bottom, which stays in place while the form scrolls, removes the template after a second click, and the view shows the default template. A project keeps at least one template, own or global. Deleting the default template makes the first one listed the default.
+
+Closing the panel, or changing the active project, drops what wasn't saved.
+
 ### Global templates
 
 A prompt template is either the project's own or **global**: kept once, apart from every project's settings, and offered in every project. The default template and the template on a task's card list the project's own first, then the global ones, each group in its order, the global ones marked **(Global)**. A global template can be a project's default template.
 
 - **Names**: no two of a project's own templates share a name, nor two global ones, ignoring case. An own template and a global one may share one; the mark tells them apart.
-- **The Global switch**, in the template detail, moves a template between the two groups. Turned on, the template leaves the project and becomes global at once; the project's default template and the templates chosen on its cards keep pointing at it. Turned off, a bar first asks to confirm, since *Other projects will stop offering it*; **Confirm** moves it to the active project only, and other projects whose default template it was fall back to their first. A move whose name the other group already has is refused with a message, and changes nothing. On a new template, the switch says where **Save** stores it.
+- **The Global switch**, in the [Prompt templates](#the-prompt-templates-view) view, says where **Save** stores the template, and **Save** moves it between the two groups; **Cancel** leaves it where it was. Made global, the template leaves the project; the project's default template and the templates chosen on its cards keep pointing at it. Turning it off first asks in the bar at the bottom, since *Other projects will stop offering it*; **Keep global** keeps it on and **Confirm** turns it off, and **Save** then moves it to the active project only, and other projects whose default template it was fall back to their first. A move whose name the other group already has is refused on **Save** with a message, and changes nothing.
 - **Edits and Delete**: editing a global template changes it in every project. Deleting one deletes it in every project, as its Delete bar says; a project whose default template it was falls back to its first. A template can be deleted while the active project lists at least one other, own or global.
 - **"Default"**: a project lists the template "Default" only while it has no template of its own and there is no global one. A new project starts with the global templates. The first global template, saved from a project that listed only "Default", keeps "Default" in that project as one of its own.
 
