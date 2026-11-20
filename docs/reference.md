@@ -382,6 +382,8 @@ Check `providerIdentity.provider === 'github'`, not just `owner` and `repo`.
 - `worktreeId` matches `id` in `worktree list`.
 - Exactly one row has `isActive: true`, and it matches `orca worktree show --worktree active`.
 - `agents` may be `[]`.
+- `branch` is the worktree's current branch as a full ref, `refs/heads/<name>`, on every row seen **[Verified]** (Orca 1.4.265, issue #132). A Run here's `{{branch}}` drops the `refs/heads/`, so it reads like a Start's. A detached worktree, or one with no branch, was not seen: Kickoff reads a missing, `null` or empty `branch` as no branch **[Assumed]**.
+- Rows have many more fields, such as `workspaceKind`, `path`, `displayName`, `linkedIssue` and `linkedItems` **[Verified]**; Kickoff reads only those above.
 - `orca reference list --worktree active` fails with `selector_not_found` at the same moment that `worktree show --worktree active` resolves.
 
 ### `orca worktree create`
@@ -453,6 +455,18 @@ A prompt that starts with a Claude Code slash command runs that skill in the new
   - With the worker's reduced environment (see [Worker process](#worker-process)), `execFile('claude', ['plugin', 'list', '--json'])` without a shell resolves `claude.exe` and answers in about 0.7 s without network. The `session` rows are missing, since the worker has no `CLAUDE_CODE_PLUGIN_DIRS`.
 
 To try this from Git Bash, set `MSYS_NO_PATHCONV=1`: otherwise MSYS turns an argument such as `/acme-skills:tdd` into a Windows path (`C:/Program Files/Git/acme-skills:tdd`) before Orca gets it **[Verified]**. Kickoff calls `orca.exe` with `execFile` and no shell, so it isn't affected.
+
+### `orca agent launch`
+
+`orca agent launch --agent <id> [--worktree <selector>] [--prompt <text>] [--model <id>] [--effort <level>] [--surface chat|terminal] [--focus] [--retry-launch <operationId>] [--json]` starts an agent in an existing workspace, as a new agent tab does **[Verified]** (`--help`, Orca 1.4.265). Kickoff's Run here runs `orca agent launch --agent <id> --worktree id:<worktree id> --prompt <prompt> --focus --json` (issue #132). Tried on Windows with Orca 1.4.265, `claude` and a one-line prompt, from the home folder **[Verified]**:
+
+- **Selector.** `--worktree id:<id>` takes the `id` of `worktree list`, which is the `worktreeId` of `worktree ps`, as `worktree activate` does. Without `--worktree`, Orca uses the worktree that holds the current folder; `active` and `current` are also selectors.
+- **Success.** Exit 0, `{ ok: true, result: { outcome: { kind: 'terminal', handle, paneKey }, worktreeId, receipt: { mode, preferred, reason, detail }, prompt: { delivery: 'submit', outcome: 'handed-to-terminal' }, placement: { groupId }, operationId } }`. `receipt.detail` says why the surface was chosen, such as "Started a terminal agent, the default for new agent tabs in your settings." On the chat surface `outcome.kind` is `chat` **[Assumed]**, from `--help`; not tried.
+- **Failure.** Exit 1 with the usual `{ ok: false, error: { code, message } }`. An unknown worktree gives `selector_not_found`, with `message` the code itself and the details in `error.data` (`selector`, `validSelectorForms`, `nextSteps`). An unknown agent gives `invalid_argument`, "Unknown TUI agent \"<id>\"".
+- **Time.** About 0.6 s, failures about 0.4 s, like any other call: Orca answers once the tab is opened and the prompt handed over, without waiting for the agent. So `task.runHere` waits for the launch and answers its end, well under `plugin.request`'s 30 s, with no post like `start.ended`.
+- **`--focus`.** Without it the tab opens without switching to it. With it, the launch made its worktree the active one in `worktree ps`, where another worktree had been active before. That the new tab is shown inside Orca was not seen **[Assumed]**; for a Run here the worktree is already the active one.
+- **Prompt.** Delivered as `worktree create --prompt` delivers it (see [Skill commands in `--prompt`](#skill-commands-in---prompt)).
+- **Lost reply.** If the reply is lost, Orca asks to run the same command again with `--retry-launch <operationId>` from the error, never as a fresh launch **[Verified]** (`--help`). Kickoff doesn't retry.
 
 ### `orca worktree activate --worktree id:<id> --json`
 

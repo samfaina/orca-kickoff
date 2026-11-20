@@ -61,7 +61,7 @@ Asking the tracker for the tasks of the filter shown that match the user's words
 _Avoid_: Search (alone), remote search, query
 
 **Prompt template**:
-A named text with task variables that becomes the prompt given to the agent when a task starts. A project has one or more, its own and the global ones; no two of its own share a name, nor two global ones. Each Start uses the one the user chooses for that task.
+A named text with task variables that becomes the prompt given to the agent of a Start or a Run here. A project has one or more, its own and the global ones; no two of its own share a name, nor two global ones. Each Start or Run here uses the one the user chooses for that task. Each prompt template also says whether a task launched with it gets a Start or a Run here, unless the user chooses the other one on the task's card for that launch only.
 _Avoid_: Prompt (that is the filled-in result)
 
 **Global**:
@@ -90,7 +90,11 @@ _Avoid_: Title filter, title regex
 
 **Start**:
 The user action that creates a task worktree for a task and launches an agent in it with the prompt filled from the chosen prompt template. A task is started once; a task that already has a task worktree can't be started again.
-_Avoid_: Launch, kick off, run
+_Avoid_: Launch, kick off, run, Run here (that launches an agent without a task worktree)
+
+**Run here**:
+The user action that launches a new agent in the worktree selected in Orca's sidebar, as it is, with the prompt filled from the chosen prompt template and a task. It creates no worktree, no branch and no link, so the task is not started and can be run here again. Only a task that has not been started offers it, and only in a project whose agent choice names an agent.
+_Avoid_: Start here, start without worktree, snippet
 
 **Task worktree**:
 A non-archived Orca worktree in the active project that is linked to a task, together with the agent running in it, if any.

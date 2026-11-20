@@ -26,8 +26,9 @@ export type OrcaWorktree = {
   jiraKeys: string[]
 }
 
-/** One row of `orca worktree ps`. */
-export type OrcaWorktreeStatus = { worktreeId: string; isActive: boolean; agent: string | null }
+/** One row of `orca worktree ps`. `branch` is the worktree's current branch without `refs/heads/`,
+ *  '' when it has none. */
+export type OrcaWorktreeStatus = { worktreeId: string; isActive: boolean; branch: string; agent: string | null }
 
 /** Projects from `orca project list --json`. Projects without an id are dropped. */
 export function parseProjects(stdout: string): ProjectRef[] {
@@ -76,7 +77,8 @@ function isIssueNumber(value: unknown): value is number {
 export function parseWorktreePs(stdout: string): OrcaWorktreeStatus[] {
   return listOf(orcaResult(stdout), 'worktrees').flatMap((row) => {
     if (!isRecord(row) || !nonEmpty(row.worktreeId)) return []
-    return [{ worktreeId: row.worktreeId, isActive: row.isActive === true, agent: runningAgent(row.agents) }]
+    const branch = nonEmpty(row.branch) ? row.branch.replace(/^refs\/heads\//, '') : ''
+    return [{ worktreeId: row.worktreeId, isActive: row.isActive === true, branch, agent: runningAgent(row.agents) }]
   })
 }
 
@@ -152,6 +154,14 @@ export function worktreeCreateArgs({ projectId, name, branch, task, agent, promp
   else args.push('--reference', task.url)
   if (agent !== null) args.push('--agent', agent, '--prompt', prompt)
   return args
+}
+
+export type AgentLaunch = { worktreeId: string; agent: string; prompt: string }
+
+/** `orca agent launch` of a new agent in an existing worktree, by its `worktree list` id, with the
+ *  prompt, and its tab shown (`--focus`). Orca answers at once: it doesn't wait for the agent. */
+export function agentLaunchArgs({ worktreeId, agent, prompt }: AgentLaunch): string[] {
+  return ['agent', 'launch', '--agent', agent, '--worktree', `id:${worktreeId}`, '--prompt', prompt, '--focus', '--json']
 }
 
 export function worktreeActivateArgs(worktreeId: string): string[] {

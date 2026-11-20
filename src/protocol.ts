@@ -63,7 +63,7 @@ export type ByTracker<T> = { [K in TrackerId]?: T }
 /** 'orca-default', 'none', or any other string as an Orca agent id. */
 export type AgentChoice = string
 
-/** A named text with task variables that becomes the prompt of a Start. */
+/** A named text with task variables that becomes the prompt of a Start or a Run here. */
 export type PromptTemplate = {
   /** Stable, made by the panel; never shown. A move between a project and the global templates
    *  keeps it, except the initial template's `default`, which takes a new one when made global. */
@@ -73,6 +73,9 @@ export type PromptTemplate = {
   name: string
   /** '': the prompt is the task URL. */
   text: string
+  /** The template's New worktree switch. false: its tasks get a Run here, in the worktree selected
+   *  in Orca; undefined, as every template stored before it: they get a Start. */
+  newWorktree?: false
 }
 
 export type ProjectSettings = {
@@ -236,17 +239,19 @@ function readBranchSettings(raw: Record<string, unknown>): BranchSettings {
   return branch
 }
 
-/** The stored templates of the expected shape, in order. A template whose id or name, ignoring
- *  case, an earlier one already has is dropped too. */
+/** The stored templates of the expected shape, in order, with `newWorktree` only when it is false.
+ *  A template whose id or name, ignoring case, an earlier one already has is dropped too. */
 function readTemplates(raw: unknown): PromptTemplate[] {
   const templates: PromptTemplate[] = []
   if (!Array.isArray(raw)) return templates
   for (const item of raw) {
-    if (!isRecord(item) || !strings(item, 'id', 'name', 'text')) continue
+    if (!isRecord(item)) continue
+    const runsHere = item.newWorktree === false
+    if (!strings(item, 'id', 'name', 'text')) continue
     const name = item.name.trim()
     if (item.id === '' || name === '') continue
     if (templates.some((template) => template.id === item.id || sameTemplateName(template.name, name))) continue
-    templates.push({ id: item.id, name, text: item.text })
+    templates.push({ id: item.id, name, text: item.text, ...(runsHere ? { newWorktree: false as const } : {}) })
   }
   return templates
 }
@@ -519,6 +524,10 @@ export type JiraSitesResult =
 
 export type ActionResult = { ok: true } | { ok: false; message: string }
 
+/** Why there is no Run here without an agent: the worker's refusal, and the card's note while the
+ *  project's agent choice is "No agent". */
+export const RUN_HERE_NEEDS_AGENT = 'Run here needs an agent: choose one in Project settings.'
+
 /** A Start's answer. `underWay`: Orca is creating the worktree and `start.ended` follows;
  *  otherwise the task already has its worktree. */
 export type StartResult = { ok: true; underWay: boolean } | { ok: false; message: string }
@@ -538,6 +547,9 @@ declare module 'orca' {
     'project.active': { input: {}; output: ActiveProjectResult }
     'jira.sites': { input: {}; output: JiraSitesResult }
     'task.start': { input: { projectId: string; task: Task; templateId: string }; output: StartResult }
+    /** A Run here: a new agent in the worktree selected in Orca, with the template's prompt for
+     *  the task, and no worktree created. It answers once Orca reports the launch. */
+    'task.runHere': { input: { projectId: string; task: Task; templateId: string }; output: ActionResult }
     'starts.load': { input: { projectId: string }; output: StartsResult }
     'worktree.open': { input: { worktreeId: string }; output: ActionResult }
   }

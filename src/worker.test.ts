@@ -980,6 +980,136 @@ test('a prompt over the limit fails Start without creating anything', async () =
   assert.equal(creates(calls).length, 0)
 })
 
+const launches = (calls: Call[]) => calls.filter((call) => call.args[0] === 'agent' && call.args[1] === 'launch')
+
+/** `worktree ps` with the web project's main worktree on `main` and the notes worktree, `active`
+ *  the one selected in Orca, or neither. */
+const psWith = (active: 'web' | 'notes' | null, webBranch: string | null = 'refs/heads/main') =>
+  wrap({
+    worktrees: [
+      { worktreeId: 'r1::/src/web', isActive: active === 'web', branch: webBranch, agents: [] },
+      { worktreeId: 'r2::/src/notes', isActive: active === 'notes', branch: 'refs/heads/main', agents: [] }
+    ]
+  })
+
+const LAUNCHED = wrap({ outcome: { kind: 'terminal' }, prompt: { delivery: 'submit', outcome: 'handed-to-terminal' } })
+
+const shipTemplate = (project: Record<string, unknown> = {}) => ({
+  settings: {
+    version: 1,
+    projects: {
+      'github:acme/web': {
+        providers: {},
+        templates: [{ id: 't-ship', name: 'Ship', text: '/ship-tickets {{task_key}} on {{branch}} in {{repo}}', newWorktree: false }],
+        ...project
+      }
+    }
+  }
+})
+
+const runWeb42 = { projectId: 'github:acme/web', task: issue42, templateId: 't-ship' }
+
+test('Run here launches the agent in the active worktree with the prompt filled, {{branch}} its current branch, and creates no worktree', async () => {
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree ps': psWith('web', 'refs/heads/someone/spike'), 'orca agent launch': LAUNCHED }, { storage: shipTemplate() })
+  assert.deepEqual(await worker.request('task.runHere', runWeb42), { ok: true })
+  assert.deepEqual(launches(calls).map((call) => call.args), [
+    ['agent', 'launch', '--agent', 'claude', '--worktree', 'id:r1::/src/web', '--prompt', '/ship-tickets #42 on someone/spike in acme/web', '--focus', '--json']
+  ])
+  assert.equal(creates(calls).length, 0)
+  assert.deepEqual(worker.posts, [])
+  assert.deepEqual(await worker.request('starts.load', { projectId: 'github:acme/web' }), { starting: [] })
+})
+
+test('Run here in a worktree with no branch fills {{branch}} with nothing', async () => {
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree ps': psWith('web', null), 'orca agent launch': LAUNCHED }, { storage: shipTemplate() })
+  assert.deepEqual(await worker.request('task.runHere', runWeb42), { ok: true })
+  assert.equal(flagValue(launches(calls)[0].args, '--prompt'), '/ship-tickets #42 on  in acme/web')
+})
+
+test('Run here refuses, launching nothing, when no worktree is active or the active one is in another project', async () => {
+  const cases = [
+    { active: null, message: 'No worktree is selected in Orca. Select a worktree of web to run #42 here.' },
+    { active: 'notes' as const, message: "The worktree selected in Orca isn't one of web. Select a worktree of web to run #42 here." }
+  ]
+  for (const { active, message } of cases) {
+    const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree ps': psWith(active), 'orca agent launch': LAUNCHED }, { storage: shipTemplate() })
+    assert.deepEqual(await worker.request('task.runHere', runWeb42), { ok: false, message })
+    assert.equal(launches(calls).length, 0)
+  }
+})
+
+test('Run here refuses, launching nothing, a task that already has a task worktree', async () => {
+  const { worker, calls } = await start(
+    { ...ORCA_OK, 'orca worktree list': worktreesWith(started42), 'orca worktree ps': psWith('web'), 'orca agent launch': LAUNCHED },
+    { storage: shipTemplate() }
+  )
+  assert.deepEqual(await worker.request('task.runHere', runWeb42), { ok: false, message: '#42 already has a task worktree, issue-42-add-dark-mode. Reload the tasks.' })
+  assert.equal(launches(calls).length, 0)
+})
+
+test('Run here refuses, launching nothing, with the agent choice "No agent" or an Orca default of no agent', async () => {
+  const cases = [
+    { storage: shipTemplate({ agent: 'none' }), defaultAgent: { kind: 'agent', agent: 'claude' } as const },
+    { storage: shipTemplate(), defaultAgent: { kind: 'none' } as const }
+  ]
+  for (const options of cases) {
+    const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree ps': psWith('web'), 'orca agent launch': LAUNCHED }, options)
+    assert.deepEqual(await worker.request('task.runHere', runWeb42), { ok: false, message: 'Run here needs an agent: choose one in Project settings.' })
+    assert.equal(launches(calls).length, 0)
+  }
+})
+
+test("Run here refuses, launching nothing, a template that no longer exists, a prompt over the limit, and an unreadable Orca default agent", async () => {
+  const ORCA_HERE = { ...ORCA_OK, 'orca worktree ps': psWith('web'), 'orca agent launch': LAUNCHED }
+  const gone = await start(ORCA_HERE, { storage: shipTemplate() })
+  assert.deepEqual(await gone.worker.request('task.runHere', { ...runWeb42, templateId: 't-gone' }), {
+    ok: false,
+    message: 'The prompt template you chose no longer exists — pick another one.'
+  })
+  const long = await start(ORCA_HERE, { storage: shipTemplate({ templates: [{ id: 't-ship', name: 'Ship', text: '{{task_description}}'.repeat(8) }] }) })
+  const tooLong = await long.worker.request('task.runHere', { ...runWeb42, task: { ...issue42, description: 'x'.repeat(5000) } })
+  assert.ok(!tooLong.ok)
+  assert.match(tooLong.message, /30000/)
+  const unreadable = await start(ORCA_HERE, { storage: shipTemplate(), defaultAgent: { kind: 'unreadable' } })
+  assert.deepEqual(await unreadable.worker.request('task.runHere', runWeb42), { ok: false, message: AGENT_UNREADABLE })
+  for (const { calls } of [gone, long, unreadable]) assert.equal(launches(calls).length, 0)
+})
+
+test("a failed launch, or Orca failing to answer, is a Run here's failure with Orca's real message", async () => {
+  const failed = await start(
+    { ...ORCA_OK, 'orca worktree ps': psWith('web'), 'orca agent launch': new CliError('orca failed: Unknown TUI agent "nope"') },
+    { storage: shipTemplate() }
+  )
+  assert.deepEqual(await failed.worker.request('task.runHere', runWeb42), { ok: false, message: 'orca failed: Unknown TUI agent "nope"' })
+  const down = await start({ ...ORCA_OK, 'orca worktree ps': new CliError('orca failed: Orca is not running.') }, { storage: shipTemplate() })
+  assert.deepEqual(await down.worker.request('task.runHere', runWeb42), { ok: false, message: 'orca failed: Orca is not running.' })
+  assert.equal(launches(down.calls).length, 0)
+})
+
+test('a second Run here of the task while the first runs joins it and launches one agent', async () => {
+  const { create: launch, answer } = slowCreate()
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree ps': psWith('web'), 'orca agent launch': answer }, { storage: shipTemplate() })
+  const first = worker.request('task.runHere', runWeb42)
+  const second = worker.request('task.runHere', runWeb42)
+  await until(() => launches(calls).length > 0)
+  launch.finish(LAUNCHED)
+  assert.deepEqual(await Promise.all([first, second]), [{ ok: true }, { ok: true }])
+  assert.equal(launches(calls).length, 1)
+  // Once it ended, the task can be run here again.
+  const again = worker.request('task.runHere', runWeb42)
+  await until(() => launches(calls).length === 2)
+  launch.finish(LAUNCHED)
+  assert.deepEqual(await again, { ok: true })
+})
+
+test('Run here refuses a task whose Start is under way', async () => {
+  const { answer: slow } = slowCreate()
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': slow, 'orca agent launch': LAUNCHED }, { storage: shipTemplate() })
+  assert.deepEqual(await worker.request('task.start', { ...startWeb42, templateId: 't-ship' }), { ok: true, underWay: true })
+  assert.deepEqual(await worker.request('task.runHere', runWeb42), { ok: false, message: '#42 is being started. Wait for its worktree.' })
+  assert.equal(launches(calls).length, 0)
+})
+
 test('worktree.open activates the worktree in Orca', async () => {
   const { worker, calls } = await start({ 'orca worktree activate': wrap({ worktree: { id: 'r1::/src/web-42' } }) })
   assert.deepEqual(await worker.request('worktree.open', { worktreeId: 'r1::/src/web-42' }), { ok: true })

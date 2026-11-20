@@ -48,6 +48,7 @@ import {
   type WorktreesResult
 } from './protocol'
 import { taskLister } from './providers'
+import { runHereLaunch } from './run-here'
 import { JIRA_CONNECTION_ARGS, parseJiraSites } from './providers/jira-orca'
 import { FilterError } from './providers/queries'
 import type { PageRequest } from './providers/types'
@@ -79,6 +80,8 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
   const creating = new Map<string, { projectId: string; taskKey: string }>()
   /** When the last Start of a task timed out, by project and task. */
   const timedOutAt = new Map<string, number>()
+  /** Run heres still running, by project and task, so a second one joins the first. */
+  const runningHere = new Map<string, Promise<ActionResult>>()
 
   async function readWorktreeState(): Promise<Omit<OrcaState, 'projects'>> {
     const [worktrees, statuses] = await Promise.all([run('orca', WORKTREE_LIST_ARGS), run('orca', WORKTREE_PS_ARGS)])
@@ -252,6 +255,42 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
     }
   }
 
+  /** Runs a Run here of the task, or joins the one of the same task still running, so two presses
+   *  launch one agent. */
+  function runHere(projectId: string, task: Task, templateId: string): Promise<ActionResult> {
+    const id = `${projectId}\n${task.key}`
+    const running = runningHere.get(id)
+    if (running) return running
+    const ran = checkAndLaunch(id, projectId, task, templateId).finally(() => runningHere.delete(id))
+    runningHere.set(id, ran)
+    return ran
+  }
+
+  /** Reads Orca and the settings, then launches the agent in the active worktree once `runHereLaunch`
+   *  finds nothing in the way. Orca answers the launch in under a second, so this waits for it. */
+  async function checkAndLaunch(id: string, projectId: string, task: Task, templateId: string): Promise<ActionResult> {
+    try {
+      if (creating.has(id) || checking.has(id)) return { ok: false, message: `${task.key} is being started. Wait for its worktree.` }
+      const [state, stored] = await Promise.all([readOrca(), readStoredSettings()])
+      const settings = projectSettings(stored, projectId)
+      const agent = await resolveAgent(settings.agent, readDefaultAgent)
+      if (!agent.ok) return agent
+      const launch = runHereLaunch({
+        projectId,
+        task,
+        ...state,
+        agent: agent.agent,
+        template: findTemplate(settings, globalTemplates(stored), templateId),
+        jiraProjectKey: settings.jiraProjectKey ?? ''
+      })
+      if (!launch.ok) return launch
+      checkOrcaAnswer(await run('orca', launch.args))
+      return { ok: true }
+    } catch (error) {
+      return { ok: false, message: messageOf(error) }
+    }
+  }
+
   /** The active worktree's project id, for the panel to poll: only the two Orca queries that
    *  tell it, since the panel asks every few seconds. */
   async function activeProjectId(): Promise<ActiveProjectResult> {
@@ -285,7 +324,8 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
   orca.panels.handle('project.active', () => activeProjectId())
   orca.panels.handle('jira.sites', () => jiraSites())
   orca.panels.handle('task.start', ({ projectId, task, templateId }) => startTask(projectId, task, templateId))
-  orca.panels.handle('starts.load', ({ projectId }) => ({ starting: startsUnderWay(projectId) }))
+  orca.panels.handle('task.runHere', ({ projectId, task, templateId }) => runHere(projectId, task, templateId))
+  orca.panels.handle('starts.load',({ projectId }) => ({ starting: startsUnderWay(projectId) }))
   orca.panels.handle('worktree.open', ({ worktreeId }) => openWorktree(worktreeId))
 }
 

@@ -35,6 +35,7 @@ const PANEL_REQUESTS = Object.keys({
   'project.active': true,
   'jira.sites': true,
   'task.start': true,
+  'task.runHere': true,
   'starts.load': true,
   'worktree.open': true
 } satisfies Record<keyof PluginRequests, true>)
@@ -95,6 +96,19 @@ test('global-templates opens the Prompt templates view from the header on the de
   assert.ok(shown.find({ type: 'Text', text: 'Deletes it in every project.' }))
   assert.deepEqual(shown.errors, [])
   assert.deepEqual(shown.warnings, [])
+})
+
+test('run-here offers Run here on the cards of a template with New worktree off, each switch off, and Start once a card chooses another template', async () => {
+  const shown = await render('run-here')
+  const runs = shown.findAll({ role: 'button', label: /^Run #\d+ here$/ })
+  assert.equal(runs.length, 3)
+  assert.ok(runs.every((run) => !run.disabled))
+  assert.equal(shown.find({ testId: 'new-worktree:#42' })?.props.checked, false)
+  await shown.select({ type: 'Select', label: 'Template for #41' }, 'fix')
+  assert.ok(shown.find({ role: 'button', label: 'Start #41' }))
+  assert.equal(shown.find({ testId: 'new-worktree:#41' })?.props.checked, true)
+  await shown.press({ type: 'IconButton', label: 'Prompt templates' })
+  assert.equal(shown.find({ type: 'Switch', label: 'New worktree' })?.props.checked, false)
 })
 
 test('jira-started shows started tasks with their worktree and agent, one starting, and Load more', async () => {
