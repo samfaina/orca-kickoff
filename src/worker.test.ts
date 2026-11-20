@@ -488,6 +488,33 @@ test('without a Jira project key, a filter naming {{jira_project}} runs no query
   assert.deepEqual(listed.tasks.map((task) => task.key), ['WEB-3'])
 })
 
+test("a global Jira filter naming {{jira_project}} lists each project's own tasks, asked for or shown last", async () => {
+  const global = { filters: { jira: [{ ...sprint, id: 'g-sprint' }], github: [{ id: 'g-triage', name: 'Triage', queries: ['label:needs-triage'] }] } }
+  const page = JSON.stringify({ data: { issues: [{ key: 'WEB-7', summary: 'Dark mode', assignee: null, url: 'https://example.atlassian.net/browse/WEB-7' }] } })
+  const jqls: string[] = []
+  for (const [jiraProjectKey, shownFilterId] of [['WEB', undefined], ['API', 'g-sprint']] as const) {
+    const stored = twgSettings([mine], jiraProjectKey)
+    const project = { ...stored.settings.projects['github:acme/web'], ...(shownFilterId ? { shownFilterId: { jira: shownFilterId } } : {}) }
+    const settings = { version: 1, projects: { 'github:acme/web': project }, global }
+    const { worker, calls } = await start({ ...ORCA_OK, 'twg jira workitem': page }, { storage: { settings } })
+    const list = await worker.request('tasks.load', shownFilterId ? {} : { filterId: 'g-sprint' })
+    assert.ok(list.kind === 'ready')
+    assert.deepEqual([list.filterId, list.queryCount], ['g-sprint', 1])
+    jqls.push(...calls.filter((call) => call.tool === 'twg').map((call) => call.args[call.args.indexOf('--jql') + 1]))
+  }
+  assert.deepEqual(jqls, ['project = WEB ORDER BY rank', 'project = API ORDER BY rank'])
+})
+
+test("a GitHub project isn't offered the global Jira filters: asked for one, it lists its own filter", async () => {
+  const global = { filters: { jira: [{ ...sprint, id: 'g-sprint' }] } }
+  const settings = { version: 1, projects: { 'github:acme/web': { providers: {} } }, global }
+  const { worker, calls } = await start({ ...ORCA_OK, 'gh issue list': GH_ISSUES }, { storage: { settings } })
+  const list = await worker.request('tasks.load', { filterId: 'g-sprint' })
+  assert.ok(list.kind === 'ready')
+  assert.equal(list.filterId, 'open')
+  assert.deepEqual(calls.filter((call) => call.tool === 'gh').map((call) => call.args.at(-1)), ['(is:open) is:open'])
+})
+
 test('a GitHub search naming {{jira_project}} runs as written, with or without a Jira project key', async () => {
   for (const jiraProjectKey of ['WEB', undefined]) {
     const triage = { id: 'f-triage', name: 'Triage', queries: ['label:{{jira_project}}'] }

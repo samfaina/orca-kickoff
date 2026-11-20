@@ -1,4 +1,5 @@
 import { assert, test } from 'orca/testing'
+import { filterWriteChanges, withFilterMoved, withFilterSaved } from './filter'
 import type { GlobalSettings, ProjectSettings } from './protocol'
 import { SAVE_DELAY_MS, settingsSaver } from './settings-save'
 
@@ -195,14 +196,14 @@ test("two saves asked for at once write one after the other, and neither loses t
   assert.deepEqual(storage.project('github:acme/web'), { providers: {}, agent: 'codex', defaultTemplateId: 't-impl' })
 })
 
-test("a write of one project's changes saves the pending changes first, then computes its change from the settings with them, in one turn of the queue", async () => {
+test("a write of a project's changes saves the pending changes first, then computes its change from the settings with them, in one turn of the queue", async () => {
   const { saver, storage, reports } = setup()
   saver.change('github:acme/web', { defaultTemplateId: 't-impl' })
   storage.holdWrites()
   const seen: unknown[] = []
-  const writing = saver.writeProject('github:acme/web', (project) => {
+  const writing = saver.writeProjectAndGlobal('github:acme/web', (project) => {
     seen.push(project.defaultTemplateId)
-    return { agent: 'codex' }
+    return { answer: 'written', project: { agent: 'codex' } }
   })
   await settle()
   // A save asked for while the project's write runs waits for both of its writes.
@@ -211,7 +212,7 @@ test("a write of one project's changes saves the pending changes first, then com
   storage.release()
   await settle()
   storage.release()
-  assert.deepEqual(await writing, { agent: 'codex' })
+  assert.equal(await writing, 'written')
   await settle()
   assert.deepEqual(storage.log, ['get settings', 'set settings', 'get settings', 'set settings', 'get settings', 'set settings'])
   assert.deepEqual(seen, ['t-impl'])
@@ -221,15 +222,15 @@ test("a write of one project's changes saves the pending changes first, then com
   assert.deepEqual(reports, ['saved', 'saved'])
 })
 
-test("a write of one project's changes whose save of the pending changes fails rejects, writes no change of its own, and keeps them pending", async () => {
+test("a write of a project's changes whose save of the pending changes fails rejects, writes no change of its own, and keeps them pending", async () => {
   const { saver, storage } = setup()
   storage.failWrites = true
   saver.change('github:acme/web', { agent: 'codex' })
   let computed = false
   await assert.rejects(
-    saver.writeProject('github:acme/web', () => {
+    saver.writeProjectAndGlobal('github:acme/web', () => {
       computed = true
-      return { defaultTemplateId: 't-impl' }
+      return { answer: null, project: { defaultTemplateId: 't-impl' } }
     }),
     /Storage is full/
   )
@@ -239,15 +240,9 @@ test("a write of one project's changes whose save of the pending changes fails r
   assert.deepEqual(storage.project('github:acme/web'), { providers: {}, agent: 'codex' })
 })
 
-test("a write of one project's changes whose change is none writes nothing more", async () => {
+test("a failed save after a write that changed nothing still keeps its changes pending", async () => {
   const { saver, storage } = setup()
-  assert.equal(await saver.writeProject('github:acme/web', () => null), null)
-  assert.deepEqual(storage.log, ['get settings'])
-})
-
-test("a failed save after a write of one project's changes that changed nothing still keeps its changes pending", async () => {
-  const { saver, storage } = setup()
-  await saver.writeProject('github:acme/web', () => null)
+  await saver.writeProjectAndGlobal('github:acme/web', () => ({ answer: null }))
   storage.failWrites = true
   saver.change('github:acme/web', { agent: 'codex' })
   await assert.rejects(saver.saveNow(), /Storage is full/)
@@ -330,21 +325,101 @@ test('a move whose save of the pending changes fails computes nothing, leaves th
   assert.deepEqual(storage.global(), { templates: [review] })
 })
 
+const board = { id: 'f-board', name: 'Board', queries: ['project = {{jira_project}} ORDER BY rank'] }
+const mine = { id: 'f-mine', name: 'Mine', queries: ['assignee = currentUser()'] }
+const triage = { id: 'g-triage', name: 'Triage', queries: ['is:open label:needs-triage'] }
+
+/** Moves Board between the project's own Jira filters and the global ones, as the filter editor's
+ *  Global switch does. */
+const moveBoard = (toGlobal: boolean) => (project: ProjectSettings, global: GlobalSettings) => {
+  const move = withFilterMoved(project, 'jira', global.filters?.jira ?? [], board.id, toGlobal, 'g-fresh')
+  return move.ok ? { answer: move.id, ...filterWriteChanges(global, 'jira', move.write) } : { answer: move.message }
+}
+
+test("a filter move is one write of the project's filters and the global ones, computed from the settings as stored, keeping the global templates and the other tracker's global filters", async () => {
+  const { saver, storage } = setup()
+  storage.seed({
+    version: 1,
+    projects: { 'github:acme/web': { providers: {}, filters: { jira: [board, mine] }, shownFilterId: { jira: 'f-board' } } },
+    global: { templates: [review], filters: { github: [triage] } }
+  })
+  saver.change('github:acme/web', { agent: 'codex' })
+  assert.equal(await saver.writeProjectAndGlobal('github:acme/web', moveBoard(true)), 'f-board')
+  assert.deepEqual(storage.log, ['get settings', 'set settings', 'get settings', 'set settings'])
+  assert.deepEqual(storage.project('github:acme/web'), { providers: {}, filters: { jira: [mine] }, shownFilterId: { jira: 'f-board' }, agent: 'codex' })
+  assert.deepEqual(storage.global(), { templates: [review], filters: { github: [triage], jira: [board] } })
+
+  assert.equal(await saver.writeProjectAndGlobal('github:acme/web', moveBoard(false)), 'f-board')
+  assert.deepEqual(storage.project('github:acme/web'), { providers: {}, filters: { jira: [mine, board] }, shownFilterId: { jira: 'f-board' }, agent: 'codex' })
+  assert.deepEqual(storage.global(), { templates: [review], filters: { github: [triage], jira: [] } })
+})
+
+test('a filter move whose write fails rejects and leaves the filter where it was, in the project and not global', async () => {
+  const { saver, storage } = setup()
+  storage.seed({ version: 1, projects: { 'github:acme/web': { providers: {}, filters: { jira: [board, mine] } } }, global: { filters: { github: [triage] } } })
+  saver.change('github:acme/web', { shownFilterId: { jira: 'f-mine' } })
+  storage.holdWrites()
+  const moving = saver.writeProjectAndGlobal('github:acme/web', moveBoard(true))
+  await settle()
+  // The save of the pending changes lands; the move's own write fails.
+  storage.release()
+  await settle()
+  storage.failHeld(quotaExceeded())
+  await assert.rejects(moving, /Storage is full/)
+  assert.deepEqual(storage.project('github:acme/web'), { providers: {}, filters: { jira: [board, mine] }, shownFilterId: { jira: 'f-mine' } })
+  assert.deepEqual(storage.global(), { filters: { github: [triage] } })
+})
+
+test('a filter move whose save of the pending changes fails computes nothing, leaves the filter where it was, and keeps the change pending', async () => {
+  const { saver, storage } = setup()
+  storage.seed({ version: 1, projects: { 'github:acme/web': { providers: {}, filters: { jira: [board, mine] } } } })
+  storage.failWrites = true
+  saver.change('github:acme/web', { shownFilterId: { jira: 'f-mine' } })
+  let computed = false
+  const move = moveBoard(true)
+  await assert.rejects(
+    saver.writeProjectAndGlobal('github:acme/web', (project, global) => {
+      computed = true
+      return move(project, global)
+    }),
+    /Storage is full/
+  )
+  assert.equal(computed, false)
+  assert.deepEqual(storage.project('github:acme/web'), { providers: {}, filters: { jira: [board, mine] } })
+  assert.equal(storage.global(), undefined)
+  storage.failWrites = false
+  await saver.saveNow()
+  assert.deepEqual(storage.project('github:acme/web'), { providers: {}, filters: { jira: [board, mine] }, shownFilterId: { jira: 'f-mine' } })
+  assert.equal(storage.global(), undefined)
+})
+
+test('a global filter saved from one project keeps the filter another project chose to show, still pending', async () => {
+  const { saver, storage } = setup()
+  storage.seed({ version: 1, projects: { 'github:acme/api': { providers: {} } }, global: { filters: { jira: [board] } } })
+  saver.change('github:acme/api', { shownFilterId: { jira: 'f-board' } })
+  await saver.writeProjectAndGlobal('github:acme/web', (project, global) => {
+    const write = withFilterSaved(project, 'jira', global.filters?.jira ?? [], { ...board, name: 'Sprint board' }, true)
+    return { answer: null, ...filterWriteChanges(global, 'jira', write) }
+  })
+  assert.deepEqual(storage.project('github:acme/api'), { providers: {}, shownFilterId: { jira: 'f-board' } })
+  assert.deepEqual(storage.global(), { filters: { jira: [{ ...board, name: 'Sprint board' }] } })
+})
+
 test('a write whose compute gives no changes writes nothing more, and answers its answer', async () => {
   const { saver, storage } = setup()
   assert.equal(await saver.writeProjectAndGlobal('github:acme/web', () => ({ answer: 'refused' })), 'refused')
   assert.deepEqual(storage.log, ['get settings'])
 })
 
-test('a timed save, and a write of one project, keep the global templates', async () => {
+test("a timed save, and a write of a project's changes alone, keep the global templates and filters", async () => {
   const { saver, storage, timers } = setup()
-  storage.seed({ version: 1, projects: {}, global: { templates: [review] } })
+  storage.seed({ version: 1, projects: {}, global: { templates: [review], filters: { github: [triage] } } })
   saver.change('github:acme/web', { agent: 'codex' })
   timers.fire()
   await settle()
-  await saver.writeProject('github:acme/web', () => ({ defaultTemplateId: 't-review' }))
+  await saver.writeProjectAndGlobal('github:acme/web', () => ({ answer: null, project: { defaultTemplateId: 't-review' } }))
   assert.deepEqual(storage.project('github:acme/web'), { providers: {}, agent: 'codex', defaultTemplateId: 't-review' })
-  assert.deepEqual(storage.global(), { templates: [review] })
+  assert.deepEqual(storage.global(), { templates: [review], filters: { github: [triage] } })
 })
 
 test('unload saves the pending changes once and cancels the timer', async () => {

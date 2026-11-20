@@ -97,10 +97,13 @@ export type ProjectSettings = {
 }
 
 /** What belongs to no project: the global prompt templates, offered in every project beside its
- *  own. Global filters will join them. */
+ *  own, and the global filters of each tracker, offered in every project on that tracker. */
 export type GlobalSettings = {
   /** In order; undefined or empty: none. */
   templates?: PromptTemplate[]
+  /** The global filters of each tracker, in order; both Jira providers offer the same ones.
+   *  Undefined or empty: none. */
+  filters?: ByTracker<Filter[]>
 }
 
 /** `global` is undefined while nothing global is stored. */
@@ -139,9 +142,17 @@ export function readSettings(raw: unknown): Settings {
   for (const [id, project] of Object.entries(raw.projects)) {
     if (isRecord(project)) settings.projects[id] = readProjectSettings(project)
   }
-  // Settings stored before global templates have no `global`, and read with none.
+  // Settings stored before global templates and filters have no `global`, and read with none.
+  const global: GlobalSettings = {}
   const templates = readTemplates(isRecord(raw.global) ? raw.global.templates : undefined)
-  if (templates.length > 0) settings.global = { templates }
+  if (templates.length > 0) global.templates = templates
+  const filters: ByTracker<Filter[]> = {}
+  for (const tracker of TRACKER_IDS) {
+    const stored = readFilters(isRecord(raw.global) && isRecord(raw.global.filters) ? raw.global.filters[tracker] : undefined)
+    if (stored.length > 0) filters[tracker] = stored
+  }
+  if (Object.keys(filters).length > 0) global.filters = filters
+  if (Object.keys(global).length > 0) settings.global = global
   return settings
 }
 
@@ -260,6 +271,11 @@ export function globalTemplates(settings: Settings): PromptTemplate[] {
   return globalSettings(settings).templates ?? []
 }
 
+/** The global filters of `tracker`, in order. */
+export function globalFilters(settings: Settings, tracker: TrackerId): Filter[] {
+  return globalSettings(settings).filters?.[tracker] ?? []
+}
+
 /** What the panel changes in what belongs to no project. */
 export type GlobalChanges = Partial<GlobalSettings>
 
@@ -271,17 +287,44 @@ export function withGlobalChanges(settings: Settings, changes: GlobalChanges): S
 /** The part of a project's settings that holds its filters. */
 export type FilterSettings = Pick<ProjectSettings, 'filters' | 'shownFilterId'>
 
-/** A project's filters on `tracker`, in their order: the stored ones, or the initial one when none
- *  is stored, "Tasks" with DEFAULT_JQL on Jira and "Open" with DEFAULT_GITHUB_QUERY on GitHub. */
-export function projectFilters(settings: FilterSettings, tracker: TrackerId): Filter[] {
-  const filters = settings.filters?.[tracker]
-  if (filters && filters.length > 0) return filters
-  return [{ ...INITIAL_FILTERS[tracker], queries: [...INITIAL_FILTERS[tracker].queries] }]
+/** A filter as a project lists it: one of its own, or a global one (`global`). */
+export type ListedFilter = Filter & { global: boolean }
+
+/** The initial filter of `tracker`: what a project lists there while it has no filter of its own on
+ *  it and there is no global one. */
+function initialFilter(tracker: TrackerId): Filter {
+  return { ...INITIAL_FILTERS[tracker], queries: [...INITIAL_FILTERS[tracker].queries] }
 }
 
-/** The filter to list on `tracker`: the one `id` names, else the one shown last, else the first. */
-export function listedFilter(settings: FilterSettings, tracker: TrackerId, id?: string): Filter {
-  const filters = projectFilters(settings, tracker)
+/** Whether `id` is the id of `tracker`'s initial filter, which many projects store as their own. */
+export function isInitialFilterId(tracker: TrackerId, id: string): boolean {
+  return INITIAL_FILTERS[tracker].id === id
+}
+
+/** A project's own filters on `tracker`, in their order: the stored ones; with none stored, the
+ *  initial one while `global`, the global filters of `tracker`, is empty, else none. */
+export function ownFilters(settings: FilterSettings, tracker: TrackerId, global: readonly Filter[]): Filter[] {
+  const filters = settings.filters?.[tracker]
+  if (filters && filters.length > 0) return filters
+  return global.length === 0 ? [initialFilter(tracker)] : []
+}
+
+/** The filters a project lists on `tracker`, in order: its own, then `global`, the global filters
+ *  of `tracker`, each group in its order. A global filter whose id one of the project's own has is
+ *  left out, so an id names one filter. */
+export function projectFilters(settings: FilterSettings, tracker: TrackerId, global: readonly Filter[]): ListedFilter[] {
+  const own = ownFilters(settings, tracker, global)
+  const ids = new Set(own.map((filter) => filter.id))
+  return [
+    ...own.map((filter) => ({ ...filter, global: false })),
+    ...global.filter((filter) => !ids.has(filter.id)).map((filter) => ({ ...filter, global: true }))
+  ]
+}
+
+/** The filter to list on `tracker`, own or among `global`, the global filters of `tracker`: the
+ *  one `id` names, else the one shown last, else the first. */
+export function listedFilter(settings: FilterSettings, tracker: TrackerId, global: readonly Filter[], id?: string): ListedFilter {
+  const filters = projectFilters(settings, tracker, global)
   const shown = settings.shownFilterId?.[tracker]
   return filters.find((filter) => filter.id === id) ?? filters.find((filter) => filter.id === shown) ?? filters[0]
 }
@@ -336,9 +379,10 @@ export function filterAsRun(filter: Filter, tracker: TrackerId, jiraProjectKey: 
 }
 
 /** How many queries a provider runs to list the project's tasks: the non-blank queries of the
- *  filter `filterId` names, or of the one `listedFilter` lists without it. */
-export function queryCount(settings: ProjectSettings, id: ProviderId, filterId?: string): number {
-  return filterQueries(listedFilter(settings, trackerOf(id), filterId).queries).length
+ *  filter `filterId` names, own or among `global`, the global filters of the provider's tracker, or
+ *  of the one `listedFilter` lists without it. */
+export function queryCount(settings: ProjectSettings, id: ProviderId, global: readonly Filter[], filterId?: string): number {
+  return filterQueries(listedFilter(settings, trackerOf(id), global, filterId).queries).length
 }
 
 /** Chooses a provider, keeping every provider's configuration and the filters, and filling in the
