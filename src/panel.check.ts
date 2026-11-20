@@ -21,7 +21,7 @@ import { INITIAL_TEMPLATE_ID, INITIAL_TEMPLATE_NAME, INITIAL_TEMPLATE_TEXT } fro
 type ReadyList = Extract<TaskList, { kind: 'ready' }>
 
 /** The answers of a panel showing `tasks`, whose project is the active one. The worktrees and the
- *  Starts under way are the list's own. A Start, or opening a worktree, does nothing. */
+ *  Starts under way are the list's own. A Start, a Run here, or opening a worktree, does nothing. */
 function answers(tasks: TaskList): MockRequests {
   let worktrees: WorktreesResult = { kind: 'ready', worktrees: {} }
   let starting: string[] = []
@@ -39,6 +39,7 @@ function answers(tasks: TaskList): MockRequests {
     'starts.load': { starting },
     'jira.sites': { kind: 'ready', sites: [{ id: 'site-1', name: 'example.atlassian.net' }] },
     'task.start': { ok: false, message: 'Starting is off in check scenarios.' },
+    'task.runHere': { ok: false, message: 'Running here is off in check scenarios.' },
     'worktree.open': { ok: false, message: 'Opening a worktree is off in check scenarios.' }
   }
 }
@@ -213,6 +214,26 @@ export default defineCheck({
       }
     },
     requests: answers(ready(web, 'github', githubTasks))
+  },
+  // The default template has New worktree off, so the cards offer Run here, their switch off, beside
+  // the template Select. The Prompt templates view opens on it with its New worktree switch off.
+  'run-here': {
+    storage: {
+      settings: {
+        version: 1,
+        projects: {
+          [web.id]: {
+            providers: {},
+            templates: [
+              { id: 'ship', name: 'Ship', text: '/ship-tickets {{task_key}}', newWorktree: false },
+              { id: 'fix', name: 'Fix', text: 'Fix {{task_key}}' }
+            ],
+            defaultTemplateId: 'ship'
+          }
+        }
+      }
+    },
+    requests: answers(ready(web, 'github', githubTasks.slice(0, 3)))
   },
   // Two GitHub filters, the second of two queries shown: the filter row shows it, with ✎ and +.
   'github-filters': {

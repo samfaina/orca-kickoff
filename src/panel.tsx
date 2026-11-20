@@ -1,6 +1,6 @@
-// Kickoff's side panel: the active project's open tasks and Start, and its Project settings. No build
-// step: Orca strips the types and compiles the JSX when the panel loads. The worker does the work;
-// the panel asks it and draws the answers.
+// Kickoff's side panel: the active project's open tasks with Start and Run here, and its Project
+// settings. No build step: Orca strips the types and compiles the JSX when the panel loads. The
+// worker does the work; the panel asks it and draws the answers.
 import {
   Badge,
   Box,
@@ -75,6 +75,7 @@ import {
   projectSettings,
   providerConfig,
   readSettings,
+  RUN_HERE_NEEDS_AGENT,
   SETTINGS_KEY,
   trackerOf,
   type BranchSettings,
@@ -85,6 +86,7 @@ import {
   type ListedFilter,
   type JiraProviderId,
   type JiraSitesResult,
+  type ActionResult,
   type ProjectChanges,
   type ProjectSettings,
   type ProjectRef,
@@ -105,6 +107,7 @@ import {
   defaultTemplate,
   INITIAL_TEMPLATE_TEXT,
   JIRA_PROJECT_VARIABLE,
+  launchesNewWorktree,
   projectTemplates,
   TEMPLATE_VARIABLE_DESCRIPTIONS,
   TEMPLATE_VARIABLES,
@@ -121,6 +124,9 @@ const LOAD_TIMEOUT_MS = 90_000
 /** `task.start` answers after its quick checks, two Orca queries of at most 20 s each; the create
  *  goes on in the worker, which posts `start.ended` when it ends. */
 const START_TIMEOUT_MS = 60_000
+/** `task.runHere` waits for three Orca queries, run together, then the launch, which Orca answers
+ *  in under a second: two calls of at most 20 s each in a row. */
+const RUN_HERE_TIMEOUT_MS = 60_000
 /** How long Delete waits for its second click, as "Confirm delete". */
 const CONFIRM_DELETE_MS = 4_000
 /** How often the panel asks for the active project while it is visible. */
@@ -295,6 +301,8 @@ type TemplateDraft = {
   global: boolean
   /** Whether Save makes the template the project's default template. */
   isDefault: boolean
+  /** The New worktree switch: whether the template's tasks get a Start rather than a Run here. */
+  newWorktree: boolean
   /** Global was turned off on a global template, and the bar asks to confirm it. */
   confirmingOwn: boolean
   /** Another template, or a new one (`id: null`), was chosen while the draft had changes, and the
@@ -340,12 +348,22 @@ let worktreesClock = 0
 let worktreesShownAt = 0
 /** The pending read of the worktrees after a workspace was created or removed. */
 let workspacesTimer: ReturnType<typeof setTimeout> | null = null
-/** The error of each task's last Start, or of opening its worktree. */
+/** The error of each task's last Start or Run here, or of opening its worktree. */
 const taskErrors = atom<Record<string, string>>({})
 
 /** The template chosen on each card, by project and task key, while the panel is open. Never
  *  stored; a card whose template no longer exists shows the default template again. */
 const cardTemplates = atom<Record<string, string>>({})
+
+/** The New worktree switch as changed on each card for its next launch, by project and task key,
+ *  while the panel is open. Never stored, and never written to the template: a launch, or another
+ *  template chosen on the card, drops it, so the card shows its template's setting again. */
+const cardNewWorktree = atom<Record<string, boolean>>({})
+
+/** Cards whose Run here hasn't answered yet, by project and task key. */
+const runningHere = atom<Record<string, true>>({})
+/** The Run here of each card in `runningHere`, so a second press joins it. */
+const hereRuns = new Map<string, Promise<void>>()
 
 /** Whether the Prompt templates view's Variables list is open, while the panel is open. */
 const variablesOpen = atom(false)
@@ -357,11 +375,27 @@ const filtersOpen = atom(true)
 /** The key of a task's card in `cardTemplates`. */
 const cardKey = (projectId: string, taskKey: string) => `${projectId}\n${taskKey}`
 
-/** The template a Start of the task uses: the one chosen on its card while the project still has
- *  it, else the project's default template. */
+/** The template a Start or a Run here of the task uses: the one chosen on its card while the
+ *  project still has it, else the project's default template. */
 function chosenTemplateId(shown: ShownSettings, taskKey: string): string {
   const chosen = read(cardTemplates)[cardKey(shown.projectId, taskKey)]
   return shown.templates.some((template) => template.id === chosen) ? chosen : shown.defaultTemplateId
+}
+
+/** Whether the card's next launch is a Start, in a new worktree, rather than a Run here: its New
+ *  worktree switch as changed for that launch, else the setting of its chosen template. A project
+ *  whose agent choice is "No agent" always starts. */
+function cardLaunchesNewWorktree(shown: ShownSettings, taskKey: string): boolean {
+  if (shown.agent === 'none') return true
+  const changed = read(cardNewWorktree)[cardKey(shown.projectId, taskKey)]
+  if (changed !== undefined) return changed
+  const template = shown.templates.find((candidate) => candidate.id === chosenTemplateId(shown, taskKey))
+  return template ? launchesNewWorktree(template) : true
+}
+
+/** Drops the card's change of its New worktree switch. */
+function dropCardNewWorktree(projectId: string, taskKey: string): void {
+  update(cardNewWorktree, ({ [cardKey(projectId, taskKey)]: _, ...rest }) => rest)
 }
 
 /** The project's templates as `Select` options, the global ones marked. */
@@ -852,29 +886,30 @@ function openTemplate(id: string | null, origin: TemplatesOrigin): boolean {
 }
 
 /** What Save stores of a template, as the view's draft holds it. */
-type TemplateFields = Pick<TemplateDraft, 'name' | 'text' | 'global' | 'isDefault'>
+type TemplateFields = Pick<TemplateDraft, 'name' | 'text' | 'global' | 'isDefault' | 'newWorktree'>
 
 /** A new template as it opens. */
-const NEW_TEMPLATE_FIELDS: TemplateFields = { name: '', text: INITIAL_TEMPLATE_TEXT, global: false, isDefault: false }
+const NEW_TEMPLATE_FIELDS: TemplateFields = { name: '', text: INITIAL_TEMPLATE_TEXT, global: false, isDefault: false, newWorktree: true }
 
 /** A listed template as Save would store it again. */
 const templateFields = (template: ListedTemplate, shown: ShownSettings): TemplateFields => ({
   name: template.name,
   text: template.text,
   global: template.global,
-  isDefault: template.id === shown.defaultTemplateId
+  isDefault: template.id === shown.defaultTemplateId,
+  newWorktree: launchesNewWorktree(template)
 })
 
 /** The draft's template as the shown project lists it, or undefined for a new one or one gone. */
 const storedTemplate = (draft: TemplateDraft, shown: ShownSettings): ListedTemplate | undefined =>
   draft.isNew ? undefined : shown.templates.find((template) => template.id === draft.id)
 
-/** Whether the draft differs from its template as stored, the Global and Default template switches
- *  included, or, for a new one, from a new template as it opens. */
+/** Whether the draft differs from its template as stored, the Global, Default template and New
+ *  worktree switches included, or, for a new one, from a new template as it opens. */
 function templateChanged(draft: TemplateDraft, shown: ShownSettings): boolean {
   const stored = storedTemplate(draft, shown)
   const before = stored ? templateFields(stored, shown) : NEW_TEMPLATE_FIELDS
-  return draft.name !== before.name || draft.text !== before.text || draft.global !== before.global || draft.isDefault !== before.isDefault
+  return (Object.keys(before) as (keyof TemplateFields)[]).some((field) => draft[field] !== before[field])
 }
 
 /** The view's Template `Select`, or + (`id: null`): opens that template at once, or, while the
@@ -942,10 +977,9 @@ function closeTemplate(): void {
   set(templateDraft, null)
 }
 
-/** Save: stores the draft's name, text, Global and Default template in one write, then goes back
- *  to the view it was opened from, unless its name can't be saved or the bar under the form is
- *  asking a question. A template whose Global changed
- *  moves; a move refused, because the destination has the name, or a failed write, changes nothing
+/** Save: stores the draft's name, text, Global, Default template and New worktree in one write,
+ *  then goes back to the view it was opened from, unless its name can't be saved or the bar under
+ *  the form is asking a question. A template whose Global changed moves; a move refused, because the destination has the name, or a failed write, changes nothing
  *  and keeps the draft with the reason. Pending Project settings are saved first, so the change
  *  applies to what the person sees. The template keeps its id, unless it is the initial template
  *  made global: then the default template and the cards that chose it follow the new id. */
@@ -956,7 +990,7 @@ async function saveTemplate(): Promise<void> {
   if (templateNameProblem(shown.templates, draft.name, draft.id, draft.global) !== null) return
   cancelConfirmDelete()
   changeTemplateDraft(draft, { saving: true, error: null, confirmingDelete: false })
-  const template = { id: draft.id, name: draft.name, text: draft.text }
+  const template: PromptTemplate = { id: draft.id, name: draft.name, text: draft.text, ...(draft.newWorktree ? {} : { newWorktree: false }) }
   const options = { isGlobal: draft.global, isDefault: draft.isDefault, freshId: newId('t', shown.templates) }
   let saved: TemplateSave
   try {
@@ -1064,6 +1098,14 @@ function switchDefault(expected: TemplateDraft, on: boolean): void {
   if (!draft || !isSameDraft(draft, expected) || draft.saving) return
   cancelConfirmDelete()
   changeTemplateDraft(draft, { isDefault: on, confirmingDelete: false, error: null })
+}
+
+/** The New worktree switch, kept in the draft for Save. */
+function switchNewWorktree(expected: TemplateDraft, on: boolean): void {
+  const draft = read(templateDraft)
+  if (!draft || !isSameDraft(draft, expected) || draft.saving) return
+  cancelConfirmDelete()
+  changeTemplateDraft(draft, { newWorktree: on, confirmingDelete: false, error: null })
 }
 
 /** Chooses the project's provider, saves it with its configuration and lists its tasks. */
@@ -1421,8 +1463,55 @@ async function askStart(projectId: string, task: Task): Promise<StartResult> {
   }
 }
 
+/** A card's launch: a Start or a Run here, as its New worktree switch says. The switch's change
+ *  applies to this launch only. */
+function launchTask(task: Task, projectId: string, newWorktree: boolean): void {
+  dropCardNewWorktree(projectId, task.key)
+  void (newWorktree ? startTask(task) : runTaskHere(task))
+}
+
+/** Runs the task here with its card's template, or joins the Run here of the card still running,
+ *  so two presses launch one agent. The card shows a spinner until the worker answers, then a
+ *  failure's message. Kickoff keeps no record of it: a worktree the agent links to the task shows
+ *  through the worktree refresh. */
+function runTaskHere(task: Task): Promise<void> {
+  const projectId = readyProjectId()
+  if (!projectId) return Promise.resolve()
+  const key = cardKey(projectId, task.key)
+  const running = hereRuns.get(key)
+  if (running) return running
+  update(runningHere, (keys): Record<string, true> => ({ ...keys, [key]: true as const }))
+  setTaskError(task.key, null)
+  const run = askRunHere(projectId, task).then((answer) => {
+    // A panel opened again since then has its own Run heres, which this one must not end.
+    if (hereRuns.get(key) !== run) return
+    hereRuns.delete(key)
+    update(runningHere, ({ [key]: _, ...rest }) => rest)
+    if (!answer.ok && readyProjectId() === projectId) setTaskError(task.key, answer.message)
+  })
+  hereRuns.set(key, run)
+  return run
+}
+
+/** Saves pending settings, then asks the worker to run the task here with its chosen template. A
+ *  failed save asks the worker nothing. Never rejects. */
+async function askRunHere(projectId: string, task: Task): Promise<ActionResult> {
+  try {
+    await settingsSave.saveNow()
+  } catch (error) {
+    return { ok: false, message: `Couldn't save Project settings (${errorCode(error)}), so ${task.key} didn't run here. Try again.` }
+  }
+  try {
+    const shown = await settingsShownFor(projectId)
+    if (!shown.ok) return shown
+    return await plugin.request('task.runHere', { projectId, task, templateId: chosenTemplateId(shown.settings, task.key) }, { timeoutMs: RUN_HERE_TIMEOUT_MS })
+  } catch (error) {
+    return { ok: false, message: `Kickoff's worker didn't answer (${errorCode(error)}). Look in Orca whether an agent started for ${task.key}.` }
+  }
+}
+
 /** The listed project's settings as shown, read again when a load couldn't read them, or why they
- *  can't be read: a Start needs its template's id, and never falls back to another. */
+ *  can't be read: a Start or a Run here needs its template's id, and never falls back to another. */
 async function settingsShownFor(projectId: string): Promise<{ ok: true; settings: ShownSettings } | { ok: false; message: string }> {
   const current = read(list)
   if (read(shownSettings)?.projectId !== projectId && current?.kind === 'ready' && current.project.id === projectId) {
@@ -1562,6 +1651,9 @@ export function setup(ctx: PanelContext): void {
   lastPolledProjectId = undefined
   set(agentStarting, {})
   set(cardTemplates, {})
+  set(cardNewWorktree, {})
+  set(runningHere, {})
+  hereRuns.clear()
   set(templateDraft, null)
   set(filterDraft, null)
   set(newFilterChoice, null)
@@ -2272,7 +2364,7 @@ function ReadyList({ list }: { list: ReadyTaskList }) {
       ) : null}
       {list.worktrees === null ? (
         <Callout tone="warning" icon="warning">
-          <Text>{`Couldn't read Orca's worktrees, so Start is off. ${list.worktreesError ?? ''}`.trim()}</Text>
+          <Text>{`Couldn't read Orca's worktrees, so Start and Run here are off. ${list.worktreesError ?? ''}`.trim()}</Text>
         </Callout>
       ) : null}
       <FiltersSection projectId={list.project.id} words={query}>
@@ -2415,12 +2507,19 @@ function assigneeLine(task: Task): string | null {
 }
 
 /** One row per part: the key and the whole title; the worktree, or the status and labels; the
- *  assignees; the agent; the template and Start, while there is no worktree. */
+ *  assignees; the agent; the template, New worktree and Start or Run here, while there is no
+ *  worktree, with a note when the project has no agent. */
 function TaskCard({ task, projectId, worktrees }: { task: Task; projectId: string; worktrees: Record<string, TaskWorktree> | null }) {
   // Every GitHub task is open, so its status says nothing.
   const status = task.tracker !== 'github' ? task.status : null
   const worktree = worktrees?.[task.key] ?? null
   const isStarting = worktree === null && read(starting)[task.key] === true
+  const isRunningHere = worktree === null && !isStarting && read(runningHere)[cardKey(projectId, task.key)] === true
+  const canLaunch = worktree === null && !isStarting && !isRunningHere
+  const shown = read(shownSettings)
+  const settings = shown?.projectId === projectId ? shown : null
+  const noAgent = settings?.agent === 'none'
+  const newWorktree = settings ? cardLaunchesNewWorktree(settings, task.key) : true
   const error = read(taskErrors)[task.key]
   const assignees = assigneeLine(task)
   const agent = worktree ? agentLine(worktree, read(agentStarting)[task.key] === projectId) : null
@@ -2453,22 +2552,50 @@ function TaskCard({ task, projectId, worktrees }: { task: Task; projectId: strin
       ) : null}
       {worktree ? null : isStarting ? (
         <Spinner label={`Starting ${task.key}`} />
+      ) : isRunningHere ? (
+        <Spinner label={`Running ${task.key} here`} />
       ) : (
         <Box direction="row" align="center" justify="end" gap="xs">
           <CardTemplate task={task} projectId={projectId} />
           <Box shrink={false}>
-            <IconButton
-              key={`start:${task.key}`}
-              icon="play"
-              variant="outline"
-              label={`Start ${task.key}`}
-              tooltip="Start"
-              disabled={worktrees === null}
-              onPress={() => void startTask(task)}
+            <Switch
+              key={`new-worktree:${task.key}`}
+              label="New worktree"
+              checked={newWorktree}
+              disabled={settings === null || noAgent}
+              onChange={(on) => update(cardNewWorktree, (changed) => ({ ...changed, [cardKey(projectId, task.key)]: on }))}
             />
+          </Box>
+          <Box shrink={false}>
+            {newWorktree ? (
+              <IconButton
+                key={`start:${task.key}`}
+                icon="play"
+                variant="outline"
+                label={`Start ${task.key}`}
+                tooltip="Start"
+                disabled={worktrees === null}
+                onPress={() => launchTask(task, projectId, true)}
+              />
+            ) : (
+              <IconButton
+                key={`run-here:${task.key}`}
+                icon="terminal"
+                variant="outline"
+                label={`Run ${task.key} here`}
+                tooltip="Run here"
+                disabled={worktrees === null}
+                onPress={() => launchTask(task, projectId, false)}
+              />
+            )}
           </Box>
         </Box>
       )}
+      {canLaunch && noAgent ? (
+        <Text size="sm" muted>
+          {RUN_HERE_NEEDS_AGENT}
+        </Text>
+      ) : null}
       {isStarting ? (
         <Text size="sm" muted>
           Creating the worktree can take a minute.
@@ -2483,8 +2610,8 @@ function TaskCard({ task, projectId, worktrees }: { task: Task; projectId: strin
   )
 }
 
-/** The card's template `Select`, filling the Start row; only when the project has two or more
- *  templates. */
+/** The card's template `Select`, filling the Start row before the New worktree switch and the
+ *  button; only when the project has two or more templates. */
 function CardTemplate({ task, projectId }: { task: Task; projectId: string }) {
   const shown = read(shownSettings)
   if (shown?.projectId !== projectId || shown.templates.length < 2) return null
@@ -2495,7 +2622,11 @@ function CardTemplate({ task, projectId }: { task: Task; projectId: string }) {
         labelHidden
         value={chosenTemplateId(shown, task.key)}
         options={templateOptions(shown.templates)}
-        onChange={(id) => update(cardTemplates, (chosen) => ({ ...chosen, [cardKey(projectId, task.key)]: id }))}
+        onChange={(id) => {
+          update(cardTemplates, (chosen) => ({ ...chosen, [cardKey(projectId, task.key)]: id }))
+          // The New worktree switch follows the template chosen.
+          dropCardNewWorktree(projectId, task.key)
+        }}
       />
     </Box>
   )
@@ -2570,6 +2701,12 @@ function TemplatesView({ draft, shown, projectName }: { draft: TemplateDraft; sh
           </Text>
         </Stack>
         <Stack gap="xs">
+          <Switch label="New worktree" checked={draft.newWorktree} disabled={draft.saving} onChange={(on) => switchNewWorktree(draft, on)} />
+          <Text size="sm" muted>
+            Off: tasks launched with this template run here, in the worktree selected in Orca, without a new worktree.
+          </Text>
+        </Stack>
+        <Stack gap="xs">
           <Textarea
             label="Text"
             value={draft.text}
@@ -2597,7 +2734,7 @@ function TemplatesView({ draft, shown, projectName }: { draft: TemplateDraft; sh
         ) : null}
         <Callout icon="info" title="Run a skill">
           <Text size="sm">
-            {'To run a Claude Code skill, start the template with its command, for example `/tdd {{task_key}}`: the rest of the template becomes its arguments. The new worktree must see the skill, so install plugins with user scope, not local, and commit project skills. Other agents have their own syntax.'}
+            {'To run a Claude Code skill, start the template with its command, for example `/tdd {{task_key}}`: the rest of the template becomes its arguments. The worktree the agent runs in must see the skill, so install plugins with user scope, not local, and commit project skills. Other agents have their own syntax.'}
           </Text>
         </Callout>
       </Box>

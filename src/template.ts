@@ -1,6 +1,6 @@
-// Prompt templates: `{{name}}` filled from the task, the project and the Start's branch (the
-// filled-in branch template, else the worktree name). No Node imports, so the panel can use the
-// constants too.
+// Prompt templates: `{{name}}` filled from the task, the project and the branch (a Start's
+// filled-in branch template, else its worktree name; a Run here's current branch). No Node
+// imports, so the panel can use the constants too.
 import type { ProjectRef, ProjectSettings, PromptTemplate, Task } from './protocol'
 
 /** The text of the template a project lists before it stores any of its own while there is no
@@ -65,6 +65,12 @@ export function findTemplate(settings: TemplateSettings, global: readonly Prompt
   return projectTemplates(settings, global).find((template) => template.id === id)
 }
 
+/** Whether a task launched with `template` gets a Start, in a new worktree, rather than a Run here:
+ *  its New worktree switch, on unless it stores `newWorktree: false`. */
+export function launchesNewWorktree(template: PromptTemplate): boolean {
+  return template.newWorktree !== false
+}
+
 /** `templates` with `template` in its place when one has its id, else at the end. */
 function withReplaced(templates: readonly PromptTemplate[], template: PromptTemplate): PromptTemplate[] {
   const known = templates.some((candidate) => candidate.id === template.id)
@@ -79,8 +85,8 @@ export type TemplateSaveOptions = { isGlobal: boolean; isDefault: boolean; fresh
 /** A Save of a template: the template's id after it, and what it stores, or why it is refused. */
 export type TemplateSave = { ok: true; id: string; write: TemplateWrite } | { ok: false; message: string }
 
-/** `template` saved, its name trimmed, among the project's own templates or, when `isGlobal`, the
- *  global ones, in one write: in its place when that group has it, else at the end, also when
+/** `template` saved, its name trimmed and its New worktree setting as given, among the project's
+ *  own templates or, when `isGlobal`, the global ones, in one write: in its place when that group has it, else at the end, also when
  *  neither group holds it any more, as after another project deleted it. A template the other group
  *  holds moves, with its id, to the end of this one, so the project's default template
  *  and the template chosen for a task keep pointing at it, except the initial template's id, which
@@ -151,6 +157,10 @@ export function templateNameProblem(templates: readonly ListedTemplate[], name: 
   return isGlobal ? `Another global template is already called "${other.name}".` : `Another template is already called "${other.name}".`
 }
 
+/** Why a Start or a Run here launches nothing when the template chosen for the task is gone: it
+ *  never falls back to another. */
+export const TEMPLATE_GONE = 'The prompt template you chose no longer exists — pick another one.'
+
 /** `{{task_description}}` is cut to this many characters, `…` included. */
 export const MAX_DESCRIPTION = 4000
 
@@ -186,16 +196,16 @@ export const TEMPLATE_VARIABLE_DESCRIPTIONS: Record<TemplateVariable, string> = 
   tracker: '"github" or "jira".',
   repo: "The project's repository (owner/name) when Orca knows it, else the project's name.",
   branch:
-    "The new worktree's git branch from the branch template the project uses, its own or the global one, such as feature/WEB-12__add-dark-mode. Without a branch template, the worktree's name, such as web-12-add-dark-mode. It doesn't include a -2 Orca may add.",
+    "The new worktree's git branch from the branch template the project uses, its own or the global one, such as feature/WEB-12__add-dark-mode. Without a branch template, the worktree's name, such as web-12-add-dark-mode. It doesn't include a -2 Orca may add. In a Run here, the current branch of the worktree selected in Orca, or nothing when it has none.",
   [JIRA_PROJECT_VARIABLE]: "The project's Jira project key, such as WEB, set in Project settings. Empty when it has none."
 }
 
 export type PromptResult = { ok: true; prompt: string } | { ok: false; message: string }
 
 /** The prompt for `task` from a template's text, in a project whose Jira project key is
- *  `jiraProjectKey` ('' for none), with `branch` as `{{branch}}`: the filled-in branch template,
- *  else the worktree name. An empty text gives the task URL. A prompt over MAX_PROMPT characters
- *  is refused. */
+ *  `jiraProjectKey` ('' for none), with `branch` as `{{branch}}`: a Start's filled-in branch
+ *  template, else its worktree name, or a Run here's current branch. An empty text gives the task
+ *  URL. A prompt over MAX_PROMPT characters is refused. */
 export function buildPrompt(text: string, task: Task, project: ProjectRef, branch: string, jiraProjectKey: string): PromptResult {
   const prompt = text === '' ? task.url : fillTemplate(text, templateVariables(task, project, branch, jiraProjectKey))
   if (prompt.length > MAX_PROMPT) {

@@ -1,6 +1,7 @@
 import { assert, test } from 'orca/testing'
 import { CliError } from './cli'
 import {
+  agentLaunchArgs,
   checkOrcaAnswer,
   findActiveProject,
   findTaskWorktrees,
@@ -198,6 +199,29 @@ test('worktree create carries --branch after --name when a branch is given, and 
 
 test('worktree activate selects the worktree by id', () => {
   assert.deepEqual(worktreeActivateArgs('r1::/w/web'), ['worktree', 'activate', '--worktree', 'id:r1::/w/web', '--json'])
+})
+
+test("worktree ps gives each worktree's current branch without refs/heads/, and '' when it has none", () => {
+  const rows = parseWorktreePs(
+    wrap({
+      worktrees: [
+        { worktreeId: 'a', isActive: true, branch: 'refs/heads/someone/web-12-add-dark-mode', agents: [] },
+        { worktreeId: 'b', isActive: false, branch: 'feature/WEB-7', agents: [] },
+        { worktreeId: 'c', isActive: false, branch: null, agents: [] },
+        { worktreeId: 'd', isActive: false, agents: [] }
+      ]
+    })
+  )
+  assert.deepEqual(
+    rows.map((row) => row.branch),
+    ['someone/web-12-add-dark-mode', 'feature/WEB-7', '', '']
+  )
+})
+
+test('agent launch runs the agent in the worktree by its id, with the prompt, focused', () => {
+  assert.deepEqual(agentLaunchArgs({ worktreeId: 'r1::/w/web', agent: 'claude', prompt: '/ship-tickets WEB-12' }), [
+    'agent', 'launch', '--agent', 'claude', '--worktree', 'id:r1::/w/web', '--prompt', '/ship-tickets WEB-12', '--focus', '--json'
+  ])
 })
 
 test('an answer from worktree create is checked for errors', () => {
