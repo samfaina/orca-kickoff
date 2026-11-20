@@ -7,7 +7,6 @@ import {
   Button,
   Callout,
   Code,
-  CodeView,
   Collapsible,
   EmptyState,
   Field,
@@ -111,10 +110,9 @@ import {
   TEMPLATE_VARIABLES,
   templateNameProblem,
   withTemplateDeleted,
-  withTemplateMoved,
   withTemplateSaved,
   type ListedTemplate,
-  type TemplateMove,
+  type TemplateSave,
   type TemplateWrite
 } from './template'
 
@@ -281,17 +279,27 @@ type FilterDraft = {
   confirmingDelete: boolean
 }
 
-/** The template detail's draft: a template of `projectId`, or a global one, being edited, or a new
- *  one. */
+/** Where the Prompt templates view goes back to on Cancel and Save: the task list or Project
+ *  settings, the view it was opened from. */
+type TemplatesOrigin = 'list' | 'settings'
+
+/** The Prompt templates view's draft: a template of `projectId`, or a global one, being edited, or a
+ *  new one. Save writes all of it at once; Cancel drops it. */
 type TemplateDraft = {
   projectId: string
+  origin: TemplatesOrigin
   id: string
   isNew: boolean
-  /** Where the template is: among the global ones, or the project's own. For a new one, where Save
-   *  stores it. */
+  /** Where Save stores the template: among the global ones, or the project's own. A stored template
+   *  whose group differs from this moves on Save. */
   global: boolean
-  /** Global was turned off, and the bar asks to confirm the move to the project. */
+  /** Whether Save makes the template the project's default template. */
+  isDefault: boolean
+  /** Global was turned off on a global template, and the bar asks to confirm it. */
   confirmingOwn: boolean
+  /** Another template, or a new one (`id: null`), was chosen while the draft had changes, and the
+   *  bar asks to discard them. */
+  discarding: { id: string | null } | null
   name: string
   text: string
   /** The error of the last write, shown until the next one. */
@@ -339,7 +347,7 @@ const taskErrors = atom<Record<string, string>>({})
  *  stored; a card whose template no longer exists shows the default template again. */
 const cardTemplates = atom<Record<string, string>>({})
 
-/** Whether the template detail's Variables list is open, while the panel is open. */
+/** Whether the Prompt templates view's Variables list is open, while the panel is open. */
 const variablesOpen = atom(false)
 
 /** Whether "Filters", the filter row and Search tasks above the list, is open, while the panel is
@@ -385,7 +393,7 @@ type TrackerSearch =
 /** The tracker search shown, or null while the loaded list is. */
 const trackerSearch = atom<TrackerSearch | null>(null)
 
-/** The template detail's draft while it replaces the panel view, else null. */
+/** The Prompt templates view's draft while it replaces the panel view, else null. */
 const templateDraft = atom<TemplateDraft | null>(null)
 
 /** The filter editor's draft while it replaces the panel view, else null. */
@@ -811,27 +819,105 @@ async function moveFilter(draft: FilterDraft, toGlobal: boolean): Promise<void> 
   update(filterDraft, (current) => (current && isSameDraft(current, draft) ? { ...current, id, global: toGlobal, saving: false } : current))
 }
 
-/** Opens the template detail for one of the shown project's templates, or for a new one. It opens
- *  from Project settings, which stays open to come back to. */
-function openTemplate(id: string | null): void {
+/** Opens the Prompt templates view, in place of the panel view, on the shown project's default
+ *  template. Cancel and Save go back to `origin`. */
+function openTemplates(origin: TemplatesOrigin): void {
   const shown = read(shownSettings)
-  if (!shown) return
+  if (shown) openTemplate(shown.defaultTemplateId, origin)
+}
+
+/** Opens the Prompt templates view on one of the shown project's templates, or on a new one, with
+ *  a fresh draft. Cancel and Save go back to `origin`. Answers false, opening nothing, when the
+ *  project no longer lists that template. */
+function openTemplate(id: string | null, origin: TemplatesOrigin): boolean {
+  const shown = read(shownSettings)
+  if (!shown) return false
   const template = id === null ? null : shown.templates.find((candidate) => candidate.id === id)
-  if (id !== null && !template) return
+  if (id !== null && !template) return false
   closeFilter()
-  set(settingsChoice, 'open')
+  cancelConfirmDelete()
   set(templateDraft, {
     projectId: shown.projectId,
+    origin,
     id: template?.id ?? newId('t', shown.templates),
     isNew: !template,
-    global: template?.global ?? false,
+    ...(template ? templateFields(template, shown) : NEW_TEMPLATE_FIELDS),
     confirmingOwn: false,
-    name: template?.name ?? '',
-    text: template?.text ?? INITIAL_TEMPLATE_TEXT,
+    discarding: null,
     error: null,
     saving: false,
     confirmingDelete: false
   })
+  return true
+}
+
+/** What Save stores of a template, as the view's draft holds it. */
+type TemplateFields = Pick<TemplateDraft, 'name' | 'text' | 'global' | 'isDefault'>
+
+/** A new template as it opens. */
+const NEW_TEMPLATE_FIELDS: TemplateFields = { name: '', text: INITIAL_TEMPLATE_TEXT, global: false, isDefault: false }
+
+/** A listed template as Save would store it again. */
+const templateFields = (template: ListedTemplate, shown: ShownSettings): TemplateFields => ({
+  name: template.name,
+  text: template.text,
+  global: template.global,
+  isDefault: template.id === shown.defaultTemplateId
+})
+
+/** The draft's template as the shown project lists it, or undefined for a new one or one gone. */
+const storedTemplate = (draft: TemplateDraft, shown: ShownSettings): ListedTemplate | undefined =>
+  draft.isNew ? undefined : shown.templates.find((template) => template.id === draft.id)
+
+/** Whether the draft differs from its template as stored, the Global and Default template switches
+ *  included, or, for a new one, from a new template as it opens. */
+function templateChanged(draft: TemplateDraft, shown: ShownSettings): boolean {
+  const stored = storedTemplate(draft, shown)
+  const before = stored ? templateFields(stored, shown) : NEW_TEMPLATE_FIELDS
+  return draft.name !== before.name || draft.text !== before.text || draft.global !== before.global || draft.isDefault !== before.isDefault
+}
+
+/** The view's Template `Select`, or + (`id: null`): opens that template at once, or, while the
+ *  draft has changes, asks first, in the bar under the form. */
+function chooseTemplate(id: string | null): void {
+  const draft = read(templateDraft)
+  const shown = read(shownSettings)
+  if (!draft || draft.saving || draft.discarding || shown?.projectId !== draft.projectId) return
+  if (id !== null && id === draft.id) return
+  if (!templateChanged(draft, shown)) {
+    openTemplate(id, draft.origin)
+    return
+  }
+  cancelConfirmDelete()
+  changeTemplateDraft(draft, { discarding: { id }, confirmingOwn: false, confirmingDelete: false })
+}
+
+/** Keep editing, in the bar that asks before the draft's changes are dropped. */
+function keepEditing(): void {
+  const draft = read(templateDraft)
+  if (draft?.discarding) changeTemplateDraft(draft, { discarding: null })
+}
+
+/** Discard, in the bar that asks before the draft's changes are dropped: opens the template chosen,
+ *  or the default template when it is gone meanwhile. */
+function discardTemplateChanges(): void {
+  const draft = read(templateDraft)
+  if (!draft?.discarding) return
+  if (!openTemplate(draft.discarding.id, draft.origin)) openTemplates(draft.origin)
+}
+
+/** Leaves the Prompt templates view for the view it was opened from: Project settings, kept open
+ *  also when a load meanwhile listed the tasks, or the task list, where Project settings still open
+ *  by themselves when a load needs them. */
+function leaveTemplates(draft: TemplateDraft): void {
+  closeTemplate()
+  if (draft.origin === 'settings') set(settingsChoice, 'open')
+}
+
+/** Cancel: leaves the view without saving. */
+function cancelTemplates(): void {
+  const draft = read(templateDraft)
+  if (draft && !draft.saving) leaveTemplates(draft)
 }
 
 /** An id, starting with `prefix`, that none of `items` has. */
@@ -842,7 +928,7 @@ function newId(prefix: string, items: { id: string }[]): string {
   }
 }
 
-/** Changes the detail's draft, while it is still the draft of the `expected` template. */
+/** Changes the Prompt templates view's draft, while it is still the draft of the `expected` template. */
 function changeTemplateDraft(expected: TemplateDraft, changes: Partial<TemplateDraft>): void {
   update(templateDraft, (draft) => (draft && isSameDraft(draft, expected) ? { ...draft, ...changes } : draft))
 }
@@ -850,26 +936,61 @@ function changeTemplateDraft(expected: TemplateDraft, changes: Partial<TemplateD
 /** Whether two drafts are of the same template, or the same filter, of the same project. */
 const isSameDraft = (a: { projectId: string; id: string }, b: { projectId: string; id: string }) => a.projectId === b.projectId && a.id === b.id
 
-/** Leaves the template detail without saving. */
+/** Drops the Prompt templates view's draft, which closes the view. */
 function closeTemplate(): void {
   cancelConfirmDelete()
   set(templateDraft, null)
 }
 
-/** Stores the draft's template and goes back, unless its name can't be saved. */
+/** Save: stores the draft's name, text, Global and Default template in one write, then goes back
+ *  to the view it was opened from, unless its name can't be saved or the bar under the form is
+ *  asking a question. A template whose Global changed
+ *  moves; a move refused, because the destination has the name, or a failed write, changes nothing
+ *  and keeps the draft with the reason. Pending Project settings are saved first, so the change
+ *  applies to what the person sees. The template keeps its id, unless it is the initial template
+ *  made global: then the default template and the cards that chose it follow the new id. */
 async function saveTemplate(): Promise<void> {
   const draft = read(templateDraft)
   const shown = read(shownSettings)
-  if (!draft || draft.saving || shown?.projectId !== draft.projectId) return
+  if (!draft || draft.saving || draft.confirmingOwn || draft.discarding || shown?.projectId !== draft.projectId) return
   if (templateNameProblem(shown.templates, draft.name, draft.id, draft.global) !== null) return
+  cancelConfirmDelete()
+  changeTemplateDraft(draft, { saving: true, error: null, confirmingDelete: false })
   const template = { id: draft.id, name: draft.name, text: draft.text }
-  await writeTemplates(draft, (project, global) => withTemplateSaved(project, global, template, draft.global))
+  const options = { isGlobal: draft.global, isDefault: draft.isDefault, freshId: newId('t', shown.templates) }
+  let saved: TemplateSave
+  try {
+    saved = await settingsSave.writeProjectAndGlobal<TemplateSave>(draft.projectId, (project, global) => {
+      const save = withTemplateSaved(project, global.templates ?? [], template, options)
+      return save.ok ? { answer: save, ...save.write } : { answer: save }
+    })
+  } catch (error) {
+    changeTemplateDraft(draft, { saving: false, error: `Couldn't save the template (${errorCode(error)}). Try again.` })
+    return
+  }
+  if (!saved.ok) {
+    changeTemplateDraft(draft, { saving: false, error: saved.message })
+    return
+  }
+  showTemplates(draft.projectId, saved.write)
+  if (saved.id !== draft.id) followTemplate(draft.projectId, draft.id, saved.id)
+  const current = read(templateDraft)
+  if (current && isSameDraft(current, draft)) leaveTemplates(current)
+}
+
+/** Points the cards of `projectId` that chose the template `from` at `to`, its new id. */
+function followTemplate(projectId: string, from: string, to: string): void {
+  const prefix = cardKey(projectId, '')
+  update(cardTemplates, (chosen) => Object.fromEntries(Object.entries(chosen).map(([key, value]) => [key, key.startsWith(prefix) && value === from ? to : value])))
 }
 
 /** The pending end of a Delete's wait for its second click. */
 let confirmDeleteTimer: ReturnType<typeof setTimeout> | null = null
 
-/** The first click asks for a second within a few seconds; the second deletes the template. */
+/** The first click asks for a second within a few seconds; the second deletes the template as
+ *  stored, and the view stays open on the project's default template, which is the first listed
+ *  when the default was the one deleted. A failed write keeps the draft with the error. Pending
+ *  Project settings are saved first, so the change applies to what the person sees. */
 async function deleteTemplate(): Promise<void> {
   const draft = read(templateDraft)
   if (!draft || draft.saving || draft.isNew) return
@@ -882,36 +1003,28 @@ async function deleteTemplate(): Promise<void> {
     }, CONFIRM_DELETE_MS)
     return
   }
-  await writeTemplates(draft, (project, global) => withTemplateDeleted(project, global, draft.id))
+  changeTemplateDraft(draft, { saving: true, error: null, confirmingDelete: false, confirmingOwn: false })
+  let written: TemplateWrite | null
+  try {
+    written = await settingsSave.writeProjectAndGlobal(draft.projectId, (project, global) => {
+      const write = withTemplateDeleted(project, global.templates ?? [], draft.id)
+      return write ? { answer: write, ...write } : { answer: null }
+    })
+  } catch (error) {
+    changeTemplateDraft(draft, { saving: false, error: `Couldn't delete the template (${errorCode(error)}). Try again.` })
+    return
+  }
+  if (written) showTemplates(draft.projectId, written)
+  const current = read(templateDraft)
+  if (!current || !isSameDraft(current, draft)) return
+  if (written) openTemplates(current.origin)
+  else changeTemplateDraft(current, { saving: false })
 }
 
 /** Stops waiting for Delete's second click. */
 function cancelConfirmDelete(): void {
   if (confirmDeleteTimer !== null) clearTimeout(confirmDeleteTimer)
   confirmDeleteTimer = null
-}
-
-/** Writes a change to the draft project's templates and the global ones, then shows them and goes
- *  back. A failed write keeps the detail open with its error and the draft. Pending Project settings
- *  are saved first, so the change applies to what the person sees. */
-async function writeTemplates(
-  draft: TemplateDraft,
-  change: (project: ProjectSettings, global: PromptTemplate[]) => TemplateWrite | null
-): Promise<void> {
-  changeTemplateDraft(draft, { saving: true, error: null, confirmingDelete: false, confirmingOwn: false })
-  let written: TemplateWrite | null
-  try {
-    written = await settingsSave.writeProjectAndGlobal(draft.projectId, (project, global) => {
-      const write = change(project, global.templates ?? [])
-      return write ? { answer: write, ...write } : { answer: null }
-    })
-  } catch (error) {
-    changeTemplateDraft(draft, { saving: false, error: `Couldn't save the template (${errorCode(error)}). Try again.` })
-    return
-  }
-  if (written) showTemplates(draft.projectId, written)
-  const current = read(templateDraft)
-  if (current && isSameDraft(current, draft)) set(templateDraft, null)
 }
 
 /** Shows the templates a write stored, while the project is still the one shown. */
@@ -922,62 +1035,35 @@ function showTemplates(projectId: string, written: TemplateWrite): void {
   set(shownSettings, { ...shown, templates: projectTemplates(written.project, global), defaultTemplateId: defaultTemplate(written.project, global).id })
 }
 
-/** The Global switch: on a new template, where Save stores it. On a stored one, turning it on moves
- *  the template to the global ones at once; turning it off asks first, in the bar under the form,
- *  and turning it on again while it asks keeps it global. */
+/** The Global switch, kept in the draft for Save. Turning it off on a template stored among the
+ *  global ones asks first, in the bar under the form, and turning it on again while it asks keeps it
+ *  global. */
 function switchGlobal(expected: TemplateDraft, on: boolean): void {
   const draft = read(templateDraft)
+  const shown = read(shownSettings)
   if (!draft || !isSameDraft(draft, expected) || draft.saving) return
-  if (draft.isNew) {
-    changeTemplateDraft(draft, { global: on, error: null })
-    return
-  }
   cancelConfirmDelete()
-  if (draft.global) {
-    changeTemplateDraft(draft, { confirmingOwn: !on, confirmingDelete: false, error: null })
+  const storedGlobal = shown?.projectId === draft.projectId && storedTemplate(draft, shown)?.global === true
+  if (!on && draft.global && storedGlobal) {
+    changeTemplateDraft(draft, { confirmingOwn: true, confirmingDelete: false, error: null })
     return
   }
-  if (on) void moveTemplate(draft, true)
+  changeTemplateDraft(draft, { global: on, confirmingOwn: false, confirmingDelete: false, error: null })
 }
 
-/** Confirm, in the bar that asks before Global is turned off: moves the template to the project. */
+/** Confirm, in the bar that asks before Global is turned off: turns it off in the draft, so Save
+ *  moves the template to the project. */
 function confirmOwn(): void {
   const draft = read(templateDraft)
-  if (draft?.confirmingOwn && !draft.saving) void moveTemplate(draft, false)
+  if (draft?.confirmingOwn && !draft.saving) changeTemplateDraft(draft, { global: false, confirmingOwn: false })
 }
 
-/** Moves the draft's template, as stored, to the global ones or to the project, in one write, and
- *  keeps the detail open on it. The name and text typed stay in the draft for Save. A move refused,
- *  because the destination has the name, or a failed write, changes nothing and shows why. The
- *  template keeps its id, unless it is the initial template made global: then the default template
- *  and the cards that chose it follow the new id. */
-async function moveTemplate(draft: TemplateDraft, toGlobal: boolean): Promise<void> {
-  changeTemplateDraft(draft, { saving: true, error: null, confirmingDelete: false, confirmingOwn: false })
-  const shown = read(shownSettings)
-  const freshId = newId('t', shown?.templates ?? [])
-  let moved: TemplateMove
-  try {
-    moved = await settingsSave.writeProjectAndGlobal<TemplateMove>(draft.projectId, (project, global) => {
-      const move = withTemplateMoved(project, global.templates ?? [], draft.id, toGlobal, freshId)
-      return move.ok ? { answer: move, ...move.write } : { answer: move }
-    })
-  } catch (error) {
-    changeTemplateDraft(draft, { saving: false, error: `Couldn't move the template (${errorCode(error)}). Try again.` })
-    return
-  }
-  if (!moved.ok) {
-    changeTemplateDraft(draft, { saving: false, error: moved.message })
-    return
-  }
-  showTemplates(draft.projectId, moved.write)
-  const { id } = moved
-  if (id !== draft.id) {
-    const prefix = cardKey(draft.projectId, '')
-    update(cardTemplates, (chosen) =>
-      Object.fromEntries(Object.entries(chosen).map(([key, value]) => [key, key.startsWith(prefix) && value === draft.id ? id : value]))
-    )
-  }
-  update(templateDraft, (current) => (current && isSameDraft(current, draft) ? { ...current, id, global: toGlobal, saving: false } : current))
+/** The Default template switch, kept in the draft for Save. */
+function switchDefault(expected: TemplateDraft, on: boolean): void {
+  const draft = read(templateDraft)
+  if (!draft || !isSameDraft(draft, expected) || draft.saving) return
+  cancelConfirmDelete()
+  changeTemplateDraft(draft, { isDefault: on, confirmingDelete: false, error: null })
 }
 
 /** Chooses the project's provider, saves it with its configuration and lists its tasks. */
@@ -1035,7 +1121,7 @@ async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
   const mine = startLoading()
   const { answer, askedAt, worktreesAskedAt, savedTrackerSettings } = await askTasks({})
   if (mine !== generation) return
-  // A change of active project drops the template detail's draft and the filter editor's. An answer
+  // A change of active project drops the Prompt templates view's draft and the filter editor's. An answer
   // that names no project because the worker didn't answer says nothing about it.
   const answeredProjectId = answer.kind === 'no-project' ? null : answer.project?.id
   const draft = read(templateDraft)
@@ -1486,7 +1572,7 @@ export function setup(ctx: PanelContext): void {
   set(fieldText, '')
   set(trackerSearch, null)
   set(settingsSaveError, null)
-  // Closing the panel drops the template detail's draft and the filter editor's.
+  // Closing the panel drops the Prompt templates view's draft and the filter editor's.
   ctx.subscriptions.push({ dispose: closeTemplate })
   ctx.subscriptions.push({ dispose: closeFilter })
   let polling = false
@@ -1520,7 +1606,7 @@ export default function Panel() {
   const draft = read(templateDraft)
   const shown = read(shownSettings)
   if (draft && shown?.projectId === draft.projectId) {
-    return <TemplateDetail draft={draft} templates={shown.templates} projectName={project?.name ?? ''} />
+    return <TemplatesView draft={draft} shown={shown} projectName={project?.name ?? ''} />
   }
   const filterEdit = read(filterDraft)
   if (filterEdit && shown?.projectId === filterEdit.projectId) {
@@ -1556,14 +1642,17 @@ export default function Panel() {
 const needsSettings = (current: TaskList | null) =>
   current?.kind === 'needs-config' || (current?.kind === 'error' && current.filterId === undefined && current.needsJiraProjectKey !== true)
 
-/** The panel's title, since its tab shows only its icon, and its actions. `gear` shows the button
- *  that opens Project settings. */
+/** The panel's title, since its tab shows only its icon, and its actions. `gear` shows the buttons
+ *  that open the Prompt templates view and Project settings. */
 function Header({ projectName, gear }: { projectName: string | null; gear: boolean }) {
   return (
     <TitleRow prefix={projectName !== null ? 'Kickoff ·' : null} title={projectName ?? 'Kickoff'} level={2}>
       <Row gap="xs" align="center">
         {read(loading) && read(list) ? <Spinner label="Reloading tasks" labelHidden /> : null}
         <IconButton icon="refresh" label="Reload tasks" tooltip="Reload tasks" size="sm" variant="ghost" onPress={() => void load()} />
+        {gear ? (
+          <IconButton icon="layers" label="Prompt templates" tooltip="Prompt templates" size="sm" variant="ghost" onPress={() => openTemplates('list')} />
+        ) : null}
         {gear ? (
           <IconButton icon="settings" label="Project settings" tooltip="Project settings" size="sm" variant="ghost" onPress={() => set(settingsChoice, 'open')} />
         ) : null}
@@ -2019,37 +2108,28 @@ function JiraTwgSettings({ providers }: { providers: ProviderConfigs }) {
   )
 }
 
-/** The agent choice and the default template, with the buttons that edit it or add one, and its text. */
+/** The agent choice, and the default template with the button beside it that opens the Prompt
+ *  templates view. */
 function StartFields({ shown }: { shown: ShownSettings }) {
   const agentOptions = AGENT_OPTIONS.some((option) => option.value === shown.agent)
     ? AGENT_OPTIONS
     : [...AGENT_OPTIONS, { value: shown.agent, label: shown.agent }]
-  const text = shown.templates.find((template) => template.id === shown.defaultTemplateId)?.text ?? ''
   return (
     <Stack gap="sm">
       <Select label="Agent" value={shown.agent} options={agentOptions} onChange={(agent) => changeSettings({ agent })} />
-      <Select
-        label="Default template"
-        value={shown.defaultTemplateId}
-        options={templateOptions(shown.templates)}
-        onChange={(defaultTemplateId) => changeSettings({ defaultTemplateId })}
-      />
-      <Box direction="row" justify="between" align="center" gap="xs">
-        <Text size="sm" muted>
-          Template text
-        </Text>
-        <Row gap="none" align="center">
-          <IconButton icon="edit" label="Edit template" tooltip="Edit template" size="sm" variant="ghost" onPress={() => openTemplate(shown.defaultTemplateId)} />
-          <IconButton icon="add" label="New template" tooltip="New template" size="sm" variant="ghost" onPress={() => openTemplate(null)} />
-        </Row>
+      <Box direction="row" align="end" gap="xs">
+        <Box grow minWidth={0}>
+          <Select
+            label="Default template"
+            value={shown.defaultTemplateId}
+            options={templateOptions(shown.templates)}
+            onChange={(defaultTemplateId) => changeSettings({ defaultTemplateId })}
+          />
+        </Box>
+        <Box shrink={false}>
+          <IconButton icon="layers" label="Manage templates" tooltip="Manage templates" size="sm" variant="ghost" onPress={() => openTemplates('settings')} />
+        </Box>
       </Box>
-      {text === '' ? (
-        <Text size="sm" muted>
-          Empty: the prompt is the task URL.
-        </Text>
-      ) : (
-        <CodeView code={text} wrap maxHeight="sm" />
-      )}
     </Stack>
   )
 }
@@ -2421,24 +2501,41 @@ function CardTemplate({ task, projectId }: { task: Task; projectId: string }) {
   )
 }
 
-/** The template detail, in place of the panel view. The title row with Cancel and Save, and the
- *  bar under the form, stay in place while the form between them scrolls. That bar is the Delete
- *  bar, or, while turning Global off waits for its confirmation, the bar that asks for it. */
-function TemplateDetail({ draft, templates, projectName }: { draft: TemplateDraft; templates: ListedTemplate[]; projectName: string }) {
+/** The Prompt templates view, in place of the panel view: the title row with Cancel and Save, the
+ *  Template `Select` with +, then the form of the template it shows, which scrolls, and the bar
+ *  under the form, which stays in place. That bar is the Delete bar, or the bar that asks while
+ *  choosing another template waits to discard the draft's changes, or while turning Global off
+ *  waits for its confirmation. */
+function TemplatesView({ draft, shown, projectName }: { draft: TemplateDraft; shown: ShownSettings; projectName: string }) {
+  const { templates } = shown
   const nameProblem = templateNameProblem(templates, draft.name, draft.id, draft.global)
+  const isCurrentDefault = !draft.isNew && draft.id === shown.defaultTemplateId
+  const choosing = draft.saving || draft.discarding !== null
+  // Save waits while the bar under the form asks a question.
+  const asking = draft.confirmingOwn || draft.discarding !== null
+  const options = draft.isNew ? [{ value: draft.id, label: 'New template' }, ...templateOptions(templates)] : templateOptions(templates)
+  const stored = storedTemplate(draft, shown)
   return (
     <Box direction="column" gap="sm" height="100%">
-      <TitleRow prefix={projectName !== '' ? `${projectName} ·` : null} title={draft.isNew ? 'New template' : 'Edit template'} level={3}>
+      <TitleRow prefix={projectName !== '' ? `${projectName} ·` : null} title="Prompt templates" level={3}>
         <Row gap="xs" align="center">
           {draft.saving ? <Spinner label="Saving the template" labelHidden /> : null}
-          <Button key="template-cancel" size="sm" variant="ghost" disabled={draft.saving} onPress={closeTemplate}>
+          <Button key="template-cancel" size="sm" variant="ghost" disabled={draft.saving} onPress={cancelTemplates}>
             Cancel
           </Button>
-          <Button key="template-save" size="sm" variant="solid" disabled={nameProblem !== null || draft.saving} onPress={() => void saveTemplate()}>
+          <Button key="template-save" size="sm" variant="solid" disabled={nameProblem !== null || draft.saving || asking} onPress={() => void saveTemplate()}>
             Save
           </Button>
         </Row>
       </TitleRow>
+      <Box direction="row" align="center" gap="xs">
+        <Box grow minWidth={0}>
+          <Select label="Template" labelHidden value={draft.id} options={options} disabled={choosing} onChange={chooseTemplate} />
+        </Box>
+        <Box shrink={false}>
+          <IconButton icon="add" label="New template" tooltip="New template" size="sm" variant="ghost" disabled={choosing} onPress={() => chooseTemplate(null)} />
+        </Box>
+      </Box>
       <Box direction="column" gap="sm" grow minHeight={0} maxHeight="100%" scroll="y">
         <Stack gap="xs">
           <Input label="Name" value={draft.name} invalid={nameProblem !== null} onChange={(name) => changeTemplateDraft(draft, { name })} />
@@ -2457,6 +2554,19 @@ function TemplateDetail({ draft, templates, projectName }: { draft: TemplateDraf
           />
           <Text size="sm" muted>
             A global template is offered in every project, and editing or deleting it changes it in every project.
+          </Text>
+        </Stack>
+        <Stack gap="xs">
+          <Switch
+            label="Default template"
+            checked={draft.isDefault}
+            disabled={isCurrentDefault || draft.saving}
+            onChange={(on) => switchDefault(draft, on)}
+          />
+          <Text size="sm" muted>
+            {isCurrentDefault
+              ? "Tasks start with it unless you choose another template on their card. To change the default, turn this on in another template."
+              : 'Tasks start with the default template unless you choose another one on their card.'}
           </Text>
         </Stack>
         <Stack gap="xs">
@@ -2491,7 +2601,19 @@ function TemplateDetail({ draft, templates, projectName }: { draft: TemplateDraf
           </Text>
         </Callout>
       </Box>
-      {draft.isNew ? null : draft.confirmingOwn ? (
+      {draft.discarding ? (
+        <Box direction="row" justify="end" align="center" gap="xs" shrink={false}>
+          <Text size="sm" tone="warning">
+            {`Discard your changes to ${stored ? stored.name : 'the new template'}?`}
+          </Text>
+          <Button key="template-keep-editing" size="sm" variant="ghost" onPress={keepEditing}>
+            Keep editing
+          </Button>
+          <Button key="template-discard" size="sm" variant="solid" onPress={discardTemplateChanges}>
+            Discard
+          </Button>
+        </Box>
+      ) : draft.isNew ? null : draft.confirmingOwn ? (
         <Box direction="row" justify="end" align="center" gap="xs" shrink={false}>
           <Text size="sm" tone="warning">
             Other projects will stop offering it.
@@ -2505,7 +2627,7 @@ function TemplateDetail({ draft, templates, projectName }: { draft: TemplateDraf
         </Box>
       ) : (
         <Box direction="row" justify="end" align="center" gap="xs" shrink={false}>
-          {draft.global ? (
+          {stored?.global ? (
             <Text size="sm" muted>
               Deletes it in every project.
             </Text>
@@ -2591,8 +2713,10 @@ function NewFilterChooser({ choice, projectName }: { choice: NewFilterChoice; pr
   )
 }
 
-/** The filter editor, in place of the panel view, as the template detail: the title row with
- *  Cancel and Save, and the bar under the form, stay in place while the form between them scrolls.
+/** The filter editor, in place of the panel view, laid out as the Prompt templates view without
+ *  its Template row: the title row with Cancel and Save, and the bar under the form, stay in place
+ *  while the form between them scrolls. Unlike that view's, its Global switch moves a stored filter
+ *  at once.
  *  That bar is the Delete bar, or, while turning Global off waits for its confirmation, the bar
  *  that asks for it. The form starts with the failed load that opened it, if one did. `filters`
  *  are those the project lists on the draft's tracker, its own and the global ones. */

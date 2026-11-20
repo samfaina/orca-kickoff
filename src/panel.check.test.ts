@@ -80,6 +80,23 @@ test("global-templates offers the project's own template, then the global ones m
   assert.equal(select.props.value, 'test-first')
 })
 
+test('global-templates opens the Prompt templates view from the header on the default template, global, with every template to choose', async () => {
+  const shown = await render('global-templates')
+  await shown.press({ type: 'IconButton', label: 'Prompt templates' })
+  assert.ok(shown.find({ type: 'Heading', text: 'Prompt templates' }))
+  const select = shown.find({ type: 'Select', label: 'Template' })
+  assert.equal(select?.props.value, 'test-first')
+  assert.deepEqual(
+    (select?.props.options as { label: string }[]).map((option) => option.label),
+    ['Fix', 'Test first (Global)', 'Review (Global)']
+  )
+  assert.equal(shown.find({ type: 'Switch', label: 'Global' })?.props.checked, true)
+  assert.equal(shown.find({ type: 'Switch', label: 'Default template' })?.props.checked, true)
+  assert.ok(shown.find({ type: 'Text', text: 'Deletes it in every project.' }))
+  assert.deepEqual(shown.errors, [])
+  assert.deepEqual(shown.warnings, [])
+})
+
 test('jira-started shows started tasks with their worktree and agent, one starting, and Load more', async () => {
   const shown = await render('jira-started')
   assert.ok(shown.find({ text: 'Agent: claude' }))

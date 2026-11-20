@@ -197,6 +197,8 @@ export default defineCheck({
   'github-ready': { requests: answers(ready(web, 'github', githubTasks)) },
   // One template of the project's own and two global ones: the cards' template Select lists the
   // project's first, then the global ones, marked Global; the default template is a global one.
+  // "Prompt templates" in the header opens the view on it, its Global and Default template switches
+  // on.
   'global-templates': {
     storage: {
       settings: {
