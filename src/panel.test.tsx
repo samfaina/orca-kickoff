@@ -1285,6 +1285,38 @@ test('two presses of Run here ask the worker once', async () => {
   assert.equal(runs, 1)
 })
 
+test('a Run here of a closed panel that answers late leaves the spinner of the panel opened again', async () => {
+  const first = held()
+  const second = held()
+  let runs = 0
+  const requests: MockRequests = {
+    'tasks.load': ready([task('#42')]),
+    'task.runHere': async () => {
+      await (++runs === 1 ? first : second).released
+      return { ok: true }
+    }
+  }
+  const { view } = await showWith(requests, stored({ templates: [ship] }))
+  const pressed = view.press(runHereButton('#42'))
+  await drawn(view, { type: 'Spinner', label: 'Running #42 here' })
+
+  // Mounting again ends the first view and opens the panel afresh, as Orca does.
+  const again = await showWith(requests, stored({ templates: [ship] }))
+  const pressedAgain = again.view.press(runHereButton('#42'))
+  await drawn(again.view, { type: 'Spinner', label: 'Running #42 here' })
+  assert.equal(runs, 2)
+  first.release()
+  await pressed
+  // Drawn while the second Run here is still held.
+  const redrawn = again.view.rerender()
+  for (let turns = 0; turns < 5; turns++) await turn()
+  const spinnerAfterFirst = again.view.find({ type: 'Spinner', label: 'Running #42 here' })
+  second.release()
+  await Promise.all([redrawn, pressedAgain])
+  assert.ok(spinnerAfterFirst)
+  assert.equal(again.view.find({ type: 'Spinner', label: 'Running #42 here' }), null)
+})
+
 test("a failed Run here shows the worker's message on the card, as a failed Start does, and the next one clears it", async () => {
   let answer: { ok: true } | { ok: false; message: string } = { ok: false, message: "The worktree selected in Orca isn't one of web. Select a worktree of web to run #42 here." }
   const { view } = await showWith({ 'tasks.load': ready([task('#42')]), 'task.runHere': () => answer }, stored({ templates: [ship], defaultTemplateId: 't-ship' }))

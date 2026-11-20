@@ -209,7 +209,7 @@ test('orca-error shows the message of an Orca CLI that fails before any project 
 
 test('worktrees-unavailable lists the tasks with a warning and every Start off', async () => {
   const shown = await render('worktrees-unavailable')
-  assert.ok(shown.find({ text: /^Couldn't read Orca's worktrees, so Start is off\./ }))
+  assert.ok(shown.find({ text: /^Couldn't read Orca's worktrees, so Start and Run here are off\./ }))
   const starts = shown.findAll({ role: 'button', label: /^Start #/ })
   assert.ok(starts.length > 0 && starts.every((start) => start.disabled))
 })

@@ -1,6 +1,6 @@
-// Kickoff's side panel: the active project's open tasks and Start, and its Project settings. No build
-// step: Orca strips the types and compiles the JSX when the panel loads. The worker does the work;
-// the panel asks it and draws the answers.
+// Kickoff's side panel: the active project's open tasks with Start and Run here, and its Project
+// settings. No build step: Orca strips the types and compiles the JSX when the panel loads. The
+// worker does the work; the panel asks it and draws the answers.
 import {
   Badge,
   Box,
@@ -348,7 +348,7 @@ let worktreesClock = 0
 let worktreesShownAt = 0
 /** The pending read of the worktrees after a workspace was created or removed. */
 let workspacesTimer: ReturnType<typeof setTimeout> | null = null
-/** The error of each task's last Start, or of opening its worktree. */
+/** The error of each task's last Start or Run here, or of opening its worktree. */
 const taskErrors = atom<Record<string, string>>({})
 
 /** The template chosen on each card, by project and task key, while the panel is open. Never
@@ -375,8 +375,8 @@ const filtersOpen = atom(true)
 /** The key of a task's card in `cardTemplates`. */
 const cardKey = (projectId: string, taskKey: string) => `${projectId}\n${taskKey}`
 
-/** The template a Start of the task uses: the one chosen on its card while the project still has
- *  it, else the project's default template. */
+/** The template a Start or a Run here of the task uses: the one chosen on its card while the
+ *  project still has it, else the project's default template. */
 function chosenTemplateId(shown: ShownSettings, taskKey: string): string {
   const chosen = read(cardTemplates)[cardKey(shown.projectId, taskKey)]
   return shown.templates.some((template) => template.id === chosen) ? chosen : shown.defaultTemplateId
@@ -977,10 +977,9 @@ function closeTemplate(): void {
   set(templateDraft, null)
 }
 
-/** Save: stores the draft's name, text, Global, Default template and New worktree in one write, then goes back
- *  to the view it was opened from, unless its name can't be saved or the bar under the form is
- *  asking a question. A template whose Global changed
- *  moves; a move refused, because the destination has the name, or a failed write, changes nothing
+/** Save: stores the draft's name, text, Global, Default template and New worktree in one write,
+ *  then goes back to the view it was opened from, unless its name can't be saved or the bar under
+ *  the form is asking a question. A template whose Global changed moves; a move refused, because the destination has the name, or a failed write, changes nothing
  *  and keeps the draft with the reason. Pending Project settings are saved first, so the change
  *  applies to what the person sees. The template keeps its id, unless it is the initial template
  *  made global: then the default template and the cards that chose it follow the new id. */
@@ -1484,6 +1483,8 @@ function runTaskHere(task: Task): Promise<void> {
   update(runningHere, (keys): Record<string, true> => ({ ...keys, [key]: true as const }))
   setTaskError(task.key, null)
   const run = askRunHere(projectId, task).then((answer) => {
+    // A panel opened again since then has its own Run heres, which this one must not end.
+    if (hereRuns.get(key) !== run) return
     hereRuns.delete(key)
     update(runningHere, ({ [key]: _, ...rest }) => rest)
     if (!answer.ok && readyProjectId() === projectId) setTaskError(task.key, answer.message)
@@ -1510,7 +1511,7 @@ async function askRunHere(projectId: string, task: Task): Promise<ActionResult> 
 }
 
 /** The listed project's settings as shown, read again when a load couldn't read them, or why they
- *  can't be read: a Start needs its template's id, and never falls back to another. */
+ *  can't be read: a Start or a Run here needs its template's id, and never falls back to another. */
 async function settingsShownFor(projectId: string): Promise<{ ok: true; settings: ShownSettings } | { ok: false; message: string }> {
   const current = read(list)
   if (read(shownSettings)?.projectId !== projectId && current?.kind === 'ready' && current.project.id === projectId) {
@@ -2363,7 +2364,7 @@ function ReadyList({ list }: { list: ReadyTaskList }) {
       ) : null}
       {list.worktrees === null ? (
         <Callout tone="warning" icon="warning">
-          <Text>{`Couldn't read Orca's worktrees, so Start is off. ${list.worktreesError ?? ''}`.trim()}</Text>
+          <Text>{`Couldn't read Orca's worktrees, so Start and Run here are off. ${list.worktreesError ?? ''}`.trim()}</Text>
         </Callout>
       ) : null}
       <FiltersSection projectId={list.project.id} words={query}>
@@ -2609,8 +2610,8 @@ function TaskCard({ task, projectId, worktrees }: { task: Task; projectId: strin
   )
 }
 
-/** The card's template `Select`, filling the Start row; only when the project has two or more
- *  templates. */
+/** The card's template `Select`, filling the Start row before the New worktree switch and the
+ *  button; only when the project has two or more templates. */
 function CardTemplate({ task, projectId }: { task: Task; projectId: string }) {
   const shown = read(shownSettings)
   if (shown?.projectId !== projectId || shown.templates.length < 2) return null

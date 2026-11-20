@@ -52,7 +52,7 @@ import { runHereLaunch } from './run-here'
 import { JIRA_CONNECTION_ARGS, parseJiraSites } from './providers/jira-orca'
 import { FilterError } from './providers/queries'
 import type { PageRequest } from './providers/types'
-import { buildPrompt, findTemplate } from './template'
+import { buildPrompt, findTemplate, TEMPLATE_GONE } from './template'
 
 /** After a timed-out `worktree create`, Orca may still finish it; a Start of the same task waits
  *  this long, so it doesn't make a second worktree. */
@@ -207,7 +207,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
       if (!agent.ok) return agent
       // Never another template: the person chose this one for this task, own or global.
       const template = findTemplate(settings, globalTemplates(stored), templateId)
-      if (!template) return { ok: false, message: 'The prompt template you chose no longer exists — pick another one.' }
+      if (!template) return { ok: false, message: TEMPLATE_GONE }
       // The project's own branch settings, or the global ones, as stored, name both.
       const branchSettings = projectBranchSettings(settings, globalSettings(stored).branch)
       const name = worktreeName(task, branchSettings)
@@ -270,6 +270,8 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
    *  finds nothing in the way. Orca answers the launch in under a second, so this waits for it. */
   async function checkAndLaunch(id: string, projectId: string, task: Task, templateId: string): Promise<ActionResult> {
     try {
+      // The task is about to have a task worktree. The other way round needs no check: a Run here
+      // creates nothing a Start would collide with.
       if (creating.has(id) || checking.has(id)) return { ok: false, message: `${task.key} is being started. Wait for its worktree.` }
       const [state, stored] = await Promise.all([readOrca(), readStoredSettings()])
       const settings = projectSettings(stored, projectId)
@@ -325,7 +327,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
   orca.panels.handle('jira.sites', () => jiraSites())
   orca.panels.handle('task.start', ({ projectId, task, templateId }) => startTask(projectId, task, templateId))
   orca.panels.handle('task.runHere', ({ projectId, task, templateId }) => runHere(projectId, task, templateId))
-  orca.panels.handle('starts.load',({ projectId }) => ({ starting: startsUnderWay(projectId) }))
+  orca.panels.handle('starts.load', ({ projectId }) => ({ starting: startsUnderWay(projectId) }))
   orca.panels.handle('worktree.open', ({ worktreeId }) => openWorktree(worktreeId))
 }
 

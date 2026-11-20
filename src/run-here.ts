@@ -2,7 +2,7 @@
 // answers. Pure; the worker reads Orca and runs the launch.
 import { agentLaunchArgs, findTaskWorktrees, type OrcaWorktree, type OrcaWorktreeStatus } from './orca'
 import { RUN_HERE_NEEDS_AGENT, type ProjectRef, type PromptTemplate, type Task } from './protocol'
-import { buildPrompt } from './template'
+import { buildPrompt, TEMPLATE_GONE } from './template'
 
 export type RunHere = {
   projectId: string
@@ -34,7 +34,7 @@ export function runHereLaunch({ projectId, task, projects, worktrees, statuses, 
   const started = findTaskWorktrees(task.tracker, projectId, worktrees, statuses)[task.key]
   if (started) return { ok: false, message: `${task.key} already has a task worktree, ${started.name}. Reload the tasks.` }
   if (agent === null) return { ok: false, message: RUN_HERE_NEEDS_AGENT }
-  if (!template) return { ok: false, message: 'The prompt template you chose no longer exists — pick another one.' }
+  if (!template) return { ok: false, message: TEMPLATE_GONE }
   const prompt = buildPrompt(template.text, task, project, active.branch, jiraProjectKey)
   if (!prompt.ok) return prompt
   return { ok: true, args: agentLaunchArgs({ worktreeId: worktree.id, agent, prompt: prompt.prompt }) }

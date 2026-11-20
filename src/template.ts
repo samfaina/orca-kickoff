@@ -157,6 +157,10 @@ export function templateNameProblem(templates: readonly ListedTemplate[], name: 
   return isGlobal ? `Another global template is already called "${other.name}".` : `Another template is already called "${other.name}".`
 }
 
+/** Why a Start or a Run here launches nothing when the template chosen for the task is gone: it
+ *  never falls back to another. */
+export const TEMPLATE_GONE = 'The prompt template you chose no longer exists — pick another one.'
+
 /** `{{task_description}}` is cut to this many characters, `…` included. */
 export const MAX_DESCRIPTION = 4000
 
@@ -200,8 +204,8 @@ export type PromptResult = { ok: true; prompt: string } | { ok: false; message: 
 
 /** The prompt for `task` from a template's text, in a project whose Jira project key is
  *  `jiraProjectKey` ('' for none), with `branch` as `{{branch}}`: a Start's filled-in branch
- *  template, else its worktree name, or a Run here's current branch. An empty text gives the task URL. A prompt over MAX_PROMPT characters
- *  is refused. */
+ *  template, else its worktree name, or a Run here's current branch. An empty text gives the task
+ *  URL. A prompt over MAX_PROMPT characters is refused. */
 export function buildPrompt(text: string, task: Task, project: ProjectRef, branch: string, jiraProjectKey: string): PromptResult {
   const prompt = text === '' ? task.url : fillTemplate(text, templateVariables(task, project, branch, jiraProjectKey))
   if (prompt.length > MAX_PROMPT) {

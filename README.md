@@ -57,7 +57,7 @@ Changing the switch on a card applies to that card's next launch only: it never 
 
 **Project settings** also hold, under **Start**:
 
-- **Agent**: Orca's default agent, a named one (`claude`, `codex`, `gemini`, `opencode`, `copilot`), or none. If Orca's default can't be read, Start says so and asks you to pick one.
+- **Agent**: Orca's default agent, a named one (`claude`, `codex`, `gemini`, `opencode`, `copilot`), or none. If Orca's default can't be read, Start and Run here say so and ask you to pick one.
 - **Default template**: the [prompt template](#prompt-templates) a Start or a Run here uses unless you choose another on a task's card. A change saves itself like the other settings. **Manage templates**, beside it, opens the [Prompt templates](#the-prompt-templates-view) view; **Cancel** and **Save** there come back to Project settings.
 
 Under **Branch**, they hold how a Start names its git branch, or say that the project uses the global branch settings (see [Branch](#branch)).
