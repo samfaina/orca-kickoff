@@ -9,7 +9,7 @@ import { jiraSearchJql, jiraTask, jqlQueryFailure, requireJql } from './jira'
 import type { Provider } from './types'
 
 const LIMIT = 50
-const FIELDS = 'summary,status,assignee,labels,description'
+const FIELDS = 'summary,status,assignee,labels,description,issuetype'
 
 type Config = Required<ProviderConfigs>['jira-twg']
 
@@ -101,7 +101,8 @@ function toTasks(issues: unknown[]): Task[] {
       statusName: status.name,
       categoryKey: isRecord(status.statusCategory) ? status.statusCategory.key : undefined,
       assignee: issue.assignee,
-      labels: issue.labels
+      labels: issue.labels,
+      issueType: issue.issuetype
     })
     return task ? [task] : []
   })

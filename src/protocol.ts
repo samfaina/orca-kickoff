@@ -24,6 +24,8 @@ export type Task = {
   /** Display names (GitHub: login). */
   assignees: string[]
   labels: string[]
+  /** The Jira issue type's name as the tracker shows it, such as "Bug". GitHub tasks have none. */
+  issueType?: string
 }
 
 export type ProjectRef = {
@@ -94,7 +96,24 @@ export type ProjectSettings = {
   defaultTemplateId?: string
   /** undefined: 'orca-default'. */
   agent?: AgentChoice
+  /** The branch template, with `{{task_key}}`, `{{task_slug}}` and `{{branch_type}}`: the git
+   *  branch a Start passes as `--branch` (`filledBranch` in src/naming.ts). Undefined or blank:
+   *  none, and Orca names the branch. */
+  branchTemplate?: string
+  /** Jira issue type names, as the tracker shows them, and the branch type each gives. In order;
+   *  undefined: none. */
+  branchTypes?: BranchTypeRow[]
+  /** The branch type of a task whose issue type isn't in `branchTypes`, and of every GitHub task.
+   *  Undefined: ''. */
+  branchTypeFallback?: string
+  /** A regular expression whose matches are removed from the title before `{{task_slug}}` and the
+   *  worktree name are made. Undefined: INITIAL_TITLE_EXCLUSION (src/naming.ts); '': none. */
+  titleExclusion?: string
 }
+
+/** One row of the branch type table: an issue type name, matched ignoring case, and its branch
+ *  type. Kept as typed. */
+export type BranchTypeRow = { issueType: string; branchType: string }
 
 /** What belongs to no project: the global prompt templates, offered in every project beside its
  *  own, and the global filters of each tracker, offered in every project on that tracker. */
@@ -182,6 +201,15 @@ function readProjectSettings(raw: Record<string, unknown>): ProjectSettings {
   if (templates.length > 0) project.templates = templates
   if (typeof raw.defaultTemplateId === 'string') project.defaultTemplateId = raw.defaultTemplateId
   if (typeof raw.agent === 'string' && raw.agent !== '') project.agent = raw.agent
+  // Settings stored before branch templates have none of these, and read the same.
+  if (typeof raw.branchTemplate === 'string') project.branchTemplate = raw.branchTemplate
+  if (Array.isArray(raw.branchTypes)) {
+    project.branchTypes = raw.branchTypes.flatMap((row) =>
+      isRecord(row) && strings(row, 'issueType', 'branchType') ? [{ issueType: row.issueType, branchType: row.branchType }] : []
+    )
+  }
+  if (typeof raw.branchTypeFallback === 'string') project.branchTypeFallback = raw.branchTypeFallback
+  if (typeof raw.titleExclusion === 'string') project.titleExclusion = raw.titleExclusion
   return project
 }
 

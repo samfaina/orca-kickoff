@@ -78,11 +78,19 @@ test("orca jira search output becomes tasks, with the status category rather tha
     status: 'En curso',
     statusCategory: 'in_progress',
     assignees: ['Ana Example'],
-    labels: ['ui']
+    labels: ['ui'],
+    issueType: 'Task'
   })
   assert.deepEqual(page.tasks.map((task) => task.statusCategory), ['in_progress', 'done', 'todo', null])
   assert.equal(page.nextCursor, null)
   assert.equal(page.truncated, false)
+})
+
+test("a task's issue type is the name of issueType, and a task without one has none", async () => {
+  const items = [issue('WEB-1', { issueType: { name: 'Bug' } }), issue('WEB-2', { issueType: undefined }), issue('WEB-3', { issueType: { name: '' } }), issue('WEB-4', { issueType: 'Bug' })]
+  const page = await jiraOrca.list(answering(wrap(items)).run, notes, config, onWeb)
+  assert.deepEqual(page.tasks.map((task) => task.issueType), ['Bug', undefined, undefined, undefined])
+  assert.ok(page.tasks.slice(1).every((task) => !('issueType' in task)))
 })
 
 test('a task without an assignee has no assignees', async () => {

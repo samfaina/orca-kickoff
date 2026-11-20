@@ -167,6 +167,29 @@ test('the Jira project key is read trimmed and upper-cased; a blank one, or one 
   assert.deepEqual(readProject({ providers: {} }), { providers: {} })
 })
 
+test('the branch settings are read as stored, and settings stored before them read with none', () => {
+  const branch = {
+    branchTemplate: '{{branch_type}}/{{task_key}}',
+    branchTypes: [{ issueType: 'Bug', branchType: 'bugfix' }, { issueType: '', branchType: '' }],
+    branchTypeFallback: 'feature',
+    titleExclusion: ''
+  }
+  assert.deepEqual(readProject({ providers: {}, ...branch }), { providers: {}, ...branch })
+  assert.deepEqual(readProject({ providers: {} }), { providers: {} })
+})
+
+test('branch settings of an unexpected shape are dropped, and so are branch type rows', () => {
+  const read = readProject({
+    providers: {},
+    branchTemplate: 7,
+    branchTypes: [{ issueType: 'Bug', branchType: 'bugfix' }, { issueType: 'Story' }, 'Task', { issueType: 3, branchType: 'x' }],
+    branchTypeFallback: null,
+    titleExclusion: ['x']
+  })
+  assert.deepEqual(read, { providers: {}, branchTypes: [{ issueType: 'Bug', branchType: 'bugfix' }] })
+  assert.deepEqual(readProject({ providers: {}, branchTypes: 'Bug' }), { providers: {} })
+})
+
 test('on Jira, each {{jira_project}} of a filter\'s queries runs as the Jira project key, also with spaces inside the braces', () => {
   const sprint = { id: 'f-sprint', name: 'Sprint', queries: ['project = {{jira_project}} ORDER BY Rank', '', 'project in ({{ jira_project }}, API) AND key != {{jira_project}}-1'] }
   assert.deepEqual(filterAsRun(sprint, 'jira', 'WEB'), {

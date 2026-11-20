@@ -187,6 +187,15 @@ test('worktree create has no --agent or --prompt when the agent choice is none',
   assert.ok(!args.includes('ignored'))
 })
 
+test('worktree create carries --branch after --name when a branch is given, and none without one', () => {
+  const args = worktreeCreateArgs({ projectId: 'git:example/web', name: 'web-12-add-dark-mode', branch: 'feature/WEB-12__add-dark-mode--AB', task: jiraTask, agent: null, prompt: '' })
+  assert.deepEqual(args, [
+    'worktree', 'create', '--project', 'git:example/web', '--name', 'web-12-add-dark-mode', '--branch', 'feature/WEB-12__add-dark-mode--AB', '--no-parent', '--json',
+    '--reference', 'https://example.atlassian.net/browse/WEB-12'
+  ])
+  assert.ok(!worktreeCreateArgs({ projectId: 'git:example/web', name: 'web-12', branch: null, task: jiraTask, agent: null, prompt: '' }).includes('--branch'))
+})
+
 test('worktree activate selects the worktree by id', () => {
   assert.deepEqual(worktreeActivateArgs('r1::/w/web'), ['worktree', 'activate', '--worktree', 'id:r1::/w/web', '--json'])
 })

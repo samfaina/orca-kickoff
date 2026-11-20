@@ -42,7 +42,7 @@ Open the **Kickoff** panel from its icon (a lightning bolt) in Orca's right side
 
 Each task shows as a card with its key and title, then its labels, after its status on Jira, then its assignees, if any. **Start** (the play button):
 
-1. creates a worktree named after the task's key and up to four words of its title, such as `web-12-add-dark-mode` for Jira's `WEB-12` "Add dark mode", or `issue-42-add-dark-mode` for GitHub's `#42`;
+1. creates a worktree named after the task's key and up to four words of its title, without bracketed tags such as `[FE]` (see [Branch](#branch)), such as `web-12-add-dark-mode` for Jira's `WEB-12` "[FE] Add dark mode", or `issue-42-add-dark-mode` for GitHub's `#42`; its git branch comes from the project's [branch template](#branch), or, without one, Orca names it;
 2. links it to the task in Orca, so Orca shows the task on the worktree;
 3. launches the project's agent in it, with the prompt filled from the chosen template.
 
@@ -52,6 +52,8 @@ Creating the worktree can take a minute. Once it exists, the card shows the work
 
 - **Agent**: Orca's default agent, a named one (`claude`, `codex`, `gemini`, `opencode`, `copilot`), or none. If Orca's default can't be read, Start says so and asks you to pick one.
 - **Prompt templates**: a project can have several, each with a name, its own and the [global](#global-templates) ones. The default template is used unless you choose another on a task's card. The pencil edits the template chosen as default, and **+** adds one.
+
+Under **Branch**, they hold how a Start names its git branch (see [Branch](#branch)).
 
 **Filters**, above the list and open at first, holds the filter row and the **Search tasks** field; closed, it says the filter listed and the words typed. The field narrows the loaded tasks as you type, by key, title or label. **Enter** (or **Search in GitHub** / **Search in Jira**) asks the tracker instead, for the tasks of the same list that match your words, including those not loaded yet. **Clear search** goes back to the list.
 
@@ -112,7 +114,7 @@ A template is the text the agent gets as its prompt. `{{name}}` is replaced by t
 | `{{task_status}}` | The status as the tracker shows it, such as `In Progress`; `Open` on GitHub. |
 | `{{tracker}}` | `github` or `jira`. |
 | `{{repo}}` | The project's repository (`owner/name`) when Orca knows it, else the project's name. |
-| `{{branch}}` | The new worktree's name, such as `web-12-add-dark-mode`. |
+| `{{branch}}` | The new worktree's git branch from the project's [branch template](#branch), such as `feature/WEB-12__add-dark-mode`; without one, the worktree's name, such as `web-12-add-dark-mode`. It doesn't include a `-2` Orca may add to a taken branch, since the prompt is filled before the worktree is created. |
 | `{{jira_project}}` | The project's Jira project key, such as `WEB`, set in Project settings; empty when it has none. |
 
 A filled prompt over 30 000 characters makes Start fail, since the Windows command line holds about 32 000.
@@ -135,6 +137,31 @@ A prompt template is either the project's own or **global**: kept once, apart fr
 - **The Global switch**, in the template detail, moves a template between the two groups. Turned on, the template leaves the project and becomes global at once; the project's default template and the templates chosen on its cards keep pointing at it. Turned off, a bar first asks to confirm, since *Other projects will stop offering it*; **Confirm** moves it to the active project only, and other projects whose default template it was fall back to their first. A move whose name the other group already has is refused with a message, and changes nothing. On a new template, the switch says where **Save** stores it.
 - **Edits and Delete**: editing a global template changes it in every project. Deleting one deletes it in every project, as its Delete bar says; a project whose default template it was falls back to its first. A template can be deleted while the active project lists at least one other, own or global.
 - **"Default"**: a project lists the template "Default" only while it has no template of its own and there is no global one. A new project starts with the global templates. The first global template, saved from a project that listed only "Default", keeps "Default" in that project as one of its own.
+
+## Branch
+
+The **Branch** section of Project settings names the git branch a Start creates. It never changes the worktree's name, which still starts with the task's key.
+
+- **Branch template**: empty at first, and then Orca names the branch, with its own branch prefix setting. Set, a Start passes the filled-in template to Orca, which uses it as it is. Its variables use the prompt templates' `{{name}}` syntax:
+
+  | Variable | Value |
+  | --- | --- |
+  | `{{task_key}}` | The task key: `WEB-12` on Jira, `42` on GitHub (no `#`). |
+  | `{{task_slug}}` | Up to four words of the title, without what the title exclusion pattern removes: accents folded, lower-cased, joined by `-`, such as `add-dark-mode`. |
+  | `{{branch_type}}` | The task's branch type, from the table below. |
+
+  Anything else is written as it is, such as your initials: `{{branch_type}}/{{task_key}}__{{task_slug}}--AB` gives `bugfix/WEB-12__add-dark-mode--AB` for the Jira bug `WEB-12` "[FE] | [Mobile][Widgets] Add dark mode".
+- **Branch types**: a table of Jira issue types, typed as the tracker shows them, such as `Bug` → `bugfix` and `Story` → `feature`, matched ignoring case, with **Add branch type** and the trash can to remove a row, then a **Fallback branch type**. A type not in the table, a task with no type, and every GitHub task get the fallback.
+- **Title exclusion pattern**: a regular expression, `\[[^\]]*\]` at first, which removes bracketed tags such as `[FE]` anywhere in the title. Every match, ignoring case, is removed before `{{task_slug}}` and the worktree's name are made. Empty, it removes nothing. When it would leave no words, the whole title is used.
+- **Preview**: the branch and the worktree's name a Start of the first loaded task would get, or of an example task, `WEB-12` "[FE] | [Mobile] Add dark mode", a Story, when none is loaded.
+
+The section saves itself as you type, like the rest of Project settings, but not while it has one of these problems, which it shows, keeping what it saved last:
+
+- fixed text in the template that git can't hold in a branch name: a space, one of `~^:?*[\`, `..`, `@{`, a part (between `/`) that starts with `.` or ends with `.lock`, or a leading `-`;
+- a title exclusion pattern that isn't a valid regular expression;
+- a template that uses `{{branch_type}}` while the fallback is empty.
+
+A Start checks the filled-in branch the same way, for a branch type git can't hold, such as one with a space, and refuses with a message. A branch that is already taken is left to Orca, which tries `<branch>-2`, `-3` and so on.
 
 ## Providers
 

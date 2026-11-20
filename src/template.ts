@@ -195,7 +195,8 @@ export const TEMPLATE_VARIABLE_DESCRIPTIONS: Record<TemplateVariable, string> = 
   task_status: 'The status as the tracker shows it, such as "In Progress". "Open" on GitHub.',
   tracker: '"github" or "jira".',
   repo: "The project's repository (owner/name) when Orca knows it, else the project's name.",
-  branch: "The new worktree's name, such as web-12-add-dark-mode.",
+  branch:
+    "The new worktree's git branch from the project's branch template, such as feature/WEB-12__add-dark-mode. Without a branch template, the worktree's name, such as web-12-add-dark-mode. It doesn't include a -2 Orca may add.",
   [JIRA_PROJECT_VARIABLE]: "The project's Jira project key, such as WEB, set in Project settings. Empty when it has none."
 }
 

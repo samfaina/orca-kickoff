@@ -35,7 +35,7 @@ const response = (issues: unknown[], pageInfo?: unknown) =>
   JSON.stringify({
     apiVersion: 'v2',
     command: 'jira.workitem.query',
-    request: { jql: 'project = WEB', site: 'example.atlassian.net', maxResults: 50, fields: ['summary', 'status', 'assignee', 'labels', 'description'] },
+    request: { jql: 'project = WEB', site: 'example.atlassian.net', maxResults: 50, fields: ['summary', 'status', 'assignee', 'labels', 'description', 'issuetype'] },
     data: { issues },
     ...(pageInfo === undefined ? {} : { pageInfo }),
     meta: { resourceClass: 'entity', resourceType: 'jira.workitem' }
@@ -51,7 +51,7 @@ const BASE_ARGS = [
   '--jql',
   'project = WEB',
   '--fields',
-  'summary,status,assignee,labels,description',
+  'summary,status,assignee,labels,description,issuetype',
   '--limit',
   '50',
   '--output',
@@ -124,6 +124,14 @@ test('a trimmed real response becomes tasks, with the status category rather tha
   assert.deepEqual(page.tasks.map((task) => task.statusCategory), ['in_progress', 'done', 'todo', null])
   assert.equal(page.tasks[2].description, '')
   assert.ok(!JSON.stringify(page).includes('@'))
+})
+
+test("a task's issue type is the name of issuetype, and a task without one has none", async () => {
+  const bug = { self: 'https://example.atlassian.net/rest/api/2/issuetype/1', id: '1', description: 'A problem.', name: 'Bug', subtask: false, avatarId: 10303, entityId: 'e-1', hierarchyLevel: 0 }
+  const items = [issue('WEB-1', { issuetype: bug }), issue('WEB-2'), issue('WEB-3', { issuetype: null })]
+  const page = await jiraTwg.list(answering(response(items)).run, notes, config, onWeb)
+  assert.deepEqual(page.tasks.map((task) => task.issueType), ['Bug', undefined, undefined])
+  assert.ok(page.tasks.slice(1).every((task) => !('issueType' in task)))
 })
 
 test('assignee: null gives no assignees, and a named assignee gives one', async () => {

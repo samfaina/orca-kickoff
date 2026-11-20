@@ -80,6 +80,10 @@ _Avoid_: Naming convention, branch pattern, template (alone)
 The word a branch template puts for a task's kind, such as `bugfix` for a Jira bug. The project chooses it per Jira issue type, with one fallback for every other task and for every GitHub task.
 _Avoid_: Task type, issue type (that is the tracker's own value), prefix
 
+**Title exclusion pattern**:
+A regular expression, set per project, whose every match is removed from a task's title before the words of its worktree name and of `{{task_slug}}` are taken. It starts as one that removes bracketed tags such as `[FE]`.
+_Avoid_: Title filter, title regex
+
 **Start**:
 The user action that creates a task worktree for a task and launches an agent in it with the prompt filled from the chosen prompt template. A task is started once; a task that already has a task worktree can't be started again.
 _Avoid_: Launch, kick off, run
@@ -97,7 +101,7 @@ The per-project setting that says which agent a Start launches: Orca's default a
 _Avoid_: Default agent (that is Orca's own setting)
 
 **Project settings**:
-What Kickoff keeps for one project: its tracker and how the provider reads it, its Jira project key, its own filters, its agent choice, its own prompt templates with the default template, and its branch template. Global filters and prompt templates are not part of any one project's settings.
+What Kickoff keeps for one project: its tracker and how the provider reads it, its Jira project key, its own filters, its agent choice, its own prompt templates with the default template, and its branch template with its branch types and title exclusion pattern. Global filters and prompt templates are not part of any one project's settings.
 _Avoid_: Settings, Kickoff settings, plugin settings, config
 
 **Active project**:

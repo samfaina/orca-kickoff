@@ -62,7 +62,8 @@ function toTasks(issues: unknown[]): Task[] {
       statusName: status.name,
       categoryKey: status.categoryKey,
       assignee: issue.assignee,
-      labels: issue.labels
+      labels: issue.labels,
+      issueType: issue.issueType
     })
     return task ? [task] : []
   })
