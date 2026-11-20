@@ -195,6 +195,23 @@ export default defineCheck({
   // Project settings opens by itself, with a tracker to choose.
   'needs-config': { requests: answers({ kind: 'needs-config', project: notes }) },
   'github-ready': { requests: answers(ready(web, 'github', githubTasks)) },
+  // One template of the project's own and two global ones: the cards' template Select lists the
+  // project's first, then the global ones, marked Global; the default template is a global one.
+  'global-templates': {
+    storage: {
+      settings: {
+        version: 1,
+        projects: { [web.id]: { providers: {}, templates: [{ id: 'fix', name: 'Fix', text: 'Fix {{task_key}}' }], defaultTemplateId: 'test-first' } },
+        global: {
+          templates: [
+            { id: 'test-first', name: 'Test first', text: '/tdd {{task_key}}: {{task_title}}' },
+            { id: 'review', name: 'Review', text: 'Review {{task_url}}' }
+          ]
+        }
+      }
+    },
+    requests: answers(ready(web, 'github', githubTasks))
+  },
   // Two GitHub filters, the second of two queries shown: the filter row shows it, with ✎ and +.
   'github-filters': {
     storage: githubSettings,

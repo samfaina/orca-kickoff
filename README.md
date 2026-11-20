@@ -1,6 +1,6 @@
 # Kickoff
 
-An [Orca](https://github.com/stablyai/orca) plugin that lists the open tasks of the active project's tracker (GitHub Issues, or Jira) in a side panel, and starts each one in its own worktree, linked to the task, with an agent and a prompt built from a template you write per project.
+An [Orca](https://github.com/stablyai/orca) plugin that lists the open tasks of the active project's tracker (GitHub Issues, or Jira) in a side panel, and starts each one in its own worktree, linked to the task, with an agent and a prompt built from a template you write per project, or once for every project.
 
 Inspired by [rr235/orca-task-launcher](https://github.com/rr235/orca-task-launcher), which reads GitHub only.
 
@@ -51,7 +51,7 @@ Creating the worktree can take a minute. Once it exists, the card shows the work
 **Project settings** also hold, under **Start**:
 
 - **Agent**: Orca's default agent, a named one (`claude`, `codex`, `gemini`, `opencode`, `copilot`), or none. If Orca's default can't be read, Start says so and asks you to pick one.
-- **Prompt templates**: a project can have several, each with a name. The default template is used unless you choose another on a task's card. The pencil edits the template chosen as default, and **+** adds one.
+- **Prompt templates**: a project can have several, each with a name, its own and the [global](#global-templates) ones. The default template is used unless you choose another on a task's card. The pencil edits the template chosen as default, and **+** adds one.
 
 **Filters**, above the list and open at first, holds the filter row and the **Search tasks** field; closed, it says the filter listed and the words typed. The field narrows the loaded tasks as you type, by key, title or label. **Enter** (or **Search in GitHub** / **Search in Jira**) asks the tracker instead, for the tasks of the same list that match your words, including those not loaded yet. **Clear search** goes back to the list.
 
@@ -115,6 +115,15 @@ To run a Claude Code skill, start the template with its command, for example:
 ```
 
 Only blank lines may come before the command, and the new worktree must see the skill: a plugin installed with `local` scope is not seen in a new worktree on Windows, while `user` scope is.
+
+### Global templates
+
+A prompt template is either the project's own or **global**: kept once, apart from every project's settings, and offered in every project. The default template and the template on a task's card list the project's own first, then the global ones, each group in its order, the global ones marked **(Global)**. A global template can be a project's default template.
+
+- **Names**: no two of a project's own templates share a name, nor two global ones, ignoring case. An own template and a global one may share one; the mark tells them apart.
+- **The Global switch**, in the template detail, moves a template between the two groups. Turned on, the template leaves the project and becomes global at once; the project's default template and the templates chosen on its cards keep pointing at it. Turned off, a bar first asks to confirm, since *Other projects will stop offering it*; **Confirm** moves it to the active project only, and other projects whose default template it was fall back to their first. A move whose name the other group already has is refused with a message, and changes nothing. On a new template, the switch says where **Save** stores it.
+- **Edits and Delete**: editing a global template changes it in every project. Deleting one deletes it in every project, as its Delete bar says; a project whose default template it was falls back to its first. A template can be deleted while the active project lists at least one other, own or global.
+- **"Default"**: a project lists the template "Default" only while it has no template of its own and there is no global one. A new project starts with the global templates. The first global template, saved from a project that listed only "Default", keeps "Default" in that project as one of its own.
 
 ## Providers
 

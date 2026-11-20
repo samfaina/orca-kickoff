@@ -1,5 +1,15 @@
 import { assert, test } from 'orca/testing'
-import { chooseProvider, filterAsRun, projectProvider, projectSettings, queryCount, readSettings, withProjectChanges } from './protocol'
+import {
+  chooseProvider,
+  filterAsRun,
+  globalTemplates,
+  projectProvider,
+  projectSettings,
+  queryCount,
+  readSettings,
+  withGlobalChanges,
+  withProjectChanges
+} from './protocol'
 import { defaultTemplate, projectTemplates } from './template'
 
 const web = { id: 'github:acme/web', name: 'web', repo: 'acme/web' }
@@ -214,10 +224,12 @@ test("project changes keep the other projects, fields and providers' configurati
   assert.deepEqual(withProjectChanges(readSettings(null), 'repo:new', { agent: 'none' }).projects['repo:new'], { providers: {}, agent: 'none' })
 })
 
-/** The templates and default template of a project read from these stored settings. */
+/** The templates and default template of a project read from these stored settings, with no global
+ *  templates. */
 function readTemplates(project: unknown) {
   const settings = projectSettings(readSettings({ version: 1, projects: { [web.id]: project } }), web.id)
-  return { templates: projectTemplates(settings), defaultId: defaultTemplate(settings).id }
+  const templates = projectTemplates(settings, []).map(({ global, ...template }) => (assert.equal(global, false), template))
+  return { templates, defaultId: defaultTemplate(settings, []).id }
 }
 
 const initial = { id: 'default', name: 'Default', text: 'Complete {{task_key}}: {{task_url}}' }
@@ -225,7 +237,7 @@ const initial = { id: 'default', name: 'Default', text: 'Complete {{task_key}}: 
 test('no stored templates gives one template "Default" with INITIAL_TEMPLATE_TEXT', () => {
   assert.deepEqual(readTemplates({ providers: {} }), { templates: [initial], defaultId: 'default' })
   assert.deepEqual(readTemplates({ providers: {}, templates: [] }), { templates: [initial], defaultId: 'default' })
-  assert.deepEqual(projectTemplates(projectSettings(readSettings(null), web.id)), [initial])
+  assert.deepEqual(projectTemplates(projectSettings(readSettings(null), web.id), []), [{ ...initial, global: false }])
 })
 
 test('a template stored before several templates, also an empty one, is kept as "Default"', () => {
@@ -274,4 +286,45 @@ test('templates of an unexpected shape are dropped, and with none left the "Defa
   assert.deepEqual(readTemplates({ providers: {}, templates: stored }), { templates: [triage], defaultId: 't-triage' })
   assert.deepEqual(readTemplates({ providers: {}, templates: [{ id: 't-x' }] }), { templates: [initial], defaultId: 'default' })
   assert.deepEqual(readTemplates({ providers: {}, templates: 'none' }), { templates: [initial], defaultId: 'default' })
+})
+
+test('settings stored before global templates read the same, with no global templates', () => {
+  const stored = {
+    version: 1,
+    projects: { [web.id]: { providers: {}, templates: [{ id: 't-impl', name: 'Implement', text: 'a' }], defaultTemplateId: 't-impl' } }
+  }
+  const settings = readSettings(stored)
+  assert.deepEqual(settings, stored)
+  assert.deepEqual(globalTemplates(settings), [])
+})
+
+test('global templates are read apart from every project, in order, and those of an unexpected shape are dropped', () => {
+  const review = { id: 't-review', name: 'Review', text: 'Review {{branch}}' }
+  const settings = readSettings({
+    version: 1,
+    projects: { [web.id]: { providers: {} } },
+    global: {
+      templates: [
+        review,
+        { id: 't-x', name: 'No text' },
+        { id: 't-review', name: 'Again', text: 'c' },
+        { id: 't-other', name: ' review ', text: 'c' },
+        { id: 't-plan', name: '  Plan ', text: '' }
+      ],
+      unknown: true
+    }
+  })
+  assert.deepEqual(settings.global, { templates: [review, { id: 't-plan', name: 'Plan', text: '' }] })
+  assert.deepEqual(globalTemplates(settings), [review, { id: 't-plan', name: 'Plan', text: '' }])
+  assert.deepEqual(settings.projects[web.id], { providers: {} })
+  assert.deepEqual(readSettings({ version: 1, projects: {}, global: 'corrupt' }), { version: 1, projects: {} })
+  assert.deepEqual(readSettings({ version: 1, projects: {}, global: { templates: [] } }), { version: 1, projects: {} })
+})
+
+test('global changes keep every project, and project changes keep the global templates', () => {
+  const review = { id: 't-review', name: 'Review', text: '' }
+  const settings = { version: 1 as const, projects: { [web.id]: { providers: {}, agent: 'codex' } }, global: { templates: [review] } }
+  assert.deepEqual(withGlobalChanges(settings, { templates: [] }), { version: 1, projects: { [web.id]: { providers: {}, agent: 'codex' } }, global: { templates: [] } })
+  assert.deepEqual(withProjectChanges(settings, web.id, { agent: 'none' }).global, { templates: [review] })
+  assert.deepEqual(withGlobalChanges(readSettings(null), { templates: [review] }), { version: 1, projects: {}, global: { templates: [review] } })
 })

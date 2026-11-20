@@ -24,6 +24,7 @@ import {
 } from './orca'
 import {
   filterAsRun,
+  globalTemplates,
   listedFilter,
   projectProvider,
   projectSettings,
@@ -46,7 +47,7 @@ import { taskLister } from './providers'
 import { JIRA_CONNECTION_ARGS, parseJiraSites } from './providers/jira-orca'
 import { FilterError } from './providers/queries'
 import type { PageRequest } from './providers/types'
-import { buildPrompt, projectTemplates } from './template'
+import { buildPrompt, findTemplate } from './template'
 
 /** After a timed-out `worktree create`, Orca may still finish it; a Start of the same task waits
  *  this long, so it doesn't make a second worktree. */
@@ -187,11 +188,12 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
           message: `The last Start of ${task.key} timed out less than five minutes ago, and Orca may still be creating its worktree. Wait a few minutes and reload the tasks before starting it again.`
         }
       }
-      const settings = await readProjectSettings(projectId)
+      const stored = readSettings(await orca.storage.get(SETTINGS_KEY))
+      const settings = projectSettings(stored, projectId)
       const agent = await resolveAgent(settings.agent, readDefaultAgent)
       if (!agent.ok) return agent
-      // Never another template: the person chose this one for this task.
-      const template = projectTemplates(settings).find((candidate) => candidate.id === templateId)
+      // Never another template: the person chose this one for this task, own or global.
+      const template = findTemplate(settings, globalTemplates(stored), templateId)
       if (!template) return { ok: false, message: 'The prompt template you chose no longer exists — pick another one.' }
       const name = worktreeName(task)
       const prompt = buildPrompt(template.text, task, project, name, settings.jiraProjectKey ?? '')

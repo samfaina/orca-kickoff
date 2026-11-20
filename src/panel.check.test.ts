@@ -69,6 +69,17 @@ test('github-ready lists the issues of a GitHub project, each with Start, with o
   assert.equal(shown.findAll({ type: 'Text', text: /^Assignees?:/ }).length, 2)
 })
 
+test("global-templates offers the project's own template, then the global ones marked Global, with a global one as the default", async () => {
+  const shown = await render('global-templates')
+  const [select] = shown.findAll({ type: 'Select', label: /^Template for #/ })
+  assert.ok(select)
+  assert.deepEqual(
+    (select.props.options as { label: string }[]).map((option) => option.label),
+    ['Fix', 'Test first (Global)', 'Review (Global)']
+  )
+  assert.equal(select.props.value, 'test-first')
+})
+
 test('jira-started shows started tasks with their worktree and agent, one starting, and Load more', async () => {
   const shown = await render('jira-started')
   assert.ok(shown.find({ text: 'Agent: claude' }))
