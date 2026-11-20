@@ -2,53 +2,148 @@
 // imports, so the panel can use the constants too.
 import type { ProjectRef, ProjectSettings, PromptTemplate, Task } from './protocol'
 
-/** The text of the template a project has before it stores any, and of each new template. A
- *  constant, never stored. */
+/** The text of the template a project lists before it stores any of its own while there is no
+ *  global template, and of each new template. A constant, never stored. */
 export const INITIAL_TEMPLATE_TEXT = 'Complete {{task_key}}: {{task_url}}'
 
-/** The id and name of the template a project has before it stores any. A template stored with
- *  the earlier `template` field becomes this one too. */
+/** The id and name of the template a project lists before it stores any of its own while there is
+ *  no global template. A template stored with the earlier `template` field becomes this one too.
+ *  Many projects store an own template with this id, so the initial template made global takes a
+ *  new one. */
 export const INITIAL_TEMPLATE_ID = 'default'
 export const INITIAL_TEMPLATE_NAME = 'Default'
 
-/** The part of a project's settings that holds its templates. */
+/** The part of a project's settings that holds its own templates and its default template. */
 export type TemplateSettings = Pick<ProjectSettings, 'templates' | 'defaultTemplateId'>
 
-/** What saving or deleting a template changes in a project's settings. */
-export type TemplateChanges = Required<TemplateSettings>
+/** A template as a project lists it: one of its own, or a global one (`global`). */
+export type ListedTemplate = PromptTemplate & { global: boolean }
 
-/** A project's templates, in their order: the stored ones, or the initial one when none is stored. */
-export function projectTemplates(settings: TemplateSettings): PromptTemplate[] {
-  const { templates } = settings
-  if (templates && templates.length > 0) return templates
-  return [{ id: INITIAL_TEMPLATE_ID, name: INITIAL_TEMPLATE_NAME, text: INITIAL_TEMPLATE_TEXT }]
+/** What a write of templates stores, always both parts: the active project's own templates with
+ *  its default template, and the global templates. A move between the two groups changes both in
+ *  one write. */
+export type TemplateWrite = {
+  project: Required<TemplateSettings>
+  global: { templates: PromptTemplate[] }
 }
 
-/** A project's default template: the one `defaultTemplateId` names, else the first. */
-export function defaultTemplate(settings: TemplateSettings): PromptTemplate {
-  const templates = projectTemplates(settings)
+/** The initial template: what a project lists while it has no template of its own and there is no
+ *  global one. */
+function initialTemplate(): PromptTemplate {
+  return { id: INITIAL_TEMPLATE_ID, name: INITIAL_TEMPLATE_NAME, text: INITIAL_TEMPLATE_TEXT }
+}
+
+/** A project's own templates, in their order: the stored ones; with none stored, the initial one
+ *  while there is no global template, else none. */
+export function ownTemplates(settings: TemplateSettings, global: readonly PromptTemplate[]): PromptTemplate[] {
+  const { templates } = settings
+  if (templates && templates.length > 0) return templates
+  return global.length === 0 ? [initialTemplate()] : []
+}
+
+/** The templates a project lists, in order: its own, then the global ones, each group in its order.
+ *  A global template whose id one of the project's own has is left out, so an id names one template. */
+export function projectTemplates(settings: TemplateSettings, global: readonly PromptTemplate[]): ListedTemplate[] {
+  const own = ownTemplates(settings, global)
+  const ids = new Set(own.map((template) => template.id))
+  return [
+    ...own.map((template) => ({ ...template, global: false })),
+    ...global.filter((template) => !ids.has(template.id)).map((template) => ({ ...template, global: true }))
+  ]
+}
+
+/** A project's default template, own or global: the one `defaultTemplateId` names, else the first
+ *  it lists. */
+export function defaultTemplate(settings: TemplateSettings, global: readonly PromptTemplate[]): ListedTemplate {
+  const templates = projectTemplates(settings, global)
   return templates.find((template) => template.id === settings.defaultTemplateId) ?? templates[0]
 }
 
-/** The project's templates with `template` saved, its name trimmed: in its place when the project
- *  has it, else at the end. The default template stays the same. */
-export function withTemplateSaved(settings: TemplateSettings, template: PromptTemplate): TemplateChanges {
+/** The template `id` names among the project's own and the global ones, as stored, or undefined. */
+export function findTemplate(settings: TemplateSettings, global: readonly PromptTemplate[], id: string): ListedTemplate | undefined {
+  return projectTemplates(settings, global).find((template) => template.id === id)
+}
+
+/** `templates` with `template` in its place when one has its id, else at the end. */
+function withReplaced(templates: readonly PromptTemplate[], template: PromptTemplate): PromptTemplate[] {
+  const known = templates.some((candidate) => candidate.id === template.id)
+  return known ? templates.map((candidate) => (candidate.id === template.id ? template : candidate)) : [...templates, template]
+}
+
+/** `template` saved, its name trimmed, among the project's own templates or, when `isGlobal`, the
+ *  global ones: in its place when that group has it, else at the end. The default template stays
+ *  the same. The project stores what it lists of its own, so the initial template, listed before
+ *  the first global one is saved, stays. */
+export function withTemplateSaved(
+  settings: TemplateSettings,
+  global: readonly PromptTemplate[],
+  template: PromptTemplate,
+  isGlobal: boolean
+): TemplateWrite {
   const saved = { ...template, name: template.name.trim() }
-  const templates = projectTemplates(settings)
-  const known = templates.some((candidate) => candidate.id === saved.id)
+  const own = ownTemplates(settings, global)
   return {
-    templates: known ? templates.map((candidate) => (candidate.id === saved.id ? saved : candidate)) : [...templates, saved],
-    defaultTemplateId: defaultTemplate(settings).id
+    project: { templates: isGlobal ? own : withReplaced(own, saved), defaultTemplateId: defaultTemplate(settings, global).id },
+    global: { templates: isGlobal ? withReplaced(global, saved) : [...global] }
   }
 }
 
-/** The project's templates without the one `id` names, or null when it is the only one: a project
- *  always has a template. Deleting the default template makes the first remaining one the default. */
-export function withTemplateDeleted(settings: TemplateSettings, id: string): TemplateChanges | null {
-  const templates = projectTemplates(settings).filter((template) => template.id !== id)
-  if (templates.length === 0) return null
-  const current = defaultTemplate(settings).id
-  return { templates, defaultTemplateId: current === id ? templates[0].id : current }
+/** The project's own templates and the global ones without the one `id` names, or null when the
+ *  project would list no other: it always has a template. A global template is deleted in every
+ *  project. Deleting the default template makes the first remaining one the default. */
+export function withTemplateDeleted(settings: TemplateSettings, global: readonly PromptTemplate[], id: string): TemplateWrite | null {
+  const stored = ownTemplates(settings, global)
+  const isOwn = stored.some((template) => template.id === id)
+  const own = stored.filter((template) => template.id !== id)
+  const remaining = isOwn ? [...global] : global.filter((template) => template.id !== id)
+  if (own.length === 0 && remaining.length === 0) return null
+  const current = defaultTemplate(settings, global).id
+  const first = projectTemplates({ templates: own }, remaining)[0].id
+  return { project: { templates: own, defaultTemplateId: current === id ? first : current }, global: { templates: remaining } }
+}
+
+/** A move between the project's own templates and the global ones: the template's id after it, and
+ *  what it stores, or why it is refused. */
+export type TemplateMove = { ok: true; id: string; write: TemplateWrite } | { ok: false; message: string }
+
+/** The template `id` names moved, as stored, to the end of the global templates (`toGlobal`) or of
+ *  the project's own. It keeps its id, so the project's default template and the template chosen
+ *  for a task keep pointing at it, except the initial template's id, which other projects give to
+ *  an own template of theirs: made global, it takes `freshId`, and the default template follows it.
+ *  Other projects whose default template it was, once it is no longer global, fall back to their
+ *  first. A name the destination group already has, ignoring case, refuses the move. */
+export function withTemplateMoved(
+  settings: TemplateSettings,
+  global: readonly PromptTemplate[],
+  id: string,
+  toGlobal: boolean,
+  freshId: string
+): TemplateMove {
+  const own = ownTemplates(settings, global)
+  const from = toGlobal ? own : global
+  const to = toGlobal ? global : own
+  const template = from.find((candidate) => candidate.id === id)
+  if (!template) {
+    const where = toGlobal ? 'in this project' : 'global'
+    return { ok: false, message: `The template is no longer ${where}. Go back to Project settings and open it again.` }
+  }
+  const clash = to.find((candidate) => sameTemplateName(candidate.name, template.name))
+  if (clash) {
+    const where = toGlobal ? `A global template is already called "${clash.name}".` : `This project already has a template called "${clash.name}".`
+    return { ok: false, message: `${where} Rename one of them first.` }
+  }
+  const movedId = toGlobal && id === INITIAL_TEMPLATE_ID ? freshId : id
+  const moved = { ...template, id: movedId }
+  const current = defaultTemplate(settings, global).id
+  const rest = from.filter((candidate) => candidate.id !== id)
+  return {
+    ok: true,
+    id: movedId,
+    write: {
+      project: { templates: toGlobal ? rest : [...own, moved], defaultTemplateId: current === id ? movedId : current },
+      global: { templates: toGlobal ? [...global, moved] : rest }
+    }
+  }
 }
 
 /** Whether two template names are the same, trimmed and ignoring case. */
@@ -56,12 +151,14 @@ export function sameTemplateName(a: string, b: string): boolean {
   return a.trim().toLowerCase() === b.trim().toLowerCase()
 }
 
-/** Why `name` can't be the name of the template `id` among `templates`, or null when it can. The
- *  template's own name, in any case, is fine. */
-export function templateNameProblem(templates: readonly PromptTemplate[], name: string, id: string): string | null {
+/** Why `name` can't be the name of the template `id` among the listed `templates` of its group, the
+ *  global ones when `isGlobal`, else the project's own, or null when it can. The template's own
+ *  name, in any case, is fine, and so is the name of a template of the other group. */
+export function templateNameProblem(templates: readonly ListedTemplate[], name: string, id: string, isGlobal: boolean): string | null {
   if (name.trim() === '') return 'Give the template a name.'
-  const other = templates.find((template) => template.id !== id && sameTemplateName(template.name, name))
-  return other ? `Another template is already called "${other.name}".` : null
+  const other = templates.find((template) => template.global === isGlobal && template.id !== id && sameTemplateName(template.name, name))
+  if (!other) return null
+  return isGlobal ? `Another global template is already called "${other.name}".` : `Another template is already called "${other.name}".`
 }
 
 /** `{{task_description}}` is cut to this many characters, `…` included. */

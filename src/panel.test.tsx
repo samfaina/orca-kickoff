@@ -1541,6 +1541,236 @@ test("a card whose template is deleted falls back to the default template", asyn
   assert.deepEqual(starts.map((start) => start.templateId), ['t-impl'])
 })
 
+const review = { id: 't-review', name: 'Review', text: 'Review {{task_key}}' }
+
+/** Stored settings of the web project with these fields, and these global templates. */
+const storedWithGlobal = (project: Record<string, JsonValue>, templates: JsonValue[]) => ({
+  settings: { ...stored(project).settings, global: { templates } }
+})
+
+const globalSwitch = { type: 'Switch', label: 'Global' }
+
+/** The stored global templates. */
+const storedGlobal = (host: MockHost) => (host.data().storage.settings as { global?: { templates?: unknown[] } } | undefined)?.global?.templates
+
+test("Project settings list the project's own templates first, then the global ones, marked Global, and a global one can be the default template", async () => {
+  const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, storedWithGlobal({ templates: [implement, triage] }, [review]))
+  assert.deepEqual(optionLabels(view, 'Template for #42'), ['Implement', 'Triage', 'Review (Global)'])
+  await view.press(gear)
+  assert.deepEqual(optionLabels(view, 'Default template'), ['Implement', 'Triage', 'Review (Global)'])
+  await view.select({ type: 'Select', label: 'Default template' }, 't-review')
+  assert.equal(view.find({ type: 'CodeView' })?.props.code, 'Review {{task_key}}')
+  await view.press(done)
+  assert.equal(view.valueOf(cardTemplate('#42')), 't-review')
+  await wait(800)
+  assert.equal((storedProject(host) as { defaultTemplateId: string }).defaultTemplateId, 't-review')
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.warnings, [])
+})
+
+test('a project with no template of its own lists the global ones, without "Default"', async () => {
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, storedWithGlobal({}, [review, triage]))
+  await view.press(gear)
+  assert.deepEqual(optionLabels(view, 'Default template'), ['Review (Global)', 'Triage (Global)'])
+  assert.equal(view.valueOf({ type: 'Select', label: 'Default template' }), 't-review')
+})
+
+test('the template detail has a Global switch, off for an own template and on for a global one', async () => {
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, storedWithGlobal({ templates: [implement], defaultTemplateId: 't-impl' }, [review]))
+  await view.press(gear)
+  await view.press({ type: 'IconButton', label: 'Edit template' })
+  assert.equal(view.find(globalSwitch)?.props.checked, false)
+  await view.press({ type: 'Button', text: 'Cancel' })
+  await view.select({ type: 'Select', label: 'Default template' }, 't-review')
+  await view.press({ type: 'IconButton', label: 'Edit template' })
+  assert.equal(view.find(globalSwitch)?.props.checked, true)
+  assert.deepEqual(view.warnings, [])
+})
+
+test('a template made global in one project is listed, marked Global, in another, which can start a task with it, edit it for both, and delete it from both', async () => {
+  let project = web
+  const starts: { projectId: string; templateId: string }[] = []
+  const { view, host } = await showWith(
+    {
+      'tasks.load': () => ready([task(project === web ? '#42' : '#9')], { project }),
+      'task.start': (input) => (starts.push(input), { ok: true, underWay: true })
+    },
+    { settings: { version: 1, projects: { [web.id]: { providers: {}, templates: [implement, triage] }, [api.id]: { providers: {}, templates: [triage] } } } }
+  )
+  await view.press(gear)
+  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.toggle(globalSwitch)
+  // The move is stored at once, and the detail stays open on the template, now global.
+  assert.deepEqual(storedProject(host), { providers: {}, templates: [triage], defaultTemplateId: 't-impl' })
+  assert.deepEqual(storedGlobal(host), [implement])
+  assert.equal(view.find(globalSwitch)?.props.checked, true)
+  assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Implement')
+  await view.press({ type: 'Button', text: 'Cancel' })
+  assert.deepEqual(optionLabels(view, 'Default template'), ['Triage', 'Implement (Global)'])
+  assert.equal(view.valueOf({ type: 'Select', label: 'Default template' }), 't-impl')
+
+  project = api
+  await view.press(done)
+  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  assert.deepEqual(optionLabels(view, 'Template for #9'), ['Triage', 'Implement (Global)'])
+  await view.select(cardTemplate('#9'), 't-impl')
+  await view.press({ testId: 'start:#9' })
+  assert.deepEqual(starts, [{ projectId: api.id, task: task('#9'), templateId: 't-impl' }])
+
+  await view.press(gear)
+  await view.select({ type: 'Select', label: 'Default template' }, 't-impl')
+  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.type({ type: 'Textarea', label: 'Text' }, 'Build {{task_key}}', { replace: true })
+  await view.press(saveButton)
+  assert.deepEqual(storedGlobal(host), [{ ...implement, text: 'Build {{task_key}}' }])
+
+  await view.press({ type: 'IconButton', label: 'Edit template' })
+  const { deleteBar } = detailParts(view)
+  assert.ok(deleteBar)
+  assert.ok(nodesIn(deleteBar, (node) => node.type === 'Text' && wordsOf(node) === 'Deletes it in every project.').length === 1)
+  await view.press({ type: 'Button', text: 'Delete template' })
+  await view.press({ type: 'Button', text: 'Confirm delete' })
+  assert.deepEqual(storedGlobal(host), [])
+  assert.deepEqual(optionLabels(view, 'Default template'), ['Triage'])
+
+  project = web
+  await view.press(done)
+  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  await view.press(gear)
+  assert.deepEqual(optionLabels(view, 'Default template'), ['Triage'])
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.warnings, [])
+})
+
+test('an own template says nothing about other projects in its Delete bar', async () => {
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
+  await view.press(gear)
+  await view.press({ type: 'IconButton', label: 'Edit template' })
+  assert.equal(view.find({ type: 'Text', text: 'Deletes it in every project.' }), null)
+})
+
+test('turning Global off asks first, then moves the template to the active project only', async () => {
+  const { view, host } = await showWith(
+    { 'tasks.load': ready([task('#42')]) },
+    storedWithGlobal({ templates: [implement], defaultTemplateId: 't-review' }, [review, triage])
+  )
+  await view.press(gear)
+  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.toggle(globalSwitch)
+  // A confirmation bar in place of the Delete bar; nothing is stored yet.
+  const { deleteBar } = detailParts(view)
+  assert.ok(deleteBar)
+  assert.ok(nodesIn(deleteBar, (node) => node.type === 'Text' && wordsOf(node) === 'Other projects will stop offering it.').length === 1)
+  assert.deepEqual(buttonsIn(deleteBar), ['Keep global', 'Confirm'])
+  assert.equal(view.find(globalSwitch)?.props.checked, false)
+  assert.deepEqual(storedGlobal(host), [review, triage])
+
+  await view.press({ type: 'Button', text: 'Keep global' })
+  assert.equal(view.find(globalSwitch)?.props.checked, true)
+  assert.deepEqual(buttonsIn(detailParts(view).deleteBar!), ['Delete template'])
+  assert.deepEqual(storedGlobal(host), [review, triage])
+
+  await view.toggle(globalSwitch)
+  await view.press({ type: 'Button', text: 'Confirm' })
+  assert.deepEqual(storedGlobal(host), [triage])
+  assert.deepEqual(storedProject(host), { providers: {}, templates: [implement, review], defaultTemplateId: 't-review' })
+  assert.equal(view.find(globalSwitch)?.props.checked, false)
+  assert.deepEqual(buttonsIn(detailParts(view).deleteBar!), ['Delete template'])
+  await view.press({ type: 'Button', text: 'Cancel' })
+  assert.deepEqual(optionLabels(view, 'Default template'), ['Implement', 'Review', 'Triage (Global)'])
+  assert.equal(view.valueOf({ type: 'Select', label: 'Default template' }), 't-review')
+})
+
+test('a move whose name the destination group already has is refused with a message, and changes nothing', async () => {
+  const settings = storedWithGlobal({ templates: [implement, { ...triage, name: 'Review' }], defaultTemplateId: 't-triage' }, [review])
+  const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) }, settings)
+  await view.press(gear)
+  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.toggle(globalSwitch)
+  assert.ok(view.find({ type: 'Text', text: 'A global template is already called "Review". Rename one of them first.' }))
+  assert.equal(view.find(globalSwitch)?.props.checked, false)
+  assert.deepEqual(storedProject(host), settings.settings.projects['github:acme/web'])
+  assert.deepEqual(storedGlobal(host), [review])
+})
+
+test('a failed move keeps the template where it was, and the detail open with the error', async () => {
+  const host = mockHost({
+    capabilities: ['storage:own', 'workspace:read'],
+    requests: { 'tasks.load': ready([task('#42')]) },
+    storage: twoTemplates,
+    results: {
+      'storage.set': () => {
+        throw hostError('quota_exceeded', 'Storage is full')
+      }
+    }
+  })
+  const view = await mount(panel, { host })
+  await view.press(gear)
+  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.toggle(globalSwitch)
+  assert.ok(view.find({ type: 'Text', text: /Couldn't move the template/ }))
+  assert.equal(view.find(globalSwitch)?.props.checked, false)
+  await view.press({ type: 'Button', text: 'Cancel' })
+  assert.deepEqual(optionLabels(view, 'Default template'), ['Implement', 'Triage'])
+})
+
+test('a new template with Global on is saved among the global ones, and a project that listed only "Default" keeps it', async () => {
+  const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) })
+  await view.press(gear)
+  await view.press({ type: 'IconButton', label: 'New template' })
+  await view.toggle(globalSwitch)
+  assert.equal(view.find(globalSwitch)?.props.checked, true)
+  assert.equal(storedGlobal(host), undefined)
+  await view.type({ type: 'Input', label: 'Name' }, 'Review')
+  await view.press(saveButton)
+  const [saved] = storedGlobal(host) as { id: string; name: string }[]
+  assert.equal(saved.name, 'Review')
+  assert.deepEqual(storedProject(host), {
+    providers: {},
+    templates: [{ id: 'default', name: 'Default', text: 'Complete {{task_key}}: {{task_url}}' }],
+    defaultTemplateId: 'default'
+  })
+  assert.deepEqual(optionLabels(view, 'Default template'), ['Default', 'Review (Global)'])
+})
+
+test("a global template's name is checked against the global ones only", async () => {
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, storedWithGlobal({ templates: [implement] }, [review]))
+  await view.press(gear)
+  await view.press({ type: 'IconButton', label: 'New template' })
+  await view.type({ type: 'Input', label: 'Name' }, 'Review')
+  assert.equal(view.find(saveButton)?.disabled, false)
+  await view.toggle(globalSwitch)
+  assert.ok(view.find({ type: 'Text', text: 'Another global template is already called "Review".' }))
+  assert.equal(view.find(saveButton)?.disabled, true)
+  await view.type({ type: 'Input', label: 'Name' }, 'Implement', { replace: true })
+  assert.equal(view.find(saveButton)?.disabled, false)
+})
+
+test("the initial template made global keeps being the project's default template and the card's choice", async () => {
+  const starts: { templateId: string }[] = []
+  const { view, host } = await showWith(
+    { 'tasks.load': ready([task('#42'), task('#7')]), 'task.start': (input) => (starts.push(input), { ok: true, underWay: true }) },
+    stored({ templates: [{ id: 'default', name: 'Default', text: 'Fix' }, triage], defaultTemplateId: 't-triage' })
+  )
+  await view.select(cardTemplate('#7'), 'default')
+  await view.press(gear)
+  await view.select({ type: 'Select', label: 'Default template' }, 'default')
+  await view.press({ type: 'IconButton', label: 'Edit template' })
+  await view.toggle(globalSwitch)
+  const [moved] = storedGlobal(host) as { id: string }[]
+  assert.notEqual(moved.id, 'default')
+  assert.equal((storedProject(host) as { defaultTemplateId: string }).defaultTemplateId, moved.id)
+  await view.press({ type: 'Button', text: 'Cancel' })
+  assert.equal(view.valueOf({ type: 'Select', label: 'Default template' }), moved.id)
+  // Only the card's own choice can keep #7 on the moved template now.
+  await view.select({ type: 'Select', label: 'Default template' }, 't-triage')
+  await view.press(done)
+  assert.equal(view.valueOf(cardTemplate('#42')), 't-triage')
+  assert.equal(view.valueOf(cardTemplate('#7')), moved.id)
+  await view.press({ testId: 'start:#7' })
+  assert.deepEqual(starts.map((start) => start.templateId), [moved.id])
+})
+
 test("a change of active project while the detail is open drops the draft and shows the new project's list", async () => {
   let project = web
   const { view, host } = await showWith(

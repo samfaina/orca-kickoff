@@ -619,6 +619,28 @@ test('Start fills the prompt from the template it is given, not the default one'
   assert.deepEqual(creates(calls)[0].args.slice(-2), ['--prompt', 'Triage #42'])
 })
 
+test("Start finds the chosen template among the global ones too, in a project with none of its own", async () => {
+  const storage = {
+    settings: {
+      version: 1,
+      projects: { 'github:acme/web': { providers: {} } },
+      global: { templates: [{ id: 't-review', name: 'Review', text: 'Review {{task_key}} in {{repo}}' }] }
+    }
+  }
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED }, { storage })
+  assert.deepEqual(await worker.request('task.start', { ...startWeb42, templateId: 't-review' }), { ok: true, underWay: true })
+  assert.deepEqual(creates(calls)[0].args.slice(-2), ['--prompt', 'Review #42 in acme/web'])
+})
+
+test('a Start of the initial template fails once a global template exists, since the project no longer lists it', async () => {
+  const storage = {
+    settings: { version: 1, projects: {}, global: { templates: [{ id: 't-review', name: 'Review', text: '' }] } }
+  }
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED }, { storage })
+  assert.deepEqual(await worker.request('task.start', startWeb42), { ok: false, message: 'The prompt template you chose no longer exists — pick another one.' })
+  assert.equal(creates(calls).length, 0)
+})
+
 test('a Start whose template no longer exists fails with a message and creates nothing', async () => {
   const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED }, { storage: twoTemplates })
   assert.deepEqual(await worker.request('task.start', { ...startWeb42, templateId: 'default' }), {

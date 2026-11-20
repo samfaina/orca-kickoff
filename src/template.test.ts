@@ -4,11 +4,13 @@ import {
   buildPrompt,
   defaultTemplate,
   INITIAL_TEMPLATE_TEXT,
+  ownTemplates,
   projectTemplates,
   TEMPLATE_VARIABLE_DESCRIPTIONS,
   TEMPLATE_VARIABLES,
   templateNameProblem,
   withTemplateDeleted,
+  withTemplateMoved,
   withTemplateSaved
 } from './template'
 
@@ -79,11 +81,11 @@ test('INITIAL_TEMPLATE_TEXT is the key and URL of the task', () => {
   })
 })
 
-test('a project without stored templates has one, "Default", with INITIAL_TEMPLATE_TEXT, and it is the default', () => {
-  const initial = { id: 'default', name: 'Default', text: 'Complete {{task_key}}: {{task_url}}' }
-  assert.deepEqual(projectTemplates({}), [initial])
-  assert.deepEqual(projectTemplates({ templates: [] }), [initial])
-  assert.deepEqual(defaultTemplate({}), initial)
+test('a project without stored templates, and with no global ones, has one, "Default", with INITIAL_TEMPLATE_TEXT, and it is the default', () => {
+  const initial = { id: 'default', name: 'Default', text: 'Complete {{task_key}}: {{task_url}}', global: false }
+  assert.deepEqual(projectTemplates({}, []), [initial])
+  assert.deepEqual(projectTemplates({ templates: [] }, []), [initial])
+  assert.deepEqual(defaultTemplate({}, []), initial)
 })
 
 test('a prompt over 30 000 characters is refused with a clear message', () => {
@@ -96,57 +98,193 @@ test('a prompt over 30 000 characters is refused with a clear message', () => {
 
 const implement = { id: 't-impl', name: 'Implement', text: '/acme-skills:tdd {{task_url}}' }
 const triage = { id: 't-triage', name: 'Triage', text: 'Triage {{task_key}}' }
+const review = { id: 't-review', name: 'Review', text: 'Review {{branch}}' }
+const plan = { id: 't-plan', name: 'Plan', text: 'Plan {{task_key}}' }
+
+/** A template as a project lists it: its own, or global. */
+const own = <T extends object>(template: T) => ({ ...template, global: false })
+const global = <T extends object>(template: T) => ({ ...template, global: true })
 
 test('the default template is the one defaultTemplateId names, or the first when it is unknown or missing', () => {
   const templates = [implement, triage]
-  assert.deepEqual(defaultTemplate({ templates, defaultTemplateId: 't-triage' }), triage)
-  assert.deepEqual(defaultTemplate({ templates, defaultTemplateId: 't-gone' }), implement)
-  assert.deepEqual(defaultTemplate({ templates }), implement)
-  assert.deepEqual(projectTemplates({ templates }), [implement, triage])
+  assert.deepEqual(defaultTemplate({ templates, defaultTemplateId: 't-triage' }, []), own(triage))
+  assert.deepEqual(defaultTemplate({ templates, defaultTemplateId: 't-gone' }, []), own(implement))
+  assert.deepEqual(defaultTemplate({ templates }, []), own(implement))
+  assert.deepEqual(projectTemplates({ templates }, []), [own(implement), own(triage)])
 })
 
-test('a template name is valid when, trimmed, it is not empty and no other template of the project has it ignoring case', () => {
-  const templates = [implement, triage]
-  assert.equal(templateNameProblem(templates, 'Review', 't-new'), null)
-  assert.equal(templateNameProblem(templates, '  Review  ', 't-new'), null)
-  assert.equal(templateNameProblem(templates, '', 't-new'), 'Give the template a name.')
-  assert.equal(templateNameProblem(templates, '   ', 't-new'), 'Give the template a name.')
-  assert.equal(templateNameProblem(templates, ' triage ', 't-new'), 'Another template is already called "Triage".')
-  assert.equal(templateNameProblem(templates, 'TRIAGE', 't-impl'), 'Another template is already called "Triage".')
+test("a project lists its own templates first, then the global ones, each group in its order, and a global one can be the default template", () => {
+  const settings = { templates: [implement, triage], defaultTemplateId: 't-review' }
+  assert.deepEqual(projectTemplates(settings, [review, plan]), [own(implement), own(triage), global(review), global(plan)])
+  assert.deepEqual(defaultTemplate(settings, [review, plan]), global(review))
+  assert.deepEqual(defaultTemplate({ ...settings, defaultTemplateId: 't-gone' }, [review, plan]), own(implement))
+})
+
+test('"Default" is listed only while the project has no template of its own and there is no global one', () => {
+  assert.deepEqual(projectTemplates({}, [review, plan]), [global(review), global(plan)])
+  assert.deepEqual(projectTemplates({ templates: [] }, [review]), [global(review)])
+  assert.deepEqual(defaultTemplate({}, [review, plan]), global(review))
+  assert.deepEqual(ownTemplates({}, [review]), [])
+  assert.deepEqual(ownTemplates({}, []), [{ id: 'default', name: 'Default', text: 'Complete {{task_key}}: {{task_url}}' }])
+})
+
+test('an own template and a global one with the same name are both listed; a global one whose id an own one has is not', () => {
+  const ownReview = { id: 't-own-review', name: 'Review', text: '' }
+  assert.deepEqual(projectTemplates({ templates: [ownReview] }, [review]), [own(ownReview), global(review)])
+  assert.deepEqual(projectTemplates({ templates: [implement] }, [{ ...implement, name: 'Other' }, review]), [own(implement), global(review)])
+})
+
+test('a template name is valid when, trimmed, it is not empty and no other template of its group has it ignoring case', () => {
+  const templates = [own(implement), own(triage), global(review)]
+  assert.equal(templateNameProblem(templates, 'Plan', 't-new', false), null)
+  assert.equal(templateNameProblem(templates, '  Plan  ', 't-new', false), null)
+  assert.equal(templateNameProblem(templates, '', 't-new', false), 'Give the template a name.')
+  assert.equal(templateNameProblem(templates, '   ', 't-new', true), 'Give the template a name.')
+  assert.equal(templateNameProblem(templates, ' triage ', 't-new', false), 'Another template is already called "Triage".')
+  assert.equal(templateNameProblem(templates, 'TRIAGE', 't-impl', false), 'Another template is already called "Triage".')
   // Renaming a template to its own name in another case.
-  assert.equal(templateNameProblem(templates, 'IMPLEMENT', 't-impl'), null)
+  assert.equal(templateNameProblem(templates, 'IMPLEMENT', 't-impl', false), null)
+  // An own template and a global one may share a name.
+  assert.equal(templateNameProblem(templates, 'review', 't-new', false), null)
+  assert.equal(templateNameProblem(templates, 'Triage', 't-new', true), null)
+  assert.equal(templateNameProblem(templates, 'REVIEW', 't-new', true), 'Another global template is already called "Review".')
 })
 
-test('saving a new template adds it at the end, trimmed, and keeps the default template', () => {
+test('saving a new template adds it at the end, trimmed, keeps the default template and the global ones', () => {
   const settings = { templates: [implement, triage], defaultTemplateId: 't-triage' }
-  assert.deepEqual(withTemplateSaved(settings, { id: 't-review', name: '  Review ', text: 'Review {{branch}}' }), {
-    templates: [implement, triage, { id: 't-review', name: 'Review', text: 'Review {{branch}}' }],
-    defaultTemplateId: 't-triage'
+  assert.deepEqual(withTemplateSaved(settings, [plan], { id: 't-new', name: '  Fix ', text: 'Fix {{branch}}' }, false), {
+    project: { templates: [implement, triage, { id: 't-new', name: 'Fix', text: 'Fix {{branch}}' }], defaultTemplateId: 't-triage' },
+    global: { templates: [plan] }
   })
 })
 
 test('saving a template keeps its place, and saving the initial template stores it', () => {
   const settings = { templates: [implement, triage] }
-  assert.deepEqual(withTemplateSaved(settings, { ...implement, name: 'Build' }), {
+  assert.deepEqual(withTemplateSaved(settings, [], { ...implement, name: 'Build' }, false).project, {
     templates: [{ ...implement, name: 'Build' }, triage],
     defaultTemplateId: 't-impl'
   })
-  assert.deepEqual(withTemplateSaved({}, { id: 'default', name: 'Default', text: 'Fix {{task_key}}' }), {
+  assert.deepEqual(withTemplateSaved({}, [], { id: 'default', name: 'Default', text: 'Fix {{task_key}}' }, false).project, {
     templates: [{ id: 'default', name: 'Default', text: 'Fix {{task_key}}' }],
     defaultTemplateId: 'default'
   })
 })
 
+test('saving a global template keeps its place among the global ones, or adds it at the end, and keeps the project and its default template', () => {
+  const settings = { templates: [implement], defaultTemplateId: 't-review' }
+  assert.deepEqual(withTemplateSaved(settings, [review, plan], { ...review, name: ' Look ', text: 'x' }, true), {
+    project: { templates: [implement], defaultTemplateId: 't-review' },
+    global: { templates: [{ ...review, name: 'Look', text: 'x' }, plan] }
+  })
+  assert.deepEqual(withTemplateSaved(settings, [review], { id: 't-new', name: 'Fix', text: '' }, true).global, {
+    templates: [review, { id: 't-new', name: 'Fix', text: '' }]
+  })
+})
+
+test('the first global template, saved in a project that lists only "Default", stores "Default" in the project, which keeps it', () => {
+  const initial = { id: 'default', name: 'Default', text: 'Complete {{task_key}}: {{task_url}}' }
+  assert.deepEqual(withTemplateSaved({}, [], review, true), {
+    project: { templates: [initial], defaultTemplateId: 'default' },
+    global: { templates: [review] }
+  })
+})
+
 test('deleting the default template makes the first remaining one the default, and the only template stays', () => {
-  const settings = { templates: [implement, triage, { id: 't-review', name: 'Review', text: '' }], defaultTemplateId: 't-impl' }
-  assert.deepEqual(withTemplateDeleted(settings, 't-impl'), {
-    templates: [triage, { id: 't-review', name: 'Review', text: '' }],
-    defaultTemplateId: 't-triage'
+  const settings = { templates: [implement, triage, plan], defaultTemplateId: 't-impl' }
+  assert.deepEqual(withTemplateDeleted(settings, [], 't-impl')?.project, { templates: [triage, plan], defaultTemplateId: 't-triage' })
+  assert.deepEqual(withTemplateDeleted({ ...settings, defaultTemplateId: 't-plan' }, [], 't-triage')?.project, {
+    templates: [implement, plan],
+    defaultTemplateId: 't-plan'
   })
-  assert.deepEqual(withTemplateDeleted({ ...settings, defaultTemplateId: 't-review' }, 't-triage'), {
-    templates: [implement, { id: 't-review', name: 'Review', text: '' }],
-    defaultTemplateId: 't-review'
+  assert.equal(withTemplateDeleted({ templates: [implement] }, [], 't-impl'), null)
+  assert.equal(withTemplateDeleted({}, [], 'default'), null)
+})
+
+test("a project's last own template can be deleted while it lists a global one, which becomes the default", () => {
+  assert.deepEqual(withTemplateDeleted({ templates: [implement], defaultTemplateId: 't-impl' }, [review], 't-impl'), {
+    project: { templates: [], defaultTemplateId: 't-review' },
+    global: { templates: [review] }
   })
-  assert.equal(withTemplateDeleted({ templates: [implement] }, 't-impl'), null)
-  assert.equal(withTemplateDeleted({}, 'default'), null)
+})
+
+test('deleting a global template removes it from the global ones, while the project still lists another', () => {
+  const settings = { templates: [implement], defaultTemplateId: 't-review' }
+  assert.deepEqual(withTemplateDeleted(settings, [review, plan], 't-review'), {
+    project: { templates: [implement], defaultTemplateId: 't-impl' },
+    global: { templates: [plan] }
+  })
+  assert.deepEqual(withTemplateDeleted({}, [review, plan], 't-plan'), {
+    project: { templates: [], defaultTemplateId: 't-review' },
+    global: { templates: [review] }
+  })
+  // The project's only template.
+  assert.equal(withTemplateDeleted({}, [review], 't-review'), null)
+  assert.equal(withTemplateDeleted({ templates: [] }, [review], 't-review'), null)
+})
+
+test('making a template global moves it, with its id, to the end of the global ones, and the default template keeps pointing at it', () => {
+  const settings = { templates: [implement, triage] }
+  assert.deepEqual(withTemplateMoved(settings, [review], 't-impl', true, 't-fresh'), {
+    ok: true,
+    id: 't-impl',
+    write: {
+      project: { templates: [triage], defaultTemplateId: 't-impl' },
+      global: { templates: [review, implement] }
+    }
+  })
+  assert.deepEqual(withTemplateMoved({ ...settings, defaultTemplateId: 't-triage' }, [], 't-impl', true, 't-fresh'), {
+    ok: true,
+    id: 't-impl',
+    write: { project: { templates: [triage], defaultTemplateId: 't-triage' }, global: { templates: [implement] } }
+  })
+})
+
+test('the initial template made global gets a new id, since other projects have an own template with its id, and the default template follows it', () => {
+  const initial = { id: 'default', name: 'Default', text: 'Complete {{task_key}}: {{task_url}}' }
+  assert.deepEqual(withTemplateMoved({}, [], 'default', true, 't-fresh'), {
+    ok: true,
+    id: 't-fresh',
+    write: { project: { templates: [], defaultTemplateId: 't-fresh' }, global: { templates: [{ ...initial, id: 't-fresh' }] } }
+  })
+  assert.deepEqual(withTemplateMoved({ templates: [{ ...initial, text: 'x' }, triage], defaultTemplateId: 't-triage' }, [], 'default', true, 't-fresh'), {
+    ok: true,
+    id: 't-fresh',
+    write: { project: { templates: [triage], defaultTemplateId: 't-triage' }, global: { templates: [{ ...initial, id: 't-fresh', text: 'x' }] } }
+  })
+})
+
+test('turning Global off moves a global template to the end of the active project, keeping its id and the default template', () => {
+  assert.deepEqual(withTemplateMoved({ templates: [implement], defaultTemplateId: 't-review' }, [review, plan], 't-review', false, 't-fresh'), {
+    ok: true,
+    id: 't-review',
+    write: { project: { templates: [implement, review], defaultTemplateId: 't-review' }, global: { templates: [plan] } }
+  })
+  assert.deepEqual(withTemplateMoved({}, [review], 't-review', false, 't-fresh'), {
+    ok: true,
+    id: 't-review',
+    write: { project: { templates: [review], defaultTemplateId: 't-review' }, global: { templates: [] } }
+  })
+})
+
+test('a move whose name the destination group already has, ignoring case, is refused with a message', () => {
+  const settings = { templates: [implement, { id: 't-own-review', name: 'review', text: '' }] }
+  assert.deepEqual(withTemplateMoved(settings, [{ ...review, name: 'IMPLEMENT' }], 't-impl', true, 't-fresh'), {
+    ok: false,
+    message: 'A global template is already called "IMPLEMENT". Rename one of them first.'
+  })
+  assert.deepEqual(withTemplateMoved(settings, [review], 't-review', false, 't-fresh'), {
+    ok: false,
+    message: 'This project already has a template called "review". Rename one of them first.'
+  })
+})
+
+test('a move of a template no longer in its group is refused with a message', () => {
+  assert.deepEqual(withTemplateMoved({ templates: [implement] }, [review], 't-review', true, 't-fresh'), {
+    ok: false,
+    message: 'The template is no longer in this project. Go back to Project settings and open it again.'
+  })
+  assert.deepEqual(withTemplateMoved({ templates: [implement] }, [review], 't-impl', false, 't-fresh'), {
+    ok: false,
+    message: 'The template is no longer global. Go back to Project settings and open it again.'
+  })
 })

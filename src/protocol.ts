@@ -63,9 +63,11 @@ export type AgentChoice = string
 
 /** A named text with task variables that becomes the prompt of a Start. */
 export type PromptTemplate = {
-  /** Stable, made by the panel; never shown. */
+  /** Stable, made by the panel; never shown. A move between a project and the global templates
+   *  keeps it, except the initial template's `default`, which takes a new one when made global. */
   id: string
-  /** Trimmed, not empty, unique in the project ignoring case. */
+  /** Trimmed, not empty, and unique ignoring case among the project's own templates, or among the
+   *  global ones: an own template and a global one may share a name. */
   name: string
   /** '': the prompt is the task URL. */
   text: string
@@ -84,15 +86,25 @@ export type ProjectSettings = {
   filters?: ByTracker<Filter[]>
   /** The filter each tracker showed last; undefined or unknown: the first. */
   shownFilterId?: ByTracker<string>
-  /** undefined or empty: one template "Default" with INITIAL_TEMPLATE_TEXT. */
+  /** The project's own templates. Undefined or empty, and no global ones: one template "Default"
+   *  with INITIAL_TEMPLATE_TEXT. */
   templates?: PromptTemplate[]
-  /** undefined or unknown: the first template. */
+  /** One of the project's own templates or a global one; undefined or unknown: the first template
+   *  the project lists. */
   defaultTemplateId?: string
   /** undefined: 'orca-default'. */
   agent?: AgentChoice
 }
 
-export type Settings = { version: 1; projects: Record<string, ProjectSettings> }
+/** What belongs to no project: the global prompt templates, offered in every project beside its
+ *  own. Global filters will join them. */
+export type GlobalSettings = {
+  /** In order; undefined or empty: none. */
+  templates?: PromptTemplate[]
+}
+
+/** `global` is undefined while nothing global is stored. */
+export type Settings = { version: 1; projects: Record<string, ProjectSettings>; global?: GlobalSettings }
 
 /** Where the settings live in the plugin's storage. */
 export const SETTINGS_KEY = 'settings'
@@ -127,6 +139,9 @@ export function readSettings(raw: unknown): Settings {
   for (const [id, project] of Object.entries(raw.projects)) {
     if (isRecord(project)) settings.projects[id] = readProjectSettings(project)
   }
+  // Settings stored before global templates have no `global`, and read with none.
+  const templates = readTemplates(isRecord(raw.global) ? raw.global.templates : undefined)
+  if (templates.length > 0) settings.global = { templates }
   return settings
 }
 
@@ -233,6 +248,24 @@ export function jiraProjectKey(typed: string): string {
 /** A project's settings, or empty ones when it has none. */
 export function projectSettings(settings: Settings, projectId: string): ProjectSettings {
   return settings.projects[projectId] ?? { providers: {} }
+}
+
+/** What belongs to no project, or nothing when none is stored. */
+export function globalSettings(settings: Settings): GlobalSettings {
+  return settings.global ?? {}
+}
+
+/** The global prompt templates, in order. */
+export function globalTemplates(settings: Settings): PromptTemplate[] {
+  return globalSettings(settings).templates ?? []
+}
+
+/** What the panel changes in what belongs to no project. */
+export type GlobalChanges = Partial<GlobalSettings>
+
+/** `settings` with global changes applied, and every project kept. */
+export function withGlobalChanges(settings: Settings, changes: GlobalChanges): Settings {
+  return { ...settings, global: { ...settings.global, ...changes } }
 }
 
 /** The part of a project's settings that holds its filters. */

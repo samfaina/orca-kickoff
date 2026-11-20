@@ -1,11 +1,16 @@
-// Saving Project settings: the changes not saved yet, per project, and every read-modify-write of
-// the settings in storage, one at a time. No Orca API: the panel gives it storage and timers, so the
-// tests can hold a read, a write or a timer and settle it by hand.
+// Saving Project settings and what belongs to no project, such as the global prompt templates: the
+// changes not saved yet, per project, and every read-modify-write of the settings in storage, one at
+// a time. No Orca API: the panel gives it storage and timers, so the tests can hold a read, a write
+// or a timer and settle it by hand.
 import {
+  globalSettings,
   projectSettings,
   readSettings,
   SETTINGS_KEY,
+  withGlobalChanges,
   withProjectChanges,
+  type GlobalChanges,
+  type GlobalSettings,
   type ProjectChanges,
   type ProjectSettings,
   type Settings
@@ -41,9 +46,11 @@ function mergeChanges(earlier: ProjectChanges, later: ProjectChanges): ProjectCh
   return { ...earlier, ...later, providers: { ...earlier.providers, ...later.providers } }
 }
 
-/** Saves Project settings for the panel: each change waits with its project's other pending changes
- *  for the timed save, or for a caller that saves now. Every save writes every project's pending
- *  changes, and no promise it leaves goes unhandled. */
+/** Saves Project settings, and what belongs to no project, for the panel: each change of a project
+ *  waits with its other pending changes for the timed save, or for a caller that saves now. Every
+ *  save writes every project's pending changes, every write keeps what it doesn't change, the
+ *  global templates included, and no promise it leaves goes unhandled. Global changes are written
+ *  at once, never left pending. */
 export function settingsSaver({ storage, timers, onSaved, onTimedSaveFailed }: SettingsSaverOptions) {
   /** The changes not saved yet, by project. */
   const pending = new Map<string, ProjectChanges>()
@@ -75,6 +82,18 @@ export function settingsSaver({ storage, timers, onSaved, onTimedSaveFailed }: S
     onSaved()
   }
 
+  /** Saves the pending changes, then writes the settings `compute` gives from those stored with
+   *  them, unless it gives none, both in one turn of the queue, and answers its answer. */
+  function writeStored<T>(compute: (settings: Settings) => { answer: T; settings: Settings | null }): Promise<T> {
+    cancelTimer()
+    return writes(async () => {
+      await savePending(true)
+      const { answer, settings } = compute(readSettings(await storage.get(SETTINGS_KEY)))
+      if (settings) await storage.set(SETTINGS_KEY, settings)
+      return answer
+    })
+  }
+
   function saveOnTimer(): void {
     timer = null
     writes(() => savePending(true)).catch(onTimedSaveFailed)
@@ -100,13 +119,26 @@ export function settingsSaver({ storage, timers, onSaved, onTimedSaveFailed }: S
      *  changes. Rejects when either write fails; a failed save of the pending changes keeps them
      *  pending and computes nothing. */
     writeProject<T extends ProjectChanges>(projectId: string, compute: (project: ProjectSettings) => T | null): Promise<T | null> {
-      cancelTimer()
-      return writes(async () => {
-        await savePending(true)
-        const settings = readSettings(await storage.get(SETTINGS_KEY))
+      return writeStored((settings) => {
         const changes = compute(projectSettings(settings, projectId))
-        if (changes) await storage.set(SETTINGS_KEY, withProjectChanges(settings, projectId, changes))
-        return changes
+        return { answer: changes, settings: changes ? withProjectChanges(settings, projectId, changes) : null }
+      })
+    },
+
+    /** Saves the pending changes, then writes the project's changes and the global ones that
+     *  `compute` gives for the project's settings and the global ones as stored with them, both in
+     *  one write, in one turn of the queue: never one without the other. A part it leaves out stays
+     *  as stored; with neither, nothing more is written. Answers its `answer`. Rejects when either
+     *  write fails; a failed save of the pending changes keeps them pending and computes nothing. */
+    writeProjectAndGlobal<T>(
+      projectId: string,
+      compute: (project: ProjectSettings, global: GlobalSettings) => { answer: T; project?: ProjectChanges; global?: GlobalChanges }
+    ): Promise<T> {
+      return writeStored((settings) => {
+        const { answer, project, global } = compute(projectSettings(settings, projectId), globalSettings(settings))
+        if (!project && !global) return { answer, settings: null }
+        const withProject = project ? withProjectChanges(settings, projectId, project) : settings
+        return { answer, settings: global ? withGlobalChanges(withProject, global) : withProject }
       })
     },
 

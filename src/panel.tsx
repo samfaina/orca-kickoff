@@ -21,6 +21,7 @@ import {
   Separator,
   Spinner,
   Stack,
+  Switch,
   Text,
   Textarea,
   atom,
@@ -51,6 +52,7 @@ import {
   chooseProvider,
   DEFAULT_GITHUB_QUERY,
   DEFAULT_JQL,
+  globalTemplates,
   jiraProjectKey,
   listedFilter,
   projectFilters,
@@ -88,8 +90,11 @@ import {
   TEMPLATE_VARIABLES,
   templateNameProblem,
   withTemplateDeleted,
+  withTemplateMoved,
   withTemplateSaved,
-  type TemplateChanges
+  type ListedTemplate,
+  type TemplateMove,
+  type TemplateWrite
 } from './template'
 
 /** Orca queries and the tracker can take up to about 65 s together. */
@@ -139,7 +144,8 @@ type ShownSettings = {
   jiraProjectKey: string
   filterSettings: FilterSettings
   agent: string
-  templates: PromptTemplate[]
+  /** The project's own templates, then the global ones. */
+  templates: ListedTemplate[]
   defaultTemplateId: string
 }
 
@@ -185,11 +191,17 @@ type FilterDraft = {
   confirmingDelete: boolean
 }
 
-/** The template detail's draft: a template of `projectId` being edited, or a new one. */
+/** The template detail's draft: a template of `projectId`, or a global one, being edited, or a new
+ *  one. */
 type TemplateDraft = {
   projectId: string
   id: string
   isNew: boolean
+  /** Where the template is: among the global ones, or the project's own. For a new one, where Save
+   *  stores it. */
+  global: boolean
+  /** Global was turned off, and the bar asks to confirm the move to the project. */
+  confirmingOwn: boolean
   name: string
   text: string
   /** The error of the last write, shown until the next one. */
@@ -254,8 +266,9 @@ function chosenTemplateId(shown: ShownSettings, taskKey: string): string {
   return shown.templates.some((template) => template.id === chosen) ? chosen : shown.defaultTemplateId
 }
 
-/** The project's templates as `Select` options. */
-const templateOptions = (templates: PromptTemplate[]) => templates.map((template) => ({ value: template.id, label: template.name }))
+/** The project's templates as `Select` options, the global ones marked. */
+const templateOptions = (templates: ListedTemplate[]) =>
+  templates.map((template) => ({ value: template.id, label: template.global ? `${template.name} (Global)` : template.name }))
 
 /** Whether Project settings replaces the list: `open` or `closed` as the person left it, or `auto`
  *  to open it by itself when `needsSettings`. */
@@ -350,7 +363,9 @@ function changeSettings(changes: SettingsChange): void {
 /** Shows the stored settings of `project`, unless they are already shown. */
 async function showSettings(project: ProjectRef): Promise<void> {
   if (read(shownSettings)?.projectId === project.id) return
-  const settings = projectSettings(readSettings(await storage.get(SETTINGS_KEY)), project.id)
+  const stored = readSettings(await storage.get(SETTINGS_KEY))
+  const settings = projectSettings(stored, project.id)
+  const global = globalTemplates(stored)
   const provider = projectProvider(settings, project)
   set(shownSettings, {
     projectId: project.id,
@@ -359,8 +374,8 @@ async function showSettings(project: ProjectRef): Promise<void> {
     jiraProjectKey: settings.jiraProjectKey ?? '',
     filterSettings: { filters: settings.filters, shownFilterId: settings.shownFilterId },
     agent: settings.agent ?? 'orca-default',
-    templates: projectTemplates(settings),
-    defaultTemplateId: defaultTemplate(settings).id
+    templates: projectTemplates(settings, global),
+    defaultTemplateId: defaultTemplate(settings, global).id
   })
 }
 
@@ -540,6 +555,8 @@ function openTemplate(id: string | null): void {
     projectId: shown.projectId,
     id: template?.id ?? newId('t', shown.templates),
     isNew: !template,
+    global: template?.global ?? false,
+    confirmingOwn: false,
     name: template?.name ?? '',
     text: template?.text ?? INITIAL_TEMPLATE_TEXT,
     error: null,
@@ -575,8 +592,9 @@ async function saveTemplate(): Promise<void> {
   const draft = read(templateDraft)
   const shown = read(shownSettings)
   if (!draft || draft.saving || shown?.projectId !== draft.projectId) return
-  if (templateNameProblem(shown.templates, draft.name, draft.id) !== null) return
-  await writeTemplates(draft, (project) => withTemplateSaved(project, { id: draft.id, name: draft.name, text: draft.text }))
+  if (templateNameProblem(shown.templates, draft.name, draft.id, draft.global) !== null) return
+  const template = { id: draft.id, name: draft.name, text: draft.text }
+  await writeTemplates(draft, (project, global) => withTemplateSaved(project, global, template, draft.global))
 }
 
 /** The pending end of a Delete's wait for its second click. */
@@ -595,7 +613,7 @@ async function deleteTemplate(): Promise<void> {
     }, CONFIRM_DELETE_MS)
     return
   }
-  await writeTemplates(draft, (project) => withTemplateDeleted(project, draft.id))
+  await writeTemplates(draft, (project, global) => withTemplateDeleted(project, global, draft.id))
 }
 
 /** Stops waiting for Delete's second click. */
@@ -604,22 +622,93 @@ function cancelConfirmDelete(): void {
   confirmDeleteTimer = null
 }
 
-/** Writes a change to the draft project's templates, then shows them and goes back. A failed write
- *  keeps the detail open with its error and the draft. Pending Project settings are saved first, so
- *  the change applies to what the person sees. */
-async function writeTemplates(draft: TemplateDraft, change: (project: ProjectSettings) => TemplateChanges | null): Promise<void> {
-  changeTemplateDraft(draft, { saving: true, error: null, confirmingDelete: false })
-  let changes: TemplateChanges | null
+/** Writes a change to the draft project's templates and the global ones, then shows them and goes
+ *  back. A failed write keeps the detail open with its error and the draft. Pending Project settings
+ *  are saved first, so the change applies to what the person sees. */
+async function writeTemplates(
+  draft: TemplateDraft,
+  change: (project: ProjectSettings, global: PromptTemplate[]) => TemplateWrite | null
+): Promise<void> {
+  changeTemplateDraft(draft, { saving: true, error: null, confirmingDelete: false, confirmingOwn: false })
+  let written: TemplateWrite | null
   try {
-    changes = await settingsSave.writeProject(draft.projectId, change)
+    written = await settingsSave.writeProjectAndGlobal(draft.projectId, (project, global) => {
+      const write = change(project, global.templates ?? [])
+      return write ? { answer: write, ...write } : { answer: null }
+    })
   } catch (error) {
     changeTemplateDraft(draft, { saving: false, error: `Couldn't save the template (${errorCode(error)}). Try again.` })
     return
   }
-  const shown = read(shownSettings)
-  if (changes && shown?.projectId === draft.projectId) set(shownSettings, { ...shown, ...changes })
+  if (written) showTemplates(draft.projectId, written)
   const current = read(templateDraft)
   if (current && isSameDraft(current, draft)) set(templateDraft, null)
+}
+
+/** Shows the templates a write stored, while the project is still the one shown. */
+function showTemplates(projectId: string, written: TemplateWrite): void {
+  const shown = read(shownSettings)
+  if (shown?.projectId !== projectId) return
+  const global = written.global.templates
+  set(shownSettings, { ...shown, templates: projectTemplates(written.project, global), defaultTemplateId: defaultTemplate(written.project, global).id })
+}
+
+/** The Global switch: on a new template, where Save stores it. On a stored one, turning it on moves
+ *  the template to the global ones at once; turning it off asks first, in the bar under the form,
+ *  and turning it on again while it asks keeps it global. */
+function switchGlobal(expected: TemplateDraft, on: boolean): void {
+  const draft = read(templateDraft)
+  if (!draft || !isSameDraft(draft, expected) || draft.saving) return
+  if (draft.isNew) {
+    changeTemplateDraft(draft, { global: on, error: null })
+    return
+  }
+  cancelConfirmDelete()
+  if (draft.global) {
+    changeTemplateDraft(draft, { confirmingOwn: !on, confirmingDelete: false, error: null })
+    return
+  }
+  if (on) void moveTemplate(draft, true)
+}
+
+/** Confirm, in the bar that asks before Global is turned off: moves the template to the project. */
+function confirmOwn(): void {
+  const draft = read(templateDraft)
+  if (draft?.confirmingOwn && !draft.saving) void moveTemplate(draft, false)
+}
+
+/** Moves the draft's template, as stored, to the global ones or to the project, in one write, and
+ *  keeps the detail open on it. The name and text typed stay in the draft for Save. A move refused,
+ *  because the destination has the name, or a failed write, changes nothing and shows why. The
+ *  template keeps its id, unless it is the initial template made global: then the default template
+ *  and the cards that chose it follow the new id. */
+async function moveTemplate(draft: TemplateDraft, toGlobal: boolean): Promise<void> {
+  changeTemplateDraft(draft, { saving: true, error: null, confirmingDelete: false, confirmingOwn: false })
+  const shown = read(shownSettings)
+  const freshId = newId('t', shown?.templates ?? [])
+  let moved: TemplateMove
+  try {
+    moved = await settingsSave.writeProjectAndGlobal<TemplateMove>(draft.projectId, (project, global) => {
+      const move = withTemplateMoved(project, global.templates ?? [], draft.id, toGlobal, freshId)
+      return move.ok ? { answer: move, ...move.write } : { answer: move }
+    })
+  } catch (error) {
+    changeTemplateDraft(draft, { saving: false, error: `Couldn't move the template (${errorCode(error)}). Try again.` })
+    return
+  }
+  if (!moved.ok) {
+    changeTemplateDraft(draft, { saving: false, error: moved.message })
+    return
+  }
+  showTemplates(draft.projectId, moved.write)
+  const { id } = moved
+  if (id !== draft.id) {
+    const prefix = cardKey(draft.projectId, '')
+    update(cardTemplates, (chosen) =>
+      Object.fromEntries(Object.entries(chosen).map(([key, value]) => [key, key.startsWith(prefix) && value === draft.id ? id : value]))
+    )
+  }
+  update(templateDraft, (current) => (current && isSameDraft(current, draft) ? { ...current, id, global: toGlobal, saving: false } : current))
 }
 
 /** Chooses the project's provider, saves it with its configuration and lists its tasks. */
@@ -1817,9 +1906,10 @@ function CardTemplate({ task, projectId }: { task: Task; projectId: string }) {
 }
 
 /** The template detail, in place of the panel view. The title row with Cancel and Save, and the
- *  Delete bar, stay in place while the form between them scrolls. */
-function TemplateDetail({ draft, templates, projectName }: { draft: TemplateDraft; templates: PromptTemplate[]; projectName: string }) {
-  const nameProblem = templateNameProblem(templates, draft.name, draft.id)
+ *  bar under the form, stay in place while the form between them scrolls. That bar is the Delete
+ *  bar, or, while turning Global off waits for its confirmation, the bar that asks for it. */
+function TemplateDetail({ draft, templates, projectName }: { draft: TemplateDraft; templates: ListedTemplate[]; projectName: string }) {
+  const nameProblem = templateNameProblem(templates, draft.name, draft.id, draft.global)
   return (
     <Box direction="column" gap="sm" height="100%">
       <TitleRow prefix={projectName !== '' ? `${projectName} ·` : null} title={draft.isNew ? 'New template' : 'Edit template'} level={3}>
@@ -1841,6 +1931,17 @@ function TemplateDetail({ draft, templates, projectName }: { draft: TemplateDraf
               {nameProblem}
             </Text>
           ) : null}
+        </Stack>
+        <Stack gap="xs">
+          <Switch
+            label="Global"
+            checked={draft.global && !draft.confirmingOwn}
+            disabled={draft.saving}
+            onChange={(on) => switchGlobal(draft, on)}
+          />
+          <Text size="sm" muted>
+            A global template is offered in every project, and editing or deleting it changes it in every project.
+          </Text>
         </Stack>
         <Stack gap="xs">
           <Textarea
@@ -1874,8 +1975,25 @@ function TemplateDetail({ draft, templates, projectName }: { draft: TemplateDraf
           </Text>
         </Callout>
       </Box>
-      {draft.isNew ? null : (
-        <Box direction="row" justify="end" align="center" shrink={false}>
+      {draft.isNew ? null : draft.confirmingOwn ? (
+        <Box direction="row" justify="end" align="center" gap="xs" shrink={false}>
+          <Text size="sm" tone="warning">
+            Other projects will stop offering it.
+          </Text>
+          <Button key="template-keep-global" size="sm" variant="ghost" disabled={draft.saving} onPress={() => switchGlobal(draft, true)}>
+            Keep global
+          </Button>
+          <Button key="template-confirm-own" size="sm" variant="solid" disabled={draft.saving} onPress={confirmOwn}>
+            Confirm
+          </Button>
+        </Box>
+      ) : (
+        <Box direction="row" justify="end" align="center" gap="xs" shrink={false}>
+          {draft.global ? (
+            <Text size="sm" muted>
+              Deletes it in every project.
+            </Text>
+          ) : null}
           <Button
             key="template-delete"
             size="sm"
