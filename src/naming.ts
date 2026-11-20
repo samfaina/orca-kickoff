@@ -139,21 +139,24 @@ export function gitBranchProblem(name: string): string | null {
  *  which git holds anywhere. */
 const SAMPLE_VALUE = 'a'
 
+/** Why the Branch section can't be saved, and the field to fix for it. */
+export type BranchSettingsProblem = { field: 'branchTemplate' | 'branchTypeFallback' | 'titleExclusion'; message: string }
+
 /** Why the Branch section can't be saved, the project's own branch settings or the global ones, or
  *  null when it can: fixed text in the branch template that git can't hold in a branch name, a
  *  title exclusion pattern that isn't a valid regular expression, or a template that uses
- *  `{{branch_type}}` while the fallback is empty. */
-export function branchSettingsProblem(settings: BranchSettings): string | null {
+ *  `{{branch_type}}` while the fallback is empty, which the fallback fixes. */
+export function branchSettingsProblem(settings: BranchSettings): BranchSettingsProblem | null {
   const template = settings.branchTemplate ?? ''
   if (!isBlank(template)) {
     const sample = fillTemplate(template, Object.fromEntries(BRANCH_VARIABLES.map((name) => [name, SAMPLE_VALUE])))
     const problem = gitBranchProblem(sample)
-    if (problem) return `The branch template ${problem}, which git can't hold in a branch name.`
+    if (problem) return { field: 'branchTemplate', message: `The branch template ${problem}, which git can't hold in a branch name.` }
   }
   const compiled = titleExclusionRegExp(titleExclusion(settings))
-  if (!compiled.ok) return `The title exclusion pattern isn't a valid regular expression: ${compiled.message}`
+  if (!compiled.ok) return { field: 'titleExclusion', message: `The title exclusion pattern isn't a valid regular expression: ${compiled.message}` }
   if (usesVariable(template, 'branch_type') && isBlank(settings.branchTypeFallback)) {
-    return 'The branch template uses {{branch_type}}: give the branch types a fallback.'
+    return { field: 'branchTypeFallback', message: 'The branch template uses {{branch_type}}: give the branch types a fallback.' }
   }
   return null
 }

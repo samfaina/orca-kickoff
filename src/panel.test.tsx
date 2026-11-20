@@ -4162,6 +4162,51 @@ test('the Branch section refuses a pattern that is not a regular expression, and
   assert.equal(storedBranch(host).branchTemplate, '{{branch_type}}/{{task_key}}')
 })
 
+/** The Stack a field of Project settings is drawn in, with what is said under it. */
+function fieldGroup(view: TestPanel, label: string): TreeSnapshot {
+  const [group] = nodesIn(view.tree(), (node) => node.type === 'Stack' && elementsIn(node).some((child) => child.type === 'Input' && child.props?.label === label))
+  assert.ok(group, `no field ${label}`)
+  return group
+}
+
+/** The labels of the Branch section's fields marked invalid. */
+const invalidBranchFields = (view: TestPanel) =>
+  [branchTemplateField, fallbackField, exclusionField].filter((field) => view.find(field)?.props.invalid === true).map((field) => field.label)
+
+/** What the danger callouts of the bar under Project settings say. */
+function barProblems(view: TestPanel): string[] {
+  const bar = settingsBar(view)
+  return bar ? nodesIn(bar, (node) => node.type === 'Callout' && node.props?.tone === 'danger').map(wordsOf) : []
+}
+
+test('a problem in the Branch section marks the field to fix, says why under it, and names that field in the bar under the view, which stays in view', async () => {
+  const { view } = await showWith({ 'tasks.load': twgReady([]) }, twgStored({ site: '', profile: '' }))
+  await view.press(gear)
+  // What is typed, and in which field; then the field marked, why, and how the bar names the field.
+  const cases: [typed: { type: string; label: string }, text: string, marked: string, problem: RegExp, named: string][] = [
+    [branchTemplateField, 'a b', 'Branch template', /^The branch template has a space or a control character, .* Not saved until it is fixed\.$/, 'branch template'],
+    [
+      branchTemplateField,
+      '{{branch_type}}/{{task_key}}',
+      'Fallback branch type',
+      /^The branch template uses \{\{branch_type\}\}: give the branch types a fallback\. Not saved until it is fixed\.$/,
+      'fallback branch type'
+    ],
+    [exclusionField, '[unclosed', 'Title exclusion pattern', /^The title exclusion pattern isn't a valid regular expression: .* Not saved until it is fixed\.$/, 'title exclusion pattern']
+  ]
+  for (const [typed, text, marked, problem, named] of cases) {
+    if (typed === exclusionField) await view.type(branchTemplateField, '', { replace: true })
+    await view.type(typed, text, { replace: true })
+    assert.deepEqual(invalidBranchFields(view), [marked], text)
+    assert.equal(nodesIn(fieldGroup(view, marked), (node) => node.type === 'Text' && problem.test(wordsOf(node))).length, 1, text)
+    assert.deepEqual(barProblems(view), [`Branch settings not saved until the ${named} is fixed.`], text)
+  }
+  await view.type(exclusionField, '', { replace: true })
+  assert.deepEqual(invalidBranchFields(view), [])
+  assert.equal(view.find({ type: 'Text', text: /Not saved/ }), null)
+  assert.equal(settingsBar(view), null)
+})
+
 test('the preview shows the branch and the worktree name for the first loaded task', async () => {
   const { view } = await showWith({ 'tasks.load': twgReady([web12Tagged(), web12Tagged({ key: 'WEB-13', issueType: 'Story' })]) }, twgStored({ site: '', profile: '' }))
   await view.press(gear)
@@ -4213,6 +4258,13 @@ function settingsBar(view: TestPanel): TreeSnapshot | null {
   const form = parts.findIndex((part) => part.props?.scroll === 'y')
   assert.ok(form >= 0, 'Project settings has a part that scrolls')
   return parts[form + 1] ?? null
+}
+
+/** The warning in the bar under Project settings that the section edits the global branch settings,
+ *  or null. */
+function barWarning(view: TestPanel): TreeSnapshot | null {
+  const bar = settingsBar(view)
+  return bar ? (nodesIn(bar, (node) => node.type === 'Callout' && node.props?.tone === 'warning')[0] ?? null) : null
 }
 
 const textIn = (node: TreeSnapshot, text: string) => nodesIn(node, (inner) => inner.type === 'Text' && wordsOf(inner) === text).length === 1
@@ -4278,14 +4330,18 @@ test('turning Global on with none stored asks first: Cancel changes nothing, and
   assert.deepEqual(view.warnings, [])
 })
 
-test('Make global waits for a Branch section git can hold', async () => {
+test('Make global waits for a Branch section git can hold, and the bar says so', async () => {
   const { view, host } = await showWith({ 'tasks.load': twgReady([]) }, twgStored({ site: '', profile: '' }))
   await view.press(gear)
   await view.type(branchTemplateField, 'a b')
   await view.toggle(branchGlobalSwitch)
   assert.equal(view.find({ type: 'Button', text: 'Make global' })?.props.disabled, true)
+  assert.ok(textIn(settingsBar(view)!, 'Fix the branch settings to make them global.'))
+  assert.equal(textIn(settingsBar(view)!, PUBLISH_ASK), false)
   await view.type(branchTemplateField, 'a-b', { replace: true })
   assert.notEqual(view.find({ type: 'Button', text: 'Make global' })?.props.disabled, true)
+  assert.ok(textIn(settingsBar(view)!, PUBLISH_ASK))
+  assert.deepEqual(barProblems(view), [])
   await view.press({ type: 'Button', text: 'Make global' })
   assert.deepEqual(storedGlobalBranch(host), { branchTemplate: 'a-b', branchTypes: [], branchTypeFallback: '' })
 })
@@ -4296,9 +4352,8 @@ test('while the switch is on, the section shows and edits the global branch sett
   assert.equal(branchGlobalOn(view), true)
   assert.equal(view.valueOf(branchTemplateField), TEAM_BRANCH.branchTemplate)
   assert.deepEqual(previewShown(view), ['Preview for WEB-12', 'Branch: team/fix/WEB-12', 'Worktree: web-12-add-dark-mode'])
-  const bar = settingsBar(view)
+  const bar = barWarning(view)
   assert.ok(bar)
-  assert.equal(bar.type, 'Callout')
   assertProps(bar, { tone: 'warning', title: 'Editing the global branch settings.' })
   assert.ok(textIn(bar, GLOBAL_BRANCH_WARNING))
   await view.type(fallbackField, 'feature', { replace: true })
@@ -4331,7 +4386,7 @@ test("turning Global on in a project with its own asks before dropping them: Kee
   assert.deepEqual(storedGlobalBranch(host), TEAM_BRANCH)
   assert.equal(branchGlobalOn(view), true)
   assert.equal(view.valueOf(branchTemplateField), TEAM_BRANCH.branchTemplate)
-  assert.equal(settingsBar(view)?.type, 'Callout')
+  assert.ok(barWarning(view))
 })
 
 test('turning Global on in a project whose own equal the global ones switches without asking', async () => {
@@ -4341,7 +4396,7 @@ test('turning Global on in a project whose own equal the global ones switches wi
   await view.toggle(branchGlobalSwitch)
   assert.equal(branchGlobalOn(view), true)
   assert.equal(storedBranchMark(host), 'global')
-  assert.equal(settingsBar(view)?.type, 'Callout')
+  assert.ok(barWarning(view))
 })
 
 test('turning Global off gives the project a copy at once and says so: the preview stays, and later edits change only the project', async () => {

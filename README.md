@@ -155,11 +155,11 @@ The **Branch** section of Project settings holds the project's **branch settings
 - **Title exclusion pattern**: a regular expression, `\[[^\]]*\]` at first, which removes bracketed tags such as `[FE]` anywhere in the title. Every match, ignoring case, is removed before `{{task_slug}}` and the worktree's name are made, keeping the words on either side apart. Empty, it removes nothing. When it would leave no words, the whole title is used.
 - **Preview**: the branch and the worktree's name a Start of the first loaded task would get, or of an example task, `WEB-12` "[FE] | [Mobile] Add dark mode", a Story, when none is loaded.
 
-The section saves itself as you type, like the rest of Project settings, but not while it has one of these problems, which it shows, keeping what it saved last:
+The section saves itself as you type, like the rest of Project settings, but not while it has one of these problems, keeping what it saved last. It marks the field to fix, says why under it, and names that field in a bar under Project settings that stays in view however far you scroll:
 
 - fixed text in the template that git can't hold in a branch name: a space, one of `~^:?*[\`, `..`, `@{`, a part (between `/`) that starts with `.` or ends with `.lock`, or a leading `-`;
 - a title exclusion pattern that isn't a valid regular expression;
-- a template that uses `{{branch_type}}` while the fallback is empty.
+- a template that uses `{{branch_type}}` while the fallback is empty, which the fallback fixes.
 
 A Start checks the filled-in branch the same way, for a branch type git can't hold, such as one with a space, and refuses with a message. A branch that is already taken is left to Orca, which tries `<branch>-2`, `-3` and so on.
 
@@ -170,7 +170,7 @@ The branch settings can be **global**: kept once, apart from every project's set
 
 - **Which ones a project uses**: once the Global switch below has been used in a project, the project says which: its own or the global ones. Until then, a project that stores any branch setting of its own, even an empty template, uses its own; one with none uses the global ones, if there are any. While there are no global branch settings, a project with none of its own names branches as before: Orca names the branch, and the title exclusion pattern is the initial one.
 - **The Global switch**, at the top of the Branch section, is on while the project uses the global branch settings. While there are none, it is off, even in a project with none of its own, so typing in the section never makes global ones.
-  - **On, with none global yet**: a bar under Project settings first asks, since *Projects without their own branch settings will name branches this way*; **Make global** makes the section, as shown, the global branch settings, and the project uses them. It waits for a section git can hold.
+  - **On, with none global yet**: a bar under Project settings first asks, since *Projects without their own branch settings will name branches this way*; **Make global** makes the section, as shown, the global branch settings, and the project uses them. It waits for a section git can hold, and the bar says so.
   - **On, with global ones**: when the project's own are the same, it just switches. Otherwise the bar asks, since *This project's own branch settings are discarded*; **Use global** drops them, and **Keep own** keeps them.
   - **Off**: the project gets a copy of the global branch settings as its own at once, since none of its branches change, and a note says so. Later edits change only that project.
 - **Editing them**: while the switch is on, the section shows and edits the global branch settings, and a warning stays in view under Project settings: **Editing the global branch settings.** *Changes how every project that uses them names the branches and worktrees of its next Starts. Task worktrees already started keep their branches.* Orca never renames a branch it didn't name itself (`docs/reference.md`, `orca worktree create`). The warning gives no count of projects, since projects Kickoff has never opened use them too.

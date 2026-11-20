@@ -58,6 +58,7 @@ import {
   BRANCH_VARIABLES,
   branchSettingsProblem,
   startBranch,
+  type BranchSettingsProblem,
   titleExclusion,
   worktreeName
 } from './naming'
@@ -1586,8 +1587,8 @@ function TitleRow({ prefix, title, level, children }: { prefix: string | null; t
 
 /** Project settings, in place of the panel view: the tracker, then what a Start uses. The title row
  *  and the bar under the sections stay in place while the sections between them scroll. That bar
- *  asks before the Branch section's Global switch turns on, or, while it is on, warns that the
- *  section edits the global branch settings. */
+ *  says which field keeps the Branch section from being saved, and asks before the section's Global
+ *  switch turns on, or, while it is on, warns that the section edits the global branch settings. */
 function SettingsView({ projectName, shown }: { projectName: string; shown: ShownSettings }) {
   return (
     <Box direction="column" gap="sm" height="100%">
@@ -1613,22 +1614,53 @@ function SettingsView({ projectName, shown }: { projectName: string; shown: Show
         </Text>
         <BranchFields shown={shown} />
       </Box>
-      <BranchGlobalBar shown={shown} />
+      <SettingsBar shown={shown} />
     </Box>
   )
 }
 
-/** Under Project settings: the bar that asks before the Branch section's Global switch turns on,
- *  or, while it is on, the warning that the section edits the global branch settings; else
- *  nothing. */
-function BranchGlobalBar({ shown }: { shown: ShownSettings }) {
+/** How the bar under Project settings names the field that keeps the Branch section from being saved. */
+const BRANCH_PROBLEM_FIELDS: Record<BranchSettingsProblem['field'], string> = {
+  branchTemplate: 'branch template',
+  branchTypeFallback: 'fallback branch type',
+  titleExclusion: 'title exclusion pattern'
+}
+
+/** Under Project settings, in view however far the sections scroll: which field keeps the Branch
+ *  section from being saved, then the row that asks before its Global switch turns on, or, while
+ *  it is on, the warning that the section edits the global branch settings; else nothing. */
+function SettingsBar({ shown }: { shown: ShownSettings }) {
+  const problem = branchSettingsProblem(shown.branch)
+  const global = branchGlobalBar(shown, problem)
+  if (problem === null && global === null) return null
+  return (
+    <Box direction="column" gap="xs" shrink={false}>
+      {problem !== null ? (
+        <Callout tone="danger" icon="error">
+          <Text size="sm">{`Branch settings not saved until the ${BRANCH_PROBLEM_FIELDS[problem.field]} is fixed.`}</Text>
+        </Callout>
+      ) : null}
+      {global}
+    </Box>
+  )
+}
+
+/** The row that asks before the Branch section's Global switch turns on, saying why Make global
+ *  waits while `problem` keeps the section from being saved, or, while the switch is on, the
+ *  warning that the section edits the global branch settings; else nothing. */
+function branchGlobalBar(shown: ShownSettings, problem: BranchSettingsProblem | null): OrcaNode | null {
   const { asking, saving } = shown.branchSwitch
   if (asking !== null) {
     const publish = asking === 'publish'
+    const waits = publish && problem !== null
     return (
-      <Box direction="row" justify="end" align="center" gap="xs" shrink={false}>
-        <Text size="sm" tone="warning">
-          {publish ? 'Projects without their own branch settings will name branches this way.' : "This project's own branch settings are discarded."}
+      <Box direction="row" justify="end" align="center" gap="xs">
+        <Text size="sm" tone={waits ? 'danger' : 'warning'}>
+          {waits
+            ? 'Fix the branch settings to make them global.'
+            : publish
+              ? 'Projects without their own branch settings will name branches this way.'
+              : "This project's own branch settings are discarded."}
         </Text>
         <Button key="branch-global-cancel" size="sm" variant="ghost" disabled={saving} onPress={() => switchBranchGlobal(false)}>
           {publish ? 'Cancel' : 'Keep own'}
@@ -1637,7 +1669,7 @@ function BranchGlobalBar({ shown }: { shown: ShownSettings }) {
           key="branch-global-confirm"
           size="sm"
           variant="solid"
-          disabled={saving || (publish && branchSettingsProblem(shown.branch) !== null)}
+          disabled={saving || waits}
           onPress={confirmBranchGlobal}
         >
           {publish ? 'Make global' : 'Use global'}
@@ -1663,10 +1695,20 @@ function firstLoadedTask(projectId: string): Task | null {
   return current?.kind === 'ready' && current.project.id === projectId ? (current.tasks[0] ?? null) : null
 }
 
+/** Why the Branch section isn't saved, under the field to fix for it, marked invalid. */
+function BranchProblemText({ problem, field }: { problem: BranchSettingsProblem | null; field: BranchSettingsProblem['field'] }) {
+  if (problem?.field !== field) return null
+  return (
+    <Text size="sm" tone="danger">
+      {`${problem.message} Not saved until it is fixed.`}
+    </Text>
+  )
+}
+
 /** The Global switch, then the branch settings the project uses: the branch template, the branch
- *  type table with its fallback and the title exclusion pattern, then why they aren't saved, if
- *  they aren't, and the preview of a Start's branch and worktree. Nothing can be typed while the
- *  switch writes. */
+ *  type table with its fallback and the title exclusion pattern, with why they aren't saved, if
+ *  they aren't, under the field to fix, then the preview of a Start's branch and worktree. Nothing
+ *  can be typed while the switch writes. */
 function BranchFields({ shown }: { shown: ShownSettings }) {
   const { branch } = shown
   const { asking, saving, error, copied } = shown.branchSwitch
@@ -1697,9 +1739,11 @@ function BranchFields({ shown }: { shown: ShownSettings }) {
           label="Branch template"
           value={branch.branchTemplate}
           placeholder="{{branch_type}}/{{task_key}}__{{task_slug}}"
+          invalid={problem?.field === 'branchTemplate'}
           disabled={saving}
           onChange={(branchTemplate) => changeBranch({ branchTemplate })}
         />
+        <BranchProblemText problem={problem} field="branchTemplate" />
         <Text size="sm" muted>
           The git branch of each Start. Empty: Orca names it. Anything other than these variables, such as your initials, is written as it is.
         </Text>
@@ -1751,24 +1795,28 @@ function BranchFields({ shown }: { shown: ShownSettings }) {
           label="Fallback branch type"
           value={branch.branchTypeFallback}
           placeholder="feature"
+          invalid={problem?.field === 'branchTypeFallback'}
           disabled={saving}
           onChange={(branchTypeFallback) => changeBranch({ branchTypeFallback })}
         />
+        <BranchProblemText problem={problem} field="branchTypeFallback" />
         <Text size="sm" muted>
           For an issue type not in the table, a task with no type, and every GitHub task.
         </Text>
       </Stack>
       <Stack gap="xs">
-        <Input label="Title exclusion pattern" value={branch.titleExclusion} disabled={saving} onChange={(pattern) => changeBranch({ titleExclusion: pattern })} />
+        <Input
+          label="Title exclusion pattern"
+          value={branch.titleExclusion}
+          invalid={problem?.field === 'titleExclusion'}
+          disabled={saving}
+          onChange={(pattern) => changeBranch({ titleExclusion: pattern })}
+        />
+        <BranchProblemText problem={problem} field="titleExclusion" />
         <Text size="sm" muted>
           A regular expression. Every match, ignoring case, is removed from the title before {'{{task_slug}}'} and the worktree name are made. Empty: nothing is removed.
         </Text>
       </Stack>
-      {problem !== null ? (
-        <Text size="sm" tone="danger">
-          {`${problem} Not saved until it is fixed.`}
-        </Text>
-      ) : null}
       <BranchPreview shown={shown} />
     </Stack>
   )
