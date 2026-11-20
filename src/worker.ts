@@ -23,6 +23,7 @@ import {
   type OrcaWorktreeStatus
 } from './orca'
 import {
+  filterAsRun,
   listedFilter,
   projectProvider,
   projectSettings,
@@ -104,7 +105,8 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
   }
 
   /** A page of the tasks of the project's filter `filterId` names, on its tracker: of its whole
-   *  list, or of a tracker search with `query`. A failure its queries cause names it. */
+   *  list, or of a tracker search with `query`. Its queries run as `filterAsRun` gives them, with
+   *  the project's Jira project key. A failure its queries cause names it. */
   async function loadTasks({ filterId, ...request }: { filterId?: string } & Omit<PageRequest, 'filter'>): Promise<TaskList> {
     let project: ProjectRef | null = null
     try {
@@ -114,8 +116,11 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
       const settings = await readProjectSettings(project.id)
       const providerId = projectProvider(settings, project)
       if (!providerId) return { kind: 'needs-config', project }
-      const filter = listedFilter(settings, trackerOf(providerId), filterId)
-      const page = await taskLister(providerId)(run, project, settings, { ...request, filter })
+      const tracker = trackerOf(providerId)
+      const filter = listedFilter(settings, tracker, filterId)
+      const asRun = filterAsRun(filter, tracker, settings.jiraProjectKey ?? '')
+      if (!asRun.ok) return { kind: 'error', project, message: asRun.message, needsJiraProjectKey: true }
+      const page = await taskLister(providerId)(run, project, settings, { ...request, filter: asRun.filter })
       const { state } = active
       return {
         kind: 'ready',
@@ -124,7 +129,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
         ...page,
         filterId: filter.id,
         queryCount: queryCount(settings, providerId, filter.id),
-        worktrees: state ? findTaskWorktrees(trackerOf(providerId), project.id, state.worktrees, state.statuses) : null,
+        worktrees: state ? findTaskWorktrees(tracker, project.id, state.worktrees, state.statuses) : null,
         worktreesError: state ? null : active.orcaError,
         starting: startsUnderWay(project.id),
         warning: active.warning
@@ -189,7 +194,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
       const template = projectTemplates(settings).find((candidate) => candidate.id === templateId)
       if (!template) return { ok: false, message: 'The prompt template you chose no longer exists — pick another one.' }
       const name = worktreeName(task)
-      const prompt = buildPrompt(template.text, task, project, name)
+      const prompt = buildPrompt(template.text, task, project, name, settings.jiraProjectKey ?? '')
       if (!prompt.ok) return prompt
       const args = worktreeCreateArgs({ projectId, name, task, agent: agent.agent, prompt: prompt.prompt })
       creating.set(id, { projectId, taskKey: task.key })

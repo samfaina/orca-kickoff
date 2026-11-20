@@ -1,5 +1,5 @@
 import { assert, test } from 'orca/testing'
-import { chooseProvider, projectProvider, projectSettings, queryCount, readSettings, withProjectChanges } from './protocol'
+import { chooseProvider, filterAsRun, projectProvider, projectSettings, queryCount, readSettings, withProjectChanges } from './protocol'
 import { defaultTemplate, projectTemplates } from './template'
 
 const web = { id: 'github:acme/web', name: 'web', repo: 'acme/web' }
@@ -147,6 +147,37 @@ test("a Jira provider starts with its tool's defaults, and switching between the
   const other = chooseProvider({ ...first, ...filters }, 'jira-twg')
   assert.deepEqual(other, { provider: 'jira-twg', providers: { 'jira-orca': { siteId: '' }, 'jira-twg': { site: '', profile: '' } }, ...filters })
   assert.deepEqual(chooseProvider(other, 'jira-orca'), { ...other, provider: 'jira-orca' })
+})
+
+test('the Jira project key is read trimmed and upper-cased; a blank one, or one of another shape, is no key', () => {
+  assert.equal(readProject({ providers: {}, jiraProjectKey: ' web ' }).jiraProjectKey, 'WEB')
+  assert.deepEqual(readProject({ providers: {}, jiraProjectKey: '   ' }), { providers: {} })
+  assert.deepEqual(readProject({ providers: {}, jiraProjectKey: 12 }), { providers: {} })
+  assert.deepEqual(readProject({ providers: {} }), { providers: {} })
+})
+
+test('on Jira, each {{jira_project}} of a filter\'s queries runs as the Jira project key, also with spaces inside the braces', () => {
+  const sprint = { id: 'f-sprint', name: 'Sprint', queries: ['project = {{jira_project}} ORDER BY Rank', '', 'project in ({{ jira_project }}, API) AND key != {{jira_project}}-1'] }
+  assert.deepEqual(filterAsRun(sprint, 'jira', 'WEB'), {
+    ok: true,
+    filter: { ...sprint, queries: ['project = WEB ORDER BY Rank', '', 'project in (WEB, API) AND key != WEB-1'] }
+  })
+  // Other variables are not JQL variables, and stay as written.
+  const other = { ...sprint, queries: ['project = WEB AND summary ~ "{{task_key}}"'] }
+  assert.deepEqual(filterAsRun(other, 'jira', 'WEB'), { ok: true, filter: other })
+})
+
+test('a filter naming {{jira_project}} in a project without a Jira project key runs none of its queries; one without the variable runs', () => {
+  const sprint = { id: 'f-sprint', name: 'Sprint', queries: ['assignee = currentUser()', 'project = {{jira_project}}'] }
+  const message = 'This filter uses {{jira_project}}. Set the Jira project key in Project settings.'
+  assert.deepEqual(filterAsRun(sprint, 'jira', ''), { ok: false, message })
+  assert.deepEqual(filterAsRun(mine, 'jira', ''), { ok: true, filter: mine })
+})
+
+test('on GitHub, a search runs as written: {{jira_project}} has no meaning there', () => {
+  const triage = { id: 'f-triage', name: 'Triage', queries: ['is:open label:{{jira_project}}'] }
+  assert.deepEqual(filterAsRun(triage, 'github', 'WEB'), { ok: true, filter: triage })
+  assert.deepEqual(filterAsRun(triage, 'github', ''), { ok: true, filter: triage })
 })
 
 test("a list runs the non-blank queries of its filter, on Jira and on GitHub", () => {

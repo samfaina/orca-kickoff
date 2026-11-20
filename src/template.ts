@@ -70,6 +70,10 @@ export const MAX_DESCRIPTION = 4000
 /** The Windows command line holds about 32 000 characters, and the prompt is one argument. */
 export const MAX_PROMPT = 30_000
 
+/** The variable that names the project's Jira project key, as `{{jira_project}}`: in templates, and
+ *  the only one in JQL queries. */
+export const JIRA_PROJECT_VARIABLE = 'jira_project'
+
 /** The variables a template can use, in the order the panel lists them. */
 export const TEMPLATE_VARIABLES = [
   'task_key',
@@ -79,7 +83,8 @@ export const TEMPLATE_VARIABLES = [
   'task_status',
   'tracker',
   'repo',
-  'branch'
+  'branch',
+  JIRA_PROJECT_VARIABLE
 ] as const
 
 type TemplateVariable = (typeof TEMPLATE_VARIABLES)[number]
@@ -93,15 +98,17 @@ export const TEMPLATE_VARIABLE_DESCRIPTIONS: Record<TemplateVariable, string> = 
   task_status: 'The status as the tracker shows it, such as "In Progress". "Open" on GitHub.',
   tracker: '"github" or "jira".',
   repo: "The project's repository (owner/name) when Orca knows it, else the project's name.",
-  branch: "The new worktree's name, such as web-12-add-dark-mode."
+  branch: "The new worktree's name, such as web-12-add-dark-mode.",
+  [JIRA_PROJECT_VARIABLE]: "The project's Jira project key, such as WEB, set in Project settings. Empty when it has none."
 }
 
 export type PromptResult = { ok: true; prompt: string } | { ok: false; message: string }
 
-/** The prompt for `task` from a template's text. An empty text gives the task URL. A prompt over
- *  MAX_PROMPT characters is refused. */
-export function buildPrompt(text: string, task: Task, project: ProjectRef, branch: string): PromptResult {
-  const prompt = text === '' ? task.url : fillTemplate(text, templateVariables(task, project, branch))
+/** The prompt for `task` from a template's text, in a project whose Jira project key is
+ *  `jiraProjectKey` ('' for none). An empty text gives the task URL. A prompt over MAX_PROMPT
+ *  characters is refused. */
+export function buildPrompt(text: string, task: Task, project: ProjectRef, branch: string, jiraProjectKey: string): PromptResult {
+  const prompt = text === '' ? task.url : fillTemplate(text, templateVariables(task, project, branch, jiraProjectKey))
   if (prompt.length > MAX_PROMPT) {
     return {
       ok: false,
@@ -111,7 +118,7 @@ export function buildPrompt(text: string, task: Task, project: ProjectRef, branc
   return { ok: true, prompt }
 }
 
-function templateVariables(task: Task, project: ProjectRef, branch: string): Record<TemplateVariable, string> {
+function templateVariables(task: Task, project: ProjectRef, branch: string, jiraProjectKey: string): Record<TemplateVariable, string> {
   return {
     task_key: task.key,
     task_title: task.title,
@@ -120,15 +127,23 @@ function templateVariables(task: Task, project: ProjectRef, branch: string): Rec
     task_status: task.status ?? '',
     tracker: task.tracker,
     repo: project.repo ?? project.name,
-    branch
+    branch,
+    [JIRA_PROJECT_VARIABLE]: jiraProjectKey
   }
 }
 
-/** Replaces each `{{ name }}` with its value; an unknown name is left as it is. */
-function fillTemplate(template: string, variables: Record<string, string>): string {
-  return template.replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (whole, name: string) =>
-    Object.prototype.hasOwnProperty.call(variables, name) ? variables[name] : whole
-  )
+/** A `{{ name }}`, spaces inside the braces allowed, with the name as its group. */
+const VARIABLE = /\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g
+
+/** Replaces each `{{ name }}` with its value; an unknown name is left as it is. JQL queries name
+ *  the Jira project key the same way. */
+export function fillTemplate(template: string, variables: Record<string, string>): string {
+  return template.replace(VARIABLE, (whole, name: string) => (Object.prototype.hasOwnProperty.call(variables, name) ? variables[name] : whole))
+}
+
+/** Whether `text` holds `{{ name }}`, spaces inside the braces allowed. */
+export function usesVariable(text: string, name: string): boolean {
+  return [...text.matchAll(VARIABLE)].some((match) => match[1] === name)
 }
 
 function cut(text: string, max: number): string {

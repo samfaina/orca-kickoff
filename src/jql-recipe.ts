@@ -3,6 +3,7 @@
 // imports, so the panel can use them.
 import type { FilterRecipe } from './filter'
 import { jqlStringContent } from './jql'
+import { JIRA_PROJECT_VARIABLE } from './template'
 
 /** Whose tasks a recipe lists: the person's, the person's or nobody's, or anyone's. */
 export type RecipeAssignees = 'mine' | 'mine-or-unassigned' | 'anyone'
@@ -14,16 +15,19 @@ export type JqlRecipeAnswers =
   | { recipe: 'my-open-tasks'; leaveOut: string }
 
 /** The name and JQL queries of the new filter that a recipe writes from its answers, or null when
- *  they lack one it needs: Board order's project key. The key is trimmed, not checked: a wrong one
- *  shows as the query's error when the filter lists its tasks. */
-export function jqlRecipe(answers: JqlRecipeAnswers): FilterRecipe | null {
+ *  they lack one it needs: Board order's Jira project key. The key is trimmed, not checked: a wrong
+ *  one shows as the query's error when the filter lists its tasks. While it is the project's
+ *  `jiraProjectKey` ('' for none), ignoring case, the queries name it as `{{jira_project}}`, so
+ *  they follow the project's key. */
+export function jqlRecipe(answers: JqlRecipeAnswers, jiraProjectKey = ''): FilterRecipe | null {
   const status = statusCondition(answers.leaveOut)
   if (answers.recipe === 'my-open-tasks') {
     return { name: 'My open tasks', queries: [andQuery(['assignee = currentUser()', status], 'updated DESC')] }
   }
   const projectKey = answers.projectKey.trim()
   if (projectKey === '') return null
-  const project = `project = ${projectKey}`
+  const answerIsJiraProjectKey = jiraProjectKey !== '' && projectKey.toUpperCase() === jiraProjectKey.toUpperCase()
+  const project = `project = ${answerIsJiraProjectKey ? `{{${JIRA_PROJECT_VARIABLE}}}` : projectKey}`
   const assignee = ASSIGNEE_CONDITION[answers.assignees]
   const query = (sprint: string, order: string) => andQuery([project, sprint, assignee, status], order)
   return {
