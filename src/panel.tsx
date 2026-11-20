@@ -51,6 +51,7 @@ import {
   chooseProvider,
   DEFAULT_GITHUB_QUERY,
   DEFAULT_JQL,
+  jiraProjectKey,
   listedFilter,
   projectFilters,
   projectProvider,
@@ -134,6 +135,8 @@ type ShownSettings = {
   projectId: string
   provider: ProviderId | null
   providers: ProviderConfigs
+  /** '' while the project has none. */
+  jiraProjectKey: string
   filterSettings: FilterSettings
   agent: string
   templates: PromptTemplate[]
@@ -334,7 +337,7 @@ type SettingsChange = Omit<ProjectChanges, keyof FilterSettings>
 function changeSettings(changes: SettingsChange): void {
   const current = read(shownSettings)
   if (!current) return
-  if (changes.provider !== undefined || changes.providers !== undefined) {
+  if (changes.provider !== undefined || changes.providers !== undefined || changes.jiraProjectKey !== undefined) {
     trackerSettingsVersion++
     // A tracker search narrows the list the tracker settings give, which this changes.
     leaveTrackerSearch()
@@ -353,6 +356,7 @@ async function showSettings(project: ProjectRef): Promise<void> {
     projectId: project.id,
     provider,
     providers: settings.providers,
+    jiraProjectKey: settings.jiraProjectKey ?? '',
     filterSettings: { filters: settings.filters, shownFilterId: settings.shownFilterId },
     agent: settings.agent ?? 'orca-default',
     templates: projectTemplates(settings),
@@ -410,7 +414,8 @@ function openFilter(id: string | null, loadError: string | null = null, recipe: 
 }
 
 /** + in the filter row: on Jira, the choice of a blank filter or a JQL recipe, in place of the panel
- *  view, with fresh answers; on GitHub, the filter editor on a new filter, whose recipes are in it. */
+ *  view, with fresh answers, Board order's Jira project key starting as the project's own;
+ *  on GitHub, the filter editor on a new filter, whose recipes are in it. */
 function newFilter(): void {
   const shown = read(shownSettings)
   const current = shown ? trackerFilters(shown) : null
@@ -421,7 +426,7 @@ function newFilter(): void {
   }
   closeTemplate()
   set(filterDraft, null)
-  set(newFilterChoice, { projectId: shown.projectId, kind: 'custom', projectKey: '', assignees: 'mine-or-unassigned', leaveOut: 'Done' })
+  set(newFilterChoice, { projectId: shown.projectId, kind: 'custom', projectKey: shown.jiraProjectKey, assignees: 'mine-or-unassigned', leaveOut: 'Done' })
 }
 
 /** Changes the choice of +, while it is still open on the project `expected` was made for. */
@@ -430,13 +435,16 @@ function changeNewFilterChoice(expected: NewFilterChoice, changes: Partial<NewFi
 }
 
 /** The name and queries the choice of + writes: null for a blank filter, or undefined while its
- *  recipe lacks an answer it needs. */
+ *  recipe lacks an answer it needs. Board order names the project's Jira project key as
+ *  `{{jira_project}}` while its answer is that key. */
 function chosenRecipe(choice: NewFilterChoice): FilterRecipe | null | undefined {
   switch (choice.kind) {
     case 'custom':
       return null
-    case 'board-order':
-      return jqlRecipe({ recipe: 'board-order', projectKey: choice.projectKey, assignees: choice.assignees, leaveOut: choice.leaveOut }) ?? undefined
+    case 'board-order': {
+      const answers: JqlRecipeAnswers = { recipe: 'board-order', projectKey: choice.projectKey, assignees: choice.assignees, leaveOut: choice.leaveOut }
+      return jqlRecipe(answers, read(shownSettings)?.jiraProjectKey ?? '') ?? undefined
+    }
     case 'my-open-tasks':
       return jqlRecipe({ recipe: 'my-open-tasks', leaveOut: choice.leaveOut }) ?? undefined
   }
@@ -1178,9 +1186,10 @@ export default function Panel() {
 }
 
 /** Whether Project settings opens by itself: the project has no tracker, or its load failed for a
- *  reason other than a filter's query, which opens the filter editor instead. */
+ *  reason other than a filter's query, which opens the filter editor instead, or than a missing
+ *  Jira project key, which the list asks for. */
 const needsSettings = (current: TaskList | null) =>
-  current?.kind === 'needs-config' || (current?.kind === 'error' && current.filterId === undefined)
+  current?.kind === 'needs-config' || (current?.kind === 'error' && current.filterId === undefined && current.needsJiraProjectKey !== true)
 
 /** The panel's title, since its tab shows only its icon, and its actions. `gear` shows the button
  *  that opens Project settings. */
@@ -1241,6 +1250,26 @@ function TrackerFields({ shown }: { shown: ShownSettings }) {
       <Select label="Tracker" labelHidden value={shown.provider ?? NO_TRACKER} options={providerOptions} onChange={chooseProviderFor} />
       {shown.provider === 'jira-orca' ? <JiraOrcaSettings providers={shown.providers} /> : null}
       {shown.provider === 'jira-twg' ? <JiraTwgSettings providers={shown.providers} /> : null}
+      {shown.provider !== null && trackerOf(shown.provider) === 'jira' ? <JiraProjectKeyField value={shown.jiraProjectKey} /> : null}
+    </Stack>
+  )
+}
+
+/** The project's Jira project key, stored as `jiraProjectKey` gives it from what is typed. Like
+ *  the other tracker settings, typing it loads nothing by itself, and Enter or Done lists the tasks. */
+function JiraProjectKeyField({ value }: { value: string }) {
+  return (
+    <Stack gap="xs">
+      <Input
+        label="Jira project key"
+        value={value}
+        placeholder="WEB"
+        onChange={(typed) => changeSettings({ jiraProjectKey: jiraProjectKey(typed) })}
+        onSubmit={loadKeepingSettingsOpen}
+      />
+      <Text size="sm" muted>
+        {'The key of the Jira project, such as WEB. Filters and prompt templates name it as {{jira_project}}, so the same filter lists each project\'s own tasks.'}
+      </Text>
     </Stack>
   )
 }

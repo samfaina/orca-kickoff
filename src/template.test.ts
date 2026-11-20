@@ -1,6 +1,16 @@
 import { assert, test } from 'orca/testing'
 import type { ProjectRef, Task } from './protocol'
-import { buildPrompt, defaultTemplate, INITIAL_TEMPLATE_TEXT, projectTemplates, templateNameProblem, withTemplateDeleted, withTemplateSaved } from './template'
+import {
+  buildPrompt,
+  defaultTemplate,
+  INITIAL_TEMPLATE_TEXT,
+  projectTemplates,
+  TEMPLATE_VARIABLE_DESCRIPTIONS,
+  TEMPLATE_VARIABLES,
+  templateNameProblem,
+  withTemplateDeleted,
+  withTemplateSaved
+} from './template'
 
 const web: ProjectRef = { id: 'github:acme/web', name: 'web', repo: 'acme/web' }
 
@@ -20,41 +30,50 @@ const branch = 'web-12-add-dark-mode-to'
 
 test('every variable is filled, also with spaces inside the braces', () => {
   const template =
-    '{{task_key}}|{{ task_title }}|{{task_url}}|{{  task_description}}|{{task_status }}|{{tracker}}|{{repo}}|{{branch}}'
-  assert.deepEqual(buildPrompt(template, task, web, branch), {
+    '{{task_key}}|{{ task_title }}|{{task_url}}|{{  task_description}}|{{task_status }}|{{tracker}}|{{repo}}|{{branch}}|{{ jira_project }}'
+  assert.deepEqual(buildPrompt(template, task, web, branch, 'WEB'), {
     ok: true,
     prompt:
-      'WEB-12|Add dark mode to settings|https://example.atlassian.net/browse/WEB-12|Users want a dark theme.|To Do|jira|acme/web|web-12-add-dark-mode-to'
+      'WEB-12|Add dark mode to settings|https://example.atlassian.net/browse/WEB-12|Users want a dark theme.|To Do|jira|acme/web|web-12-add-dark-mode-to|WEB'
   })
 })
 
+test('a project without a Jira project key leaves jira_project empty', () => {
+  assert.deepEqual(buildPrompt('[{{jira_project}}]', task, web, branch, ''), { ok: true, prompt: '[]' })
+})
+
+test('jira_project is a template variable, last, with what it gives', () => {
+  assert.equal(TEMPLATE_VARIABLES.at(-1), 'jira_project')
+  assert.equal(TEMPLATE_VARIABLE_DESCRIPTIONS.jira_project, "The project's Jira project key, such as WEB, set in Project settings. Empty when it has none.")
+})
+
 test('an unknown variable is left as it is', () => {
-  assert.deepEqual(buildPrompt('{{task_key}} {{ assignee }}', task, web, branch), { ok: true, prompt: 'WEB-12 {{ assignee }}' })
+  assert.deepEqual(buildPrompt('{{task_key}} {{ assignee }}', task, web, branch, ''), { ok: true, prompt: 'WEB-12 {{ assignee }}' })
 })
 
 test('a task without a status leaves task_status empty', () => {
-  assert.deepEqual(buildPrompt('[{{task_status}}]', { ...task, status: null }, web, branch), { ok: true, prompt: '[]' })
+  assert.deepEqual(buildPrompt('[{{task_status}}]', { ...task, status: null }, web, branch, ''), { ok: true, prompt: '[]' })
 })
 
 test('a project without a repo uses its name for {{repo}}', () => {
   const notes: ProjectRef = { id: 'repo:r2', name: 'notes', repo: null }
-  assert.deepEqual(buildPrompt('{{repo}}', task, notes, branch), { ok: true, prompt: 'notes' })
+  assert.deepEqual(buildPrompt('{{repo}}', task, notes, branch, ''), { ok: true, prompt: 'notes' })
 })
 
 test('a long description is cut to 4000 characters with …', () => {
-  const result = buildPrompt('{{task_description}}', { ...task, description: 'x'.repeat(5000) }, web, branch)
+  const result = buildPrompt('{{task_description}}', { ...task, description: 'x'.repeat(5000) }, web, branch, '')
   assert.ok(result.ok)
   assert.equal(result.prompt.length, 4000)
   assert.equal(result.prompt, `${'x'.repeat(3999)}…`)
 })
 
 test('an empty template gives the task URL', () => {
-  assert.deepEqual(buildPrompt('', task, web, branch), { ok: true, prompt: 'https://example.atlassian.net/browse/WEB-12' })
+  assert.deepEqual(buildPrompt('', task, web, branch, ''), { ok: true, prompt: 'https://example.atlassian.net/browse/WEB-12' })
 })
 
 test('INITIAL_TEMPLATE_TEXT is the key and URL of the task', () => {
   assert.equal(INITIAL_TEMPLATE_TEXT, 'Complete {{task_key}}: {{task_url}}')
-  assert.deepEqual(buildPrompt(INITIAL_TEMPLATE_TEXT, task, web, branch), {
+  assert.deepEqual(buildPrompt(INITIAL_TEMPLATE_TEXT, task, web, branch, ''), {
     ok: true,
     prompt: 'Complete WEB-12: https://example.atlassian.net/browse/WEB-12'
   })
@@ -68,11 +87,11 @@ test('a project without stored templates has one, "Default", with INITIAL_TEMPLA
 })
 
 test('a prompt over 30 000 characters is refused with a clear message', () => {
-  const result = buildPrompt('y'.repeat(30_001), task, web, branch)
+  const result = buildPrompt('y'.repeat(30_001), task, web, branch, '')
   assert.equal(result.ok, false)
   assert.ok(!result.ok)
   assert.match(result.message, /30[ ,]?000/)
-  assert.deepEqual(buildPrompt('y'.repeat(30_000), task, web, branch), { ok: true, prompt: 'y'.repeat(30_000) })
+  assert.deepEqual(buildPrompt('y'.repeat(30_000), task, web, branch, ''), { ok: true, prompt: 'y'.repeat(30_000) })
 })
 
 const implement = { id: 't-impl', name: 'Implement', text: '/acme-skills:tdd {{task_url}}' }

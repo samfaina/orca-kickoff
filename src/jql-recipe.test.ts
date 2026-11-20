@@ -34,6 +34,18 @@ test('My open tasks writes one query: the tasks assigned to the person, without 
   assert.deepEqual(jqlRecipe({ recipe: 'my-open-tasks', leaveOut: ' ' })?.queries, ['assignee = currentUser() ORDER BY updated DESC'])
 })
 
+test("Board order writes project = {{jira_project}} while its answer is the project's Jira project key, ignoring case, and any other key as typed", () => {
+  const firstQuery = (projectKey: string, jiraProjectKey: string) =>
+    jqlRecipe({ recipe: 'board-order', projectKey, assignees: 'anyone', leaveOut: '' }, jiraProjectKey)?.queries[0]
+  assert.equal(firstQuery('WEB', 'WEB'), 'project = {{jira_project}} AND sprint in openSprints() ORDER BY Rank ASC')
+  assert.equal(firstQuery(' web ', 'WEB'), 'project = {{jira_project}} AND sprint in openSprints() ORDER BY Rank ASC')
+  assert.equal(firstQuery('API', 'WEB'), 'project = API AND sprint in openSprints() ORDER BY Rank ASC')
+  assert.equal(firstQuery('WEB', ''), 'project = WEB AND sprint in openSprints() ORDER BY Rank ASC')
+  const queries = jqlRecipe({ recipe: 'board-order', projectKey: 'WEB', assignees: 'anyone', leaveOut: '' }, 'WEB')?.queries ?? []
+  assert.equal(queries.length, 3)
+  assert.ok(queries.every((query) => query.startsWith('project = {{jira_project}} AND ')))
+})
+
 test("Board order trims the project key and writes nothing without one", () => {
   const boardOrder = (projectKey: string) => jqlRecipe({ recipe: 'board-order', projectKey, assignees: 'anyone', leaveOut: '' })
   assert.equal(boardOrder('  WEB ')?.queries[0], 'project = WEB AND sprint in openSprints() ORDER BY Rank ASC')

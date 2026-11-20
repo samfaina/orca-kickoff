@@ -1299,7 +1299,8 @@ test('the hint follows the text, and the closed Variables list gives each variab
       [['Code {{task_status}}'], '{{task_status}} The status as the tracker shows it, such as "In Progress". "Open" on GitHub.'],
       [['Code {{tracker}}'], '{{tracker}} "github" or "jira".'],
       [['Code {{repo}}'], "{{repo}} The project's repository (owner/name) when Orca knows it, else the project's name."],
-      [['Code {{branch}}'], "{{branch}} The new worktree's name, such as web-12-add-dark-mode."]
+      [['Code {{branch}}'], "{{branch}} The new worktree's name, such as web-12-add-dark-mode."],
+      [['Code {{jira_project}}'], "{{jira_project}} The project's Jira project key, such as WEB, set in Project settings. Empty when it has none."]
     ]
   )
   assert.deepEqual(view.warnings, [])
@@ -3505,6 +3506,74 @@ test("the twg site and profile save themselves, keeping the other providers' set
     await view.submit(field)
     assert.equal(loads, before + 1)
   }
+})
+
+const jiraProjectKeyField = { type: 'Input', label: 'Jira project key' }
+
+test('a Jira project\'s settings show the Jira project key, empty at first, with what it is for; a GitHub project\'s don\'t', async () => {
+  const jira = await showWith({ 'tasks.load': twgReady([]) }, twgStored({ site: '', profile: '' }))
+  await jira.view.press(gear)
+  assert.equal(jira.view.valueOf(jiraProjectKeyField), '')
+  assert.ok(jira.view.find({ type: 'Text', text: /\{\{jira_project\}\}/ }))
+  await jira.view.select({ type: 'Select', label: 'Tracker' }, 'jira-orca')
+  assert.equal(jira.view.valueOf(jiraProjectKeyField), '')
+  await jira.view.select({ type: 'Select', label: 'Tracker' }, 'github')
+  assert.equal(jira.view.find(jiraProjectKeyField), null)
+  await jira.view.unmount()
+
+  const github = await showWith({ 'tasks.load': ready([task('#42')]) })
+  await github.view.press(gear)
+  assert.equal(github.view.find(jiraProjectKeyField), null)
+})
+
+test('the Jira project key saves itself trimmed and upper-cased, a panel opened again shows it, and Done lists the tasks again', async () => {
+  let loads = 0
+  const { view, host } = await showWith({ 'tasks.load': () => (loads++, twgReady([])) }, twgStored({ site: '', profile: '' }))
+  await view.press(gear)
+  await view.type(jiraProjectKeyField, ' web ')
+  assert.equal(view.valueOf(jiraProjectKeyField), 'WEB')
+  assert.equal(loads, 1)
+  await wait(800)
+  assert.equal((storedProject(host) as { jiraProjectKey?: string }).jiraProjectKey, 'WEB')
+  await view.press(done)
+  assert.equal(loads, 2)
+  await view.unmount()
+  const again = await mount(panel, { host })
+  await again.press(gear)
+  assert.equal(again.valueOf(jiraProjectKeyField), 'WEB')
+})
+
+test('a filter that needs the Jira project key shows the message in the list, under the filter row, without opening Project settings', async () => {
+  const message = 'This filter uses {{jira_project}}. Set the Jira project key in Project settings.'
+  // The first load lists "Tasks", which needs the key; the next one "Mine", chosen after it.
+  let loads = 0
+  const { view } = await showFilters(filtersStored([tasksFilter, mineFilter]), {
+    'tasks.load': () => (++loads === 1 ? { kind: 'error', project: web, message, needsJiraProjectKey: true } : twgReady([twgTask('WEB-3')], { filterId: 'f-mine' }))
+  })
+  assert.equal(view.find(settingsTitle), null)
+  assert.equal(view.find(filterTitle('Edit filter')), null)
+  assert.ok(view.find({ type: 'Callout', text: /Set the Jira project key in Project settings/ }))
+  assert.ok(view.find(filterSelect))
+  await view.select(filterSelect, 'f-mine')
+  assert.ok(view.find({ type: 'Link', text: 'WEB-3' }))
+})
+
+test("Board order starts from the project's Jira project key and writes project = {{jira_project}} while the answer is that key", async () => {
+  const { view } = await showFilters(twgStored({ site: '', profile: '' }, { filters: { jira: [tasksFilter] }, jiraProjectKey: 'WEB' }))
+  const firstWords = () => queryFields(view).map(([, query]) => String(query).split(' AND ')[0])
+  await view.press(newFilter)
+  await view.select(startFrom, 'board-order')
+  assert.equal(view.valueOf(projectKeyField), 'WEB')
+  await view.type(projectKeyField, 'web', { replace: true })
+  await view.press(continueButton)
+  assert.deepEqual(firstWords(), ['project = {{jira_project}}', 'project = {{jira_project}}', 'project = {{jira_project}}'])
+
+  await view.press({ type: 'Button', text: 'Cancel' })
+  await view.press(newFilter)
+  await view.select(startFrom, 'board-order')
+  await view.type(projectKeyField, 'API', { replace: true })
+  await view.press(continueButton)
+  assert.deepEqual(firstWords(), ['project = API', 'project = API', 'project = API'])
 })
 
 test('switching between the two Jira providers keeps every filter, and the one shown', async () => {

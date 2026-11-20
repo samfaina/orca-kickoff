@@ -2,7 +2,7 @@
 // src/panel.tsx and src/worker.ts both read it, so it imports nothing from Node. Expected failures
 // are data (`kind: 'error'`, `ok: false`): no request throws for them.
 import { isRecord } from './json'
-import { INITIAL_TEMPLATE_ID, INITIAL_TEMPLATE_NAME, sameTemplateName } from './template'
+import { fillTemplate, INITIAL_TEMPLATE_ID, INITIAL_TEMPLATE_NAME, JIRA_PROJECT_VARIABLE, sameTemplateName, usesVariable } from './template'
 
 export type TrackerId = 'github' | 'jira'
 export type ProviderId = 'github' | 'jira-orca' | 'jira-twg'
@@ -75,6 +75,9 @@ export type ProjectSettings = {
   /** undefined: GitHub when the project has a repo, else none. */
   provider?: ProviderId
   providers: ProviderConfigs
+  /** The key of the project's Jira project, such as WEB: trimmed and upper-cased (see
+   *  `jiraProjectKey`). A JQL query names it as `{{jira_project}}`. Undefined or '': none. */
+  jiraProjectKey?: string
   /** The filters of each tracker, in order; both Jira providers list the same ones. Undefined or
    *  empty: one filter, "Tasks" with DEFAULT_JQL on Jira, "Open" with DEFAULT_GITHUB_QUERY on
    *  GitHub. */
@@ -130,6 +133,8 @@ export function readSettings(raw: unknown): Settings {
 function readProjectSettings(raw: Record<string, unknown>): ProjectSettings {
   const project: ProjectSettings = { providers: readProviderConfigs(raw.providers) }
   if (PROVIDER_IDS.includes(raw.provider as ProviderId)) project.provider = raw.provider as ProviderId
+  const key = typeof raw.jiraProjectKey === 'string' ? jiraProjectKey(raw.jiraProjectKey) : ''
+  if (key !== '') project.jiraProjectKey = key
   const filters: ByTracker<Filter[]> = {}
   const shownFilterId: ByTracker<string> = {}
   for (const tracker of TRACKER_IDS) {
@@ -220,6 +225,11 @@ function strings<K extends string>(record: Record<string, unknown>, ...keys: K[]
   return keys.every((key) => typeof record[key] === 'string')
 }
 
+/** A Jira project key as it is stored, from what the person typed: trimmed and upper-cased. */
+export function jiraProjectKey(typed: string): string {
+  return typed.trim().toUpperCase()
+}
+
 /** A project's settings, or empty ones when it has none. */
 export function projectSettings(settings: Settings, projectId: string): ProjectSettings {
   return settings.projects[projectId] ?? { providers: {} }
@@ -274,6 +284,24 @@ export function filterQueries(queries: readonly string[]): FilterQuery[] {
   })
 }
 
+/** What a list answers when the filter's JQL queries name the Jira project key and the project
+ *  has none. */
+export const NO_JIRA_PROJECT_KEY = `This filter uses {{${JIRA_PROJECT_VARIABLE}}}. Set the Jira project key in Project settings.`
+
+/** `filter` with its queries as they run on `tracker`, in a project whose Jira project key is
+ *  `jiraProjectKey` ('' for none): on Jira each `{{ jira_project }}` becomes the key; on GitHub,
+ *  where it has no meaning, they run as written. Every run of the queries goes through it: the
+ *  list, its next pages and a tracker search. A project without a key whose filter names it fails,
+ *  and none of the filter's queries runs. What is stored doesn't change. */
+export function filterAsRun(filter: Filter, tracker: TrackerId, jiraProjectKey: string): { ok: true; filter: Filter } | { ok: false; message: string } {
+  if (tracker !== 'jira') return { ok: true, filter }
+  if (jiraProjectKey === '' && filter.queries.some((query) => usesVariable(query, JIRA_PROJECT_VARIABLE))) {
+    return { ok: false, message: NO_JIRA_PROJECT_KEY }
+  }
+  const variables = { [JIRA_PROJECT_VARIABLE]: jiraProjectKey }
+  return { ok: true, filter: { ...filter, queries: filter.queries.map((query) => fillTemplate(query, variables)) } }
+}
+
 /** How many queries a provider runs to list the project's tasks: the non-blank queries of the
  *  filter `filterId` names, or of the one `listedFilter` lists without it. */
 export function queryCount(settings: ProjectSettings, id: ProviderId, filterId?: string): number {
@@ -319,8 +347,10 @@ export type TaskList =
   /** No provider for this project. */
   | { kind: 'needs-config'; project: ProjectRef }
   /** `filterId`: the filter one of whose queries failed, or that has none to run; the panel opens
-   *  the filter editor on it. */
-  | { kind: 'error'; project: ProjectRef | null; message: string; filterId?: string }
+   *  the filter editor on it. `needsJiraProjectKey`: the filter's JQL queries name the Jira
+   *  project key and the project has none; the list shows the message, and Project settings, where
+   *  the key is set, doesn't open by itself. */
+  | { kind: 'error'; project: ProjectRef | null; message: string; filterId?: string; needsJiraProjectKey?: true }
   | {
       kind: 'ready'
       project: ProjectRef

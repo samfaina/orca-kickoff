@@ -443,6 +443,61 @@ test('a filter whose queries are all blank is an error asking for one, naming th
   assert.equal(calls.some((call) => call.args[0] === 'jira'), false)
 })
 
+const sprint = { id: 'f-sprint', name: 'Sprint', queries: ['project = {{jira_project}} ORDER BY rank'] }
+
+/** Stored settings of the web project on Jira (twg), with these filters and Jira project key. */
+const twgSettings = (filters: { id: string; name: string; queries: string[] }[], jiraProjectKey?: string) => ({
+  settings: {
+    version: 1,
+    projects: {
+      'github:acme/web': {
+        provider: 'jira-twg',
+        providers: { 'jira-twg': { site: '', profile: '' } },
+        filters: { jira: filters },
+        ...(jiraProjectKey !== undefined ? { jiraProjectKey } : {})
+      }
+    }
+  }
+})
+
+test('a filter naming {{jira_project}} lists the tasks of the Jira project key, on its first page, its next pages and in a tracker search', async () => {
+  const page = JSON.stringify({
+    data: { issues: [{ key: 'WEB-7', summary: 'Dark mode', assignee: null, url: 'https://example.atlassian.net/browse/WEB-7' }] },
+    pageInfo: { hasNextPage: true, nextCursor: 'cursor-2' }
+  })
+  const { worker, calls } = await start({ ...ORCA_OK, 'twg jira workitem': page }, { storage: twgSettings([sprint], 'WEB') })
+  assert.equal((await worker.request('tasks.load', {})).kind, 'ready')
+  assert.equal((await worker.request('tasks.load', { cursor: '0:cursor-2' })).kind, 'ready')
+  assert.equal((await worker.request('tasks.load', { query: 'dark' })).kind, 'ready')
+  const jqls = calls.filter((call) => call.tool === 'twg').map((call) => call.args[call.args.indexOf('--jql') + 1])
+  assert.deepEqual(jqls, ['project = WEB ORDER BY rank', 'project = WEB ORDER BY rank', '(project = WEB) AND (text ~ "dark*") ORDER BY rank'])
+})
+
+test('without a Jira project key, a filter naming {{jira_project}} runs no query and asks for the key; a filter without it lists', async () => {
+  const page = JSON.stringify({ data: { issues: [{ key: 'WEB-3', summary: 'Mine', assignee: null, url: 'https://example.atlassian.net/browse/WEB-3' }] } })
+  const { worker, calls } = await start({ ...ORCA_OK, 'twg jira workitem': page }, { storage: twgSettings([sprint, mine]) })
+  assert.deepEqual(await worker.request('tasks.load', {}), {
+    kind: 'error',
+    project: { id: 'github:acme/web', name: 'web', repo: 'acme/web' },
+    message: 'This filter uses {{jira_project}}. Set the Jira project key in Project settings.',
+    needsJiraProjectKey: true
+  })
+  assert.equal(calls.some((call) => call.tool === 'twg'), false)
+  const listed = await worker.request('tasks.load', { filterId: 'f-mine' })
+  assert.ok(listed.kind === 'ready')
+  assert.deepEqual(listed.tasks.map((task) => task.key), ['WEB-3'])
+})
+
+test('a GitHub search naming {{jira_project}} runs as written, with or without a Jira project key', async () => {
+  for (const jiraProjectKey of ['WEB', undefined]) {
+    const triage = { id: 'f-triage', name: 'Triage', queries: ['label:{{jira_project}}'] }
+    const project = { providers: {}, filters: { github: [triage] }, ...(jiraProjectKey ? { jiraProjectKey } : {}) }
+    const { worker, calls } = await start({ ...ORCA_OK, 'gh issue list': GH_ISSUES }, { storage: { settings: { version: 1, projects: { 'github:acme/web': project } } } })
+    assert.equal((await worker.request('tasks.load', {})).kind, 'ready')
+    assert.deepEqual(calls.filter((call) => call.tool === 'gh').map((call) => call.args.at(-1)), ['(label:{{jira_project}}) is:open'])
+  }
+})
+
 test("jira.sites answers the connected sites' ids and names, never email", async () => {
   const connection = wrap({
     connected: true,
@@ -548,6 +603,15 @@ const twoTemplates = {
     }
   }
 }
+
+test("Start fills {{jira_project}} with the project's Jira project key, or with nothing without one", async () => {
+  for (const [jiraProjectKey, prompt] of [['WEB', 'Fix #42 in WEB'], [undefined, 'Fix #42 in ']] as const) {
+    const project = { providers: {}, template: 'Fix {{task_key}} in {{jira_project}}', ...(jiraProjectKey ? { jiraProjectKey } : {}) }
+    const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED }, { storage: { settings: { version: 1, projects: { 'github:acme/web': project } } } })
+    await worker.request('task.start', startWeb42)
+    assert.deepEqual(creates(calls)[0].args.slice(-2), ['--prompt', prompt])
+  }
+})
 
 test('Start fills the prompt from the template it is given, not the default one', async () => {
   const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED }, { storage: twoTemplates })

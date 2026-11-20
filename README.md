@@ -36,6 +36,8 @@ Open the **Kickoff** panel from its icon (a lightning bolt) in Orca's right side
   - **Jira (Orca connection)**: the site, when Orca is connected to more than one (Orca's default site otherwise).
   - **Jira (twg)**: optionally `twg`'s site and profile.
 
+  On Jira, the **Jira project key** is the key of the Jira project the tasks are in, such as `WEB`. It starts empty, is never guessed from your JQL, and is stored trimmed and upper-cased. [Filters](#filters) and [prompt templates](#prompt-templates) name it as `{{jira_project}}`.
+
   **Done** shows the project's tasks: those of its first [filter](#filters), **Tasks** on Jira and **Open** on GitHub. The gear in the panel's header opens Project settings again later, and **Done** goes back to the list, loading it again when a tracker setting changed.
 
 Each task shows as a card with its key and title, then its labels, after its status on Jira, then its assignees, if any. **Start** (the play button):
@@ -67,10 +69,10 @@ The filter row, in **Filters** above **Search tasks**, shows the filter listed, 
 ✎ and **+** open the filter editor in place of the list. On Jira, **+** first asks what the new filter starts from:
 
 - **Custom**: one blank query.
-- **Board order**: a Jira project's tasks in board order. It asks for the project key (typed, such as `WEB`; required), whose tasks (**Mine**, **Mine or unassigned**, the default, or **Anyone**) and the statuses to leave out, and writes three queries: the open sprints in rank order, then the future sprints, then the rest. With `WEB`, *Mine or unassigned* and `Done, Closed, To validate`, the first is `project = WEB AND sprint in openSprints() AND (assignee IS EMPTY OR assignee = currentUser()) AND status NOT IN ("Done", "Closed", "To validate") ORDER BY Rank ASC`.
+- **Board order**: a Jira project's tasks in board order. It asks for the Jira project key (typed, such as `WEB`; required, starting as the project's own when it has one), whose tasks (**Mine**, **Mine or unassigned**, the default, or **Anyone**) and the statuses to leave out, and writes three queries: the open sprints in rank order, then the future sprints, then the rest. With `WEB`, *Mine or unassigned* and `Done, Closed, To validate`, the first is `project = WEB AND sprint in openSprints() AND (assignee IS EMPTY OR assignee = currentUser()) AND status NOT IN ("Done", "Closed", "To validate") ORDER BY Rank ASC`. While the answer is the project's Jira project key, ignoring case, the queries say `project = {{jira_project}}` instead.
 - **My open tasks**: asks for the statuses to leave out and writes one query; with the first answer, `Done`, it is `assignee = currentUser() AND status NOT IN ("Done") ORDER BY updated DESC`.
 
-The statuses to leave out are names separated by commas, starting as `Done`; with none, the queries keep every status. Status names are used rather than status categories, because a workflow's statuses such as *To validate* don't map to one. A wrong project key shows as the query's error when the filter lists its tasks. **Continue** opens the filter editor on the new filter, named after its recipe, with the queries written for you to change before saving; the answers are not kept.
+The statuses to leave out are names separated by commas, starting as `Done`; with none, the queries keep every status. Status names are used rather than status categories, because a workflow's statuses such as *To validate* don't map to one. A wrong Jira project key shows as the query's error when the filter lists its tasks. **Continue** opens the filter editor on the new filter, named after its recipe, with the queries written for you to change before saving; the answers are not kept.
 
 A new filter is named **Filter 2**, **Filter 3**…, or after its recipe, the first name no filter has. In the editor:
 
@@ -79,6 +81,8 @@ A new filter is named **Filter 2**, **Filter 3**…, or after its recipe, the fi
 - On GitHub, a new filter can start from a recipe: **Open** (`is:open`) or **Assigned to me** (`is:open assignee:@me`), which write the filter's name and query for you to change before saving.
 - **Save** (or **Ctrl+Enter**, **Cmd+Enter** on macOS, in a query) stores the filter, goes back to the list and loads it. **Cancel** goes back without storing anything.
 - **Delete filter**, clicked twice, removes the filter; a project keeps at least one.
+
+A JQL query can name the project's Jira project key as `{{jira_project}}`, spaces inside the braces allowed, so two projects with the same workflow can use the same queries: `project = {{jira_project}} ORDER BY Rank` lists each project's own tasks. It becomes the key each time the query runs, for the list, **Load more** and a tracker search; the filter keeps it as written. In a project without a Jira project key, a filter that names it runs none of its queries, and the list says *This filter uses {{jira_project}}. Set the Jira project key in Project settings.* Filters that don't name it list as usual. GitHub searches run as written: they are already limited to the project's repository.
 
 A GitHub query is any issue search, such as `label:needs-triage`, `assignee:@me` or `label:bug OR label:ui`. Kickoff runs it as `gh issue list --state open --search "(<query>) is:open"`, so it lists open issues only, even with `is:closed`; `is:pr` fails, since gh lists issues only. A malformed query lists nothing rather than failing: GitHub answers it with no issues.
 
@@ -98,6 +102,7 @@ A template is the text the agent gets as its prompt. `{{name}}` is replaced by t
 | `{{tracker}}` | `github` or `jira`. |
 | `{{repo}}` | The project's repository (`owner/name`) when Orca knows it, else the project's name. |
 | `{{branch}}` | The new worktree's name, such as `web-12-add-dark-mode`. |
+| `{{jira_project}}` | The project's Jira project key, such as `WEB`, set in Project settings; empty when it has none. |
 
 A filled prompt over 30 000 characters makes Start fail, since the Windows command line holds about 32 000.
 
