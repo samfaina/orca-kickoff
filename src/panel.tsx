@@ -1587,8 +1587,9 @@ function TitleRow({ prefix, title, level, children }: { prefix: string | null; t
 
 /** Project settings, in place of the panel view: the tracker, then what a Start uses. The title row
  *  and the bar under the sections stay in place while the sections between them scroll. That bar
- *  says which field keeps the Branch section from being saved, and asks before the section's Global
- *  switch turns on, or, while it is on, warns that the section edits the global branch settings. */
+ *  says which field keeps the Branch section from being saved, shows the section's preview, and asks
+ *  before the section's Global switch turns on, or, while it is on, warns that the section edits the
+ *  global branch settings. */
 function SettingsView({ projectName, shown }: { projectName: string; shown: ShownSettings }) {
   return (
     <Box direction="column" gap="sm" height="100%">
@@ -1627,12 +1628,11 @@ const BRANCH_PROBLEM_FIELDS: Record<BranchSettingsProblem['field'], string> = {
 }
 
 /** Under Project settings, in view however far the sections scroll: which field keeps the Branch
- *  section from being saved, then the row that asks before its Global switch turns on, or, while
- *  it is on, the warning that the section edits the global branch settings; else nothing. */
+ *  section from being saved, if one does, then the section's preview, then the row that asks before
+ *  its Global switch turns on, or, while it is on, the warning that the section edits the global
+ *  branch settings. */
 function SettingsBar({ shown }: { shown: ShownSettings }) {
   const problem = branchSettingsProblem(shown.branch)
-  const global = branchGlobalBar(shown, problem)
-  if (problem === null && global === null) return null
   return (
     <Box direction="column" gap="xs" shrink={false}>
       {problem !== null ? (
@@ -1640,7 +1640,8 @@ function SettingsBar({ shown }: { shown: ShownSettings }) {
           <Text size="sm">{`Branch settings not saved until the ${BRANCH_PROBLEM_FIELDS[problem.field]} is fixed.`}</Text>
         </Callout>
       ) : null}
-      {global}
+      <BranchPreview shown={shown} problem={problem} />
+      {branchGlobalBar(shown, problem)}
     </Box>
   )
 }
@@ -1707,7 +1708,7 @@ function BranchProblemText({ problem, field }: { problem: BranchSettingsProblem 
 
 /** The Global switch, then the branch settings the project uses: the branch template, the branch
  *  type table with its fallback and the title exclusion pattern, with why they aren't saved, if
- *  they aren't, under the field to fix, then the preview of a Start's branch and worktree. Nothing
+ *  they aren't, under the field to fix. Their preview is in the bar under Project settings. Nothing
  *  can be typed while the switch writes. */
 function BranchFields({ shown }: { shown: ShownSettings }) {
   const { branch } = shown
@@ -1817,31 +1818,33 @@ function BranchFields({ shown }: { shown: ShownSettings }) {
           A regular expression. Every match, ignoring case, is removed from the title before {'{{task_slug}}'} and the worktree name are made. Empty: nothing is removed.
         </Text>
       </Stack>
-      <BranchPreview shown={shown} />
     </Stack>
   )
 }
 
-/** The branch and the worktree name a Start of the first loaded task would get, or of an invented
- *  task when none is loaded, with the Branch section as shown; and why a Start would refuse the
- *  branch, if it would. */
-function BranchPreview({ shown }: { shown: ShownSettings }) {
+/** In a box, the branch and the worktree name a Start of the first loaded task would get, or of an
+ *  invented task when none is loaded, with the Branch section as shown; and, under a separator, why
+ *  a Start would refuse the branch, if it would, unless `problem`, why the section isn't saved,
+ *  already says so. */
+function BranchPreview({ shown, problem }: { shown: ShownSettings; problem: BranchSettingsProblem | null }) {
   const loaded = firstLoadedTask(shown.projectId)
   const previewed = loaded ?? PREVIEW_TASK
-  const { branch, problem: refused } = startBranch(shown.branch, previewed)
+  const { branch, problem: startRefusal } = startBranch(shown.branch, previewed)
+  const refused = problem === null ? startRefusal : null
   return (
-    <Stack gap="xs">
+    <Box border radius="md" padding="sm" direction="column" gap="xs">
       <Text size="sm" weight="semibold">
         {loaded ? `Preview for ${previewed.key}` : `Preview for ${previewed.key} (an example)`}
       </Text>
       <Text size="sm">{branch === null ? 'Branch: named by Orca' : `Branch: ${branch}`}</Text>
       <Text size="sm">{`Worktree: ${worktreeName(previewed, shown.branch)}`}</Text>
+      {refused !== null ? <Separator /> : null}
       {refused !== null ? (
         <Text size="sm" tone="warning">
           {refused}
         </Text>
       ) : null}
-    </Stack>
+    </Box>
   )
 }
 

@@ -153,7 +153,7 @@ The **Branch** section of Project settings holds the project's **branch settings
   Anything else is written as it is, such as your initials: `{{branch_type}}/{{task_key}}__{{task_slug}}--AB` gives `bugfix/WEB-12__add-dark-mode--AB` for the Jira bug `WEB-12` "[FE] | [Mobile][Widgets] Add dark mode".
 - **Branch types**: a table of Jira issue types, typed as the tracker shows them, such as `Bug` → `bugfix` and `Story` → `feature`, matched ignoring case, with **Add branch type** and the trash can to remove a row, then a **Fallback branch type**. A row with either side empty counts as none. A type not in the table, a task with no type, and every GitHub task get the fallback.
 - **Title exclusion pattern**: a regular expression, `\[[^\]]*\]` at first, which removes bracketed tags such as `[FE]` anywhere in the title. Every match, ignoring case, is removed before `{{task_slug}}` and the worktree's name are made, keeping the words on either side apart. Empty, it removes nothing. When it would leave no words, the whole title is used.
-- **Preview**: the branch and the worktree's name a Start of the first loaded task would get, or of an example task, `WEB-12` "[FE] | [Mobile] Add dark mode", a Story, when none is loaded.
+- **Preview**: the branch and the worktree's name a Start of the first loaded task would get, or of an example task, `WEB-12` "[FE] | [Mobile] Add dark mode", a Story, when none is loaded. It sits in the bar under Project settings, so it stays in view while you edit any field of the section.
 
 The section saves itself as you type, like the rest of Project settings, but not while it has one of these problems, keeping what it saved last. It marks the field to fix, says why under it, and names that field in a bar under Project settings that stays in view however far you scroll:
 
@@ -161,7 +161,7 @@ The section saves itself as you type, like the rest of Project settings, but not
 - a title exclusion pattern that isn't a valid regular expression;
 - a template that uses `{{branch_type}}` while the fallback is empty, which the fallback fixes.
 
-A Start checks the filled-in branch the same way, for a branch type git can't hold, such as one with a space, and refuses with a message. A branch that is already taken is left to Orca, which tries `<branch>-2`, `-3` and so on.
+A Start checks the filled-in branch the same way, for a branch type git can't hold, such as one with a space, and refuses with a message. The preview shows that message under its branch, unless the section already has one of the problems above, which says the same. A branch that is already taken is left to Orca, which tries `<branch>-2`, `-3` and so on.
 
 ### Global branch settings
 
