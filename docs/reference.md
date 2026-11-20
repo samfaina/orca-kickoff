@@ -509,6 +509,7 @@ No CLI command or plugin API exposes it; `orca settings` and `orca config` are u
   - `status.categoryKey` is `new`, `indeterminate` or `done`, and is `"undefined"` when missing.
   - An unassigned task has **no** `assignee` key: it is not `null`. The assignee shape comes from Orca's code.
   - `description` is already plain text, not ADF.
+  - Kickoff reads `issueType.name` as the task's issue type, for its branch type (issue #119).
 - No pagination: no cursor or offset, and no hint that more results exist.
 - Errors **[Verified]**:
   - Invalid JQL: exit 1, `{ ok: false, error: { code: 'runtime_error', message: 'Error 400: <message in the instance language>' } }` on stdout, empty stderr. Kickoff counts only `runtime_error` from `orca jira search` as a rejected query (issue #107). Whether Orca also answers `runtime_error` for failures that aren't about the query, such as Jira being down, was not checked **[Assumed]**.
@@ -597,7 +598,7 @@ Atlassian's official CLI, `twg` 1.4.4. Docs: <https://developer.atlassian.com/cl
   - `--timeout-ms`.
   - `--select <paths>`, which needs `-o json`.
   - All of them work after the subcommand.
-- **Query** **[Verified]**: `twg jira workitem query --jql <jql> --fields summary,status,assignee,labels,description --limit 50 --after <cursor> --output json --api-version v2`.
+- **Query** **[Verified]**: `twg jira workitem query --jql <jql> --fields summary,status,assignee,labels,description,issuetype --limit 50 --after <cursor> --output json --api-version v2`.
   - `--help` describes `-n, --limit <limit>` as the most work items to return (an alias for `--first`), and `--after` as the cursor to go on from **[Verified]** (twg 1.4.4).
   - A `--limit` below 50 returns at most that many work items, and a cursor from a call with one `--limit` works in a call with another **[Verified]** (twg 1.4.4, seen by the maintainer inside Orca 1.4.263). With two queries on a project whose keys run on without gaps, the first holding keys 1 to 10 and the second the rest, both ordered by key, the first load showed keys 1 to 50 (the second query asked with `--limit 40`) and **Load more** showed 51 to 100 (the second query asked with its cursor and `--limit 50`), with no key repeated or skipped.
   - Kickoff fills a page of 50 across the JQL queries of the filter listed, in order: when a query ends before the page is full, it runs the next one with `--limit` set to the tasks the page still needs. The panel's cursor is `<index>:<twg cursor>`, for the query (counting the non-blank ones from 0) where the next page starts, or `<index>:` when it starts at the beginning of that query (`src/providers/jira-twg.ts`). A cursor belongs to its filter: the panel's **Load more** names the filter listed with it. With three queries on a board of 10 tasks (3 in the active sprint, 2 in a future sprint, 5 in the backlog), the first load shows all 10 and no **Load more** **[Verified]** (seen by the maintainer inside Orca 1.4.263, issue #86).
@@ -636,7 +637,7 @@ Successful output **[Verified]** (no `ok` key):
 
   - `emailAddress` is the assignee's email: Kickoff reads only `displayName`.
   - An unassigned task has `assignee: null` **[Verified]**.
-- With `issuetype` in `--fields`, each issue has `issuetype`, the Jira REST issue type object: `self`, `id`, `description`, `name` (a string), `subtask`, `avatarId`, `entityId` and `hierarchyLevel` **[Verified]** (twg 1.4.4). Kickoff doesn't ask for it yet.
+- With `issuetype` in `--fields`, each issue has `issuetype`, the Jira REST issue type object: `self`, `id`, `description`, `name` (a string), `subtask`, `avatarId`, `entityId` and `hierarchyLevel` **[Verified]** (twg 1.4.4). Kickoff asks for it and reads only `name`, as the task's issue type for its branch type (issue #119).
 - `description` is ADF (Jira's JSON document format), an object `{ type: 'doc', version: 1, content: [...] }` **[Verified]**. An empty description is expected to be `null` **[Assumed]**. Node types seen: `paragraph`, `orderedList` (with `attrs.order`), `listItem` and `text`. Also `heading` (with `attrs.level`), `bulletList` (nested inside a list item too), `codeBlock` (with `attrs.language`, its text holding blank lines), `hardBreak`, `blockquote` and `rule`, plus the marks `strong`, `em`, `code` and `link` **[Verified]**: the maintainer saw them reach a started agent's prompt as readable plain text inside Orca (issue #22, version not recorded). A link written as HTML `<a>` becomes a `link` mark, not an `inlineCard`. `mention` and `inlineCard` follow Atlassian's ADF documentation **[Assumed]**; `src/adf.ts` handles them.
 
 Errors **[Verified]**:

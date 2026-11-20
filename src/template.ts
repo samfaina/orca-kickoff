@@ -1,5 +1,6 @@
-// Prompt templates: `{{name}}` filled from the task, the project and the worktree name. No Node
-// imports, so the panel can use the constants too.
+// Prompt templates: `{{name}}` filled from the task, the project and the Start's branch (the
+// filled-in branch template, else the worktree name). No Node imports, so the panel can use the
+// constants too.
 import type { ProjectRef, ProjectSettings, PromptTemplate, Task } from './protocol'
 
 /** The text of the template a project lists before it stores any of its own while there is no
@@ -195,15 +196,17 @@ export const TEMPLATE_VARIABLE_DESCRIPTIONS: Record<TemplateVariable, string> = 
   task_status: 'The status as the tracker shows it, such as "In Progress". "Open" on GitHub.',
   tracker: '"github" or "jira".',
   repo: "The project's repository (owner/name) when Orca knows it, else the project's name.",
-  branch: "The new worktree's name, such as web-12-add-dark-mode.",
+  branch:
+    "The new worktree's git branch from the project's branch template, such as feature/WEB-12__add-dark-mode. Without a branch template, the worktree's name, such as web-12-add-dark-mode. It doesn't include a -2 Orca may add.",
   [JIRA_PROJECT_VARIABLE]: "The project's Jira project key, such as WEB, set in Project settings. Empty when it has none."
 }
 
 export type PromptResult = { ok: true; prompt: string } | { ok: false; message: string }
 
 /** The prompt for `task` from a template's text, in a project whose Jira project key is
- *  `jiraProjectKey` ('' for none). An empty text gives the task URL. A prompt over MAX_PROMPT
- *  characters is refused. */
+ *  `jiraProjectKey` ('' for none), with `branch` as `{{branch}}`: the filled-in branch template,
+ *  else the worktree name. An empty text gives the task URL. A prompt over MAX_PROMPT characters
+ *  is refused. */
 export function buildPrompt(text: string, task: Task, project: ProjectRef, branch: string, jiraProjectKey: string): PromptResult {
   const prompt = text === '' ? task.url : fillTemplate(text, templateVariables(task, project, branch, jiraProjectKey))
   if (prompt.length > MAX_PROMPT) {

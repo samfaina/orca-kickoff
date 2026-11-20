@@ -563,6 +563,81 @@ test('Start on Jira links the worktree with --reference <task URL>, never --issu
   ])
 })
 
+/** Settings of the web project on Jira (twg) with the branch template of a team convention. */
+const branchConvention = (project: Record<string, unknown> = {}) => ({
+  settings: {
+    version: 1,
+    projects: {
+      'github:acme/web': {
+        provider: 'jira-twg',
+        providers: { 'jira-twg': { site: '', profile: '' } },
+        branchTemplate: '{{branch_type}}/{{task_key}}__{{task_slug}}--AB',
+        branchTypes: [{ issueType: 'Bug', branchType: 'bugfix' }],
+        branchTypeFallback: 'feature',
+        ...project
+      }
+    }
+  }
+})
+
+const taggedWeb12 = (issueType?: string): Task => ({ ...web12, title: '[FE] | [Mobile][Widgets] Add dark mode', ...(issueType ? { issueType } : {}) })
+
+/** The value that follows `flag` in a create's arguments, or undefined. */
+const flagValue = (args: string[], flag: string) => (args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined)
+
+test('with an empty branch template, a Start passes no --branch', async () => {
+  for (const storage of [jiraSettings(), branchConvention({ branchTemplate: '' })]) {
+    const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED }, { storage })
+    await worker.request('task.start', { projectId: 'github:acme/web', task: taggedWeb12('Bug'), templateId: 'default' })
+    assert.ok(!creates(calls)[0].args.includes('--branch'))
+  }
+})
+
+test('a Start passes the filled-in branch template as --branch, with the branch type of the issue type, and keeps the worktree name', async () => {
+  for (const [issueType, branch] of [['Bug', 'bugfix/WEB-12__add-dark-mode--AB'], ['Story', 'feature/WEB-12__add-dark-mode--AB'], [undefined, 'feature/WEB-12__add-dark-mode--AB']] as const) {
+    const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED }, { storage: branchConvention() })
+    assert.deepEqual(await worker.request('task.start', { projectId: 'github:acme/web', task: taggedWeb12(issueType), templateId: 'default' }), { ok: true, underWay: true })
+    const { args } = creates(calls)[0]
+    assert.equal(flagValue(args, '--branch'), branch)
+    assert.equal(flagValue(args, '--name'), 'web-12-add-dark-mode')
+  }
+})
+
+test('a GitHub issue fills {{task_key}} without # and gets the fallback branch type', async () => {
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED }, { storage: branchConvention({ provider: 'github' }) })
+  await worker.request('task.start', startWeb42)
+  assert.equal(flagValue(creates(calls)[0].args, '--branch'), 'feature/42__add-dark-mode--AB')
+})
+
+test('the worktree name uses the title exclusion pattern without a branch template too', async () => {
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED }, { storage: jiraSettings() })
+  await worker.request('task.start', { projectId: 'github:acme/web', task: taggedWeb12(), templateId: 'default' })
+  assert.equal(flagValue(creates(calls)[0].args, '--name'), 'web-12-add-dark-mode')
+})
+
+test('a Start whose filled-in branch git would refuse fails with a message and creates nothing', async () => {
+  const storage = branchConvention({ branchTypes: [{ issueType: 'Bug', branchType: 'bug fix' }] })
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED }, { storage })
+  assert.deepEqual(await worker.request('task.start', { projectId: 'github:acme/web', task: taggedWeb12('Bug'), templateId: 'default' }), {
+    ok: false,
+    message:
+      'The branch for WEB-12, "bug fix/WEB-12__add-dark-mode--AB", has a space or a control character, which git can\'t hold in a branch name. Change the branch template or the branch types in Project settings.'
+  })
+  assert.equal(creates(calls).length, 0)
+})
+
+test('{{branch}} in a prompt gives the filled-in branch with a branch template, and the worktree name without one', async () => {
+  const template = { templates: [{ id: 'default', name: 'Default', text: 'Work on {{branch}}' }] }
+  for (const [storage, prompt] of [
+    [branchConvention(template), 'Work on bugfix/WEB-12__add-dark-mode--AB'],
+    [branchConvention({ ...template, branchTemplate: '' }), 'Work on web-12-add-dark-mode']
+  ] as const) {
+    const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED }, { storage })
+    await worker.request('task.start', { projectId: 'github:acme/web', task: taggedWeb12('Bug'), templateId: 'default' })
+    assert.equal(flagValue(creates(calls)[0].args, '--prompt'), prompt)
+  }
+})
+
 test("a Start of a Jira task already linked in Orca doesn't run worktree create", async () => {
   const linked = {
     id: 'r1::/src/dark', projectId: 'github:acme/web', displayName: 'dark-mode', isArchived: false, linkedIssue: null,

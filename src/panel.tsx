@@ -53,6 +53,15 @@ import {
 import { isRecord } from './json'
 import { jqlRecipe, type JqlRecipeAnswers, type RecipeAssignees } from './jql-recipe'
 import {
+  BRANCH_VARIABLE_DESCRIPTIONS,
+  BRANCH_VARIABLES,
+  branchSettingsProblem,
+  startBranch,
+  titleExclusion,
+  worktreeName,
+  type BranchSettings
+} from './naming'
+import {
   appendTasks,
   chooseProvider,
   DEFAULT_GITHUB_QUERY,
@@ -68,6 +77,7 @@ import {
   readSettings,
   SETTINGS_KEY,
   trackerOf,
+  type BranchTypeRow,
   type ByTracker,
   type Filter,
   type FilterSettings,
@@ -158,6 +168,28 @@ type ShownSettings = {
   /** The project's own templates, then the global ones. */
   templates: ListedTemplate[]
   defaultTemplateId: string
+  /** The Branch section as the person sees it, saved only while `branchSettingsProblem` finds
+   *  nothing wrong with it. */
+  branch: ShownBranch
+}
+
+/** The Branch section's fields, as typed. `titleExclusionSet`: the project stores its own title
+ *  exclusion pattern, or the person changed it; until then the initial one is shown and never
+ *  stored. */
+type ShownBranch = Required<BranchSettings> & { titleExclusionSet: boolean }
+
+/** The task the Branch section's preview shows when no task is loaded. */
+const PREVIEW_TASK: Task = {
+  tracker: 'jira',
+  key: 'WEB-12',
+  title: '[FE] | [Mobile] Add dark mode',
+  url: 'https://example.atlassian.net/browse/WEB-12',
+  description: '',
+  status: null,
+  statusCategory: null,
+  assignees: [],
+  labels: [],
+  issueType: 'Story'
 }
 
 /** What + offers on Jira, in place of the panel view, before the filter editor opens on the new
@@ -361,8 +393,8 @@ const settingsSave = settingsSaver({
 })
 
 /** A change Project settings makes; the filters change through `chooseFilter` and the filter
- *  editor. */
-type SettingsChange = Omit<ProjectChanges, keyof FilterSettings>
+ *  editor, and the branch settings through `changeBranch`. */
+type SettingsChange = Omit<ProjectChanges, keyof FilterSettings | keyof BranchSettings>
 
 function changeSettings(changes: SettingsChange): void {
   const current = read(shownSettings)
@@ -393,8 +425,30 @@ async function showSettings(project: ProjectRef): Promise<void> {
     globalFilters: globalSettings(stored).filters ?? {},
     agent: settings.agent ?? 'orca-default',
     templates: projectTemplates(settings, global),
-    defaultTemplateId: defaultTemplate(settings, global).id
+    defaultTemplateId: defaultTemplate(settings, global).id,
+    branch: {
+      branchTemplate: settings.branchTemplate ?? '',
+      branchTypes: settings.branchTypes ?? [],
+      branchTypeFallback: settings.branchTypeFallback ?? '',
+      titleExclusion: titleExclusion(settings),
+      titleExclusionSet: settings.titleExclusion !== undefined
+    }
   })
+}
+
+/** Changes the Branch section as shown, and saves the whole section, through the settings saver,
+ *  only while `branchSettingsProblem` finds nothing wrong with it: what it refuses is shown, with
+ *  why, and the last section it accepted stays saved. The title exclusion pattern is saved only
+ *  once the project has one of its own. */
+function changeBranch(changes: Partial<Omit<ShownBranch, 'titleExclusionSet'>>): void {
+  const current = read(shownSettings)
+  if (!current) return
+  const titleExclusionSet = current.branch.titleExclusionSet || changes.titleExclusion !== undefined
+  const branch: ShownBranch = { ...current.branch, ...changes, titleExclusionSet }
+  set(shownSettings, { ...current, branch })
+  if (branchSettingsProblem(branch) !== null) return
+  const { branchTemplate, branchTypes, branchTypeFallback } = branch
+  settingsSave.change(current.projectId, { branchTemplate, branchTypes, branchTypeFallback, ...(titleExclusionSet ? { titleExclusion: branch.titleExclusion } : {}) })
 }
 
 /** The filters the shown project lists on its tracker, its own then the global ones, and the one the
@@ -1442,6 +1496,128 @@ function SettingsView({ projectName, shown }: { projectName: string; shown: Show
         Start
       </Text>
       <StartFields shown={shown} />
+      <Separator />
+      <Text size="sm" weight="semibold">
+        Branch
+      </Text>
+      <BranchFields shown={shown} />
+    </Stack>
+  )
+}
+
+/** The first loaded task of the filter shown, for the Branch section's preview, or null when the
+ *  shown project has none loaded. */
+function firstLoadedTask(projectId: string): Task | null {
+  const current = read(list)
+  return current?.kind === 'ready' && current.project.id === projectId ? (current.tasks[0] ?? null) : null
+}
+
+/** The branch template, the branch type table with its fallback and the title exclusion pattern,
+ *  then why they aren't saved, if they aren't, and the preview of a Start's branch and worktree. */
+function BranchFields({ shown }: { shown: ShownSettings }) {
+  const { branch } = shown
+  const problem = branchSettingsProblem(branch)
+  const changeRow = (index: number, changes: Partial<BranchTypeRow>) =>
+    changeBranch({ branchTypes: branch.branchTypes.map((row, at) => (at === index ? { ...row, ...changes } : row)) })
+  return (
+    <Stack gap="sm">
+      <Stack gap="xs">
+        <Input
+          label="Branch template"
+          value={branch.branchTemplate}
+          placeholder="{{branch_type}}/{{task_key}}__{{task_slug}}"
+          onChange={(branchTemplate) => changeBranch({ branchTemplate })}
+        />
+        <Text size="sm" muted>
+          The git branch of each Start. Empty: Orca names it. Anything other than these variables, such as your initials, is written as it is.
+        </Text>
+        {BRANCH_VARIABLES.map((name) => (
+          <Text key={name} size="sm">
+            <Code>{`{{${name}}}`}</Code> {BRANCH_VARIABLE_DESCRIPTIONS[name]}
+          </Text>
+        ))}
+      </Stack>
+      <Text size="sm" muted>
+        Branch types: a Jira issue type, as the tracker shows it, and the branch type it gives. A row with either left empty counts as none.
+      </Text>
+      {branch.branchTypes.map((row, index) => (
+        <Box key={`branch-type-${index}`} direction="row" align="center" gap="xs">
+          <Box grow minWidth={0}>
+            <Input label={`Issue type ${index + 1}`} labelHidden value={row.issueType} placeholder="Bug" onChange={(issueType) => changeRow(index, { issueType })} />
+          </Box>
+          <Box grow minWidth={0}>
+            <Input label={`Branch type ${index + 1}`} labelHidden value={row.branchType} placeholder="bugfix" onChange={(branchType) => changeRow(index, { branchType })} />
+          </Box>
+          <Box shrink={false}>
+            <IconButton
+              icon="delete"
+              label={`Remove branch type ${index + 1}`}
+              tooltip="Remove branch type"
+              size="sm"
+              variant="ghost"
+              tone="danger"
+              onPress={() => changeBranch({ branchTypes: branch.branchTypes.filter((_, at) => at !== index) })}
+            />
+          </Box>
+        </Box>
+      ))}
+      <Row gap="none" align="center">
+        <Button
+          key="branch-type-add"
+          icon="add"
+          size="sm"
+          variant="solid"
+          onPress={() => changeBranch({ branchTypes: [...branch.branchTypes, { issueType: '', branchType: '' }] })}
+        >
+          Add branch type
+        </Button>
+      </Row>
+      <Stack gap="xs">
+        <Input
+          label="Fallback branch type"
+          value={branch.branchTypeFallback}
+          placeholder="feature"
+          onChange={(branchTypeFallback) => changeBranch({ branchTypeFallback })}
+        />
+        <Text size="sm" muted>
+          For an issue type not in the table, a task with no type, and every GitHub task.
+        </Text>
+      </Stack>
+      <Stack gap="xs">
+        <Input label="Title exclusion pattern" value={branch.titleExclusion} onChange={(pattern) => changeBranch({ titleExclusion: pattern })} />
+        <Text size="sm" muted>
+          A regular expression. Every match, ignoring case, is removed from the title before {'{{task_slug}}'} and the worktree name are made. Empty: nothing is removed.
+        </Text>
+      </Stack>
+      {problem !== null ? (
+        <Text size="sm" tone="danger">
+          {`${problem} Not saved until it is fixed.`}
+        </Text>
+      ) : null}
+      <BranchPreview shown={shown} />
+    </Stack>
+  )
+}
+
+/** The branch and the worktree name a Start of the first loaded task would get, or of an invented
+ *  task when none is loaded, with the Branch section as shown; and why a Start would refuse the
+ *  branch, if it would. */
+function BranchPreview({ shown }: { shown: ShownSettings }) {
+  const loaded = firstLoadedTask(shown.projectId)
+  const previewed = loaded ?? PREVIEW_TASK
+  const { branch, problem: refused } = startBranch(shown.branch, previewed)
+  return (
+    <Stack gap="xs">
+      <Text size="sm" weight="semibold">
+        {loaded ? `Preview for ${previewed.key}` : `Preview for ${previewed.key} (an example)`}
+      </Text>
+      <Text size="sm">{branch === null ? 'Branch: named by Orca' : `Branch: ${branch}`}</Text>
+      <Text size="sm">{`Worktree: ${worktreeName(previewed, shown.branch)}`}</Text>
+      {refused !== null ? (
+        <Text size="sm" tone="warning">
+          {refused}
+        </Text>
+      ) : null}
     </Stack>
   )
 }

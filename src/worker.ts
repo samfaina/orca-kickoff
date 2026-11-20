@@ -4,7 +4,7 @@
 import type { OrcaWorkerApi } from 'orca/worker'
 import { resolveAgent, systemDefaultAgentReader, type DefaultAgent } from './agent'
 import { CliError, cleanMessage, systemRunCli, type RunCli } from './cli'
-import { worktreeName } from './naming'
+import { startBranch, worktreeName } from './naming'
 import {
   checkOrcaAnswer,
   findActiveProject,
@@ -203,10 +203,14 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
       // Never another template: the person chose this one for this task, own or global.
       const template = findTemplate(settings, globalTemplates(stored), templateId)
       if (!template) return { ok: false, message: 'The prompt template you chose no longer exists — pick another one.' }
-      const name = worktreeName(task)
-      const prompt = buildPrompt(template.text, task, project, name, settings.jiraProjectKey ?? '')
+      const name = worktreeName(task, settings)
+      // A taken branch is Orca's: it retries it as <branch>-2, -3 and so on.
+      const { branch, problem } = startBranch(settings, task)
+      if (problem !== null) return { ok: false, message: problem }
+      // {{branch}} is the branch as filled in, without a -2 Orca may add: the prompt comes first.
+      const prompt = buildPrompt(template.text, task, project, branch ?? name, settings.jiraProjectKey ?? '')
       if (!prompt.ok) return prompt
-      const args = worktreeCreateArgs({ projectId, name, task, agent: agent.agent, prompt: prompt.prompt })
+      const args = worktreeCreateArgs({ projectId, name, branch, task, agent: agent.agent, prompt: prompt.prompt })
       creating.set(id, { projectId, taskKey: task.key })
       void createAndPostEnd(id, args,{ projectId, taskKey: task.key, agent: agent.agent })
       return { ok: true, underWay: true }

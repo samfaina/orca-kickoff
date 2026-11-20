@@ -1299,7 +1299,10 @@ test('the hint follows the text, and the closed Variables list gives each variab
       [['Code {{task_status}}'], '{{task_status}} The status as the tracker shows it, such as "In Progress". "Open" on GitHub.'],
       [['Code {{tracker}}'], '{{tracker}} "github" or "jira".'],
       [['Code {{repo}}'], "{{repo}} The project's repository (owner/name) when Orca knows it, else the project's name."],
-      [['Code {{branch}}'], "{{branch}} The new worktree's name, such as web-12-add-dark-mode."],
+      [
+        ['Code {{branch}}'],
+        "{{branch}} The new worktree's git branch from the project's branch template, such as feature/WEB-12__add-dark-mode. Without a branch template, the worktree's name, such as web-12-add-dark-mode. It doesn't include a -2 Orca may add."
+      ],
       [['Code {{jira_project}}'], "{{jira_project}} The project's Jira project key, such as WEB, set in Project settings. Empty when it has none."]
     ]
   )
@@ -4027,6 +4030,161 @@ test('the Jira project key saves itself trimmed and upper-cased, a panel opened 
   const again = await mount(panel, { host })
   await again.press(gear)
   assert.equal(again.valueOf(jiraProjectKeyField), 'WEB')
+})
+
+const branchTemplateField = { type: 'Input', label: 'Branch template' }
+const fallbackField = { type: 'Input', label: 'Fallback branch type' }
+const exclusionField = { type: 'Input', label: 'Title exclusion pattern' }
+const issueTypeField = (row: number) => ({ type: 'Input', label: `Issue type ${row}` })
+const branchTypeField = (row: number) => ({ type: 'Input', label: `Branch type ${row}` })
+const addBranchType = { type: 'Button', text: 'Add branch type' }
+const CONVENTION = '{{branch_type}}/{{task_key}}__{{task_slug}}--AB'
+
+type StoredBranch = { branchTemplate?: string; branchTypes?: { issueType: string; branchType: string }[]; branchTypeFallback?: string; titleExclusion?: string }
+const storedBranch = (host: MockHost) => {
+  const { branchTemplate, branchTypes, branchTypeFallback, titleExclusion } = (storedProject(host) ?? {}) as StoredBranch
+  return { branchTemplate, branchTypes, branchTypeFallback, titleExclusion }
+}
+
+/** The texts of the Branch section's preview. */
+const previewShown = (view: TestPanel) => view.findAll({ type: 'Text', text: /^(Preview|Branch:|Worktree:)/ }).map((node) => node.text)
+
+const web12Tagged = (fields: Partial<Task> = {}) =>
+  task('WEB-12', { tracker: 'jira', url: 'https://example.atlassian.net/browse/WEB-12', title: '[FE] | [Mobile][Widgets] Add dark mode', issueType: 'Bug', ...fields })
+
+/** Fills the Branch section with the team convention: a Bug row and the fallback feature. */
+async function typeConvention(view: TestPanel): Promise<void> {
+  await view.type(branchTemplateField, CONVENTION)
+  await view.press(addBranchType)
+  await view.type(issueTypeField(1), 'Bug')
+  await view.type(branchTypeField(1), 'bugfix')
+  await view.type(fallbackField, 'feature')
+}
+
+test('Project settings have a Branch section, empty at first but for the initial title exclusion pattern, with its variables', async () => {
+  const { view } = await showWith({ 'tasks.load': twgReady([]) }, twgStored({ site: '', profile: '' }))
+  await view.press(gear)
+  assert.ok(view.find({ type: 'Text', text: 'Branch' }))
+  assert.equal(view.valueOf(branchTemplateField), '')
+  assert.equal(view.find(issueTypeField(1)), null)
+  assert.equal(view.valueOf(fallbackField), '')
+  assert.equal(view.valueOf(exclusionField), '\\[[^\\]]*\\]')
+  for (const name of ['task_key', 'task_slug', 'branch_type']) assert.ok(view.find({ type: 'Code', text: `{{${name}}}` }), name)
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.warnings, [])
+})
+
+test('the branch settings save themselves, without the title exclusion pattern while it is unchanged, and a panel opened again shows them', async () => {
+  const { view, host } = await showWith({ 'tasks.load': twgReady([web12Tagged()]) }, twgStored({ site: '', profile: '' }))
+  await view.press(gear)
+  await typeConvention(view)
+  await wait(SAVE_DELAY_MS + 200)
+  assert.deepEqual(storedBranch(host), {
+    branchTemplate: CONVENTION,
+    branchTypes: [{ issueType: 'Bug', branchType: 'bugfix' }],
+    branchTypeFallback: 'feature',
+    titleExclusion: undefined
+  })
+  await view.unmount()
+  const again = await mount(panel, { host })
+  await again.press(gear)
+  assert.equal(again.valueOf(branchTemplateField), CONVENTION)
+  assert.equal(again.valueOf(issueTypeField(1)), 'Bug')
+  assert.equal(again.valueOf(branchTypeField(1)), 'bugfix')
+  assert.equal(again.valueOf(fallbackField), 'feature')
+})
+
+test('a branch type row can be removed, and the rest are kept in order', async () => {
+  const types = [{ issueType: 'Bug', branchType: 'bugfix' }, { issueType: 'Story', branchType: 'feature' }]
+  const { view, host } = await showWith(
+    { 'tasks.load': twgReady([]) },
+    twgStored({ site: '', profile: '' }, { branchTemplate: CONVENTION, branchTypes: types, branchTypeFallback: 'chore' })
+  )
+  await view.press(gear)
+  await view.press({ type: 'IconButton', label: 'Remove branch type 1' })
+  assert.equal(view.valueOf(issueTypeField(1)), 'Story')
+  assert.equal(view.find(issueTypeField(2)), null)
+  await wait(SAVE_DELAY_MS + 200)
+  assert.deepEqual(storedBranch(host).branchTypes, [{ issueType: 'Story', branchType: 'feature' }])
+})
+
+test('an emptied title exclusion pattern is stored, and a changed one replaces the initial one', async () => {
+  const { view, host } = await showWith({ 'tasks.load': twgReady([]) }, twgStored({ site: '', profile: '' }))
+  await view.press(gear)
+  await view.type(exclusionField, '', { replace: true })
+  await wait(SAVE_DELAY_MS + 200)
+  assert.equal(storedBranch(host).titleExclusion, '')
+  await view.type(exclusionField, '^wip:\\s*', { replace: true })
+  await wait(SAVE_DELAY_MS + 200)
+  assert.equal(storedBranch(host).titleExclusion, '^wip:\\s*')
+})
+
+test('the Branch section refuses to save fixed text git cannot hold, saying why, keeps what it last saved, and saves once it is fixed', async () => {
+  const { view, host } = await showWith({ 'tasks.load': twgReady([]) }, twgStored({ site: '', profile: '' }, { branchTemplate: 'feature/{{task_key}}' }))
+  await view.press(gear)
+  await view.type(branchTemplateField, ' x')
+  assert.equal(view.valueOf(branchTemplateField), 'feature/{{task_key}} x')
+  assert.ok(view.find({ type: 'Text', text: /^The branch template has a space or a control character, which git can't hold in a branch name\. Not saved/ }))
+  await wait(SAVE_DELAY_MS + 200)
+  assert.equal(storedBranch(host).branchTemplate, 'feature/{{task_key}}')
+  for (const [template, problem] of [
+    ['feature~{{task_key}}', 'has "~"'],
+    ['feature..{{task_key}}', 'has ".."'],
+    ['x@{{{task_key}}', 'has "@{"'],
+    ['.{{task_key}}', 'has a part that starts with "."'],
+    ['{{task_key}}.lock', 'has a part that ends with ".lock"'],
+    ['-{{task_key}}', 'starts with "-"']
+  ]) {
+    await view.type(branchTemplateField, template, { replace: true })
+    assert.ok(view.find({ type: 'Text', text: new RegExp(`^The branch template ${problem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`) }), template)
+  }
+  await view.type(branchTemplateField, 'fix/{{task_key}}', { replace: true })
+  assert.equal(view.find({ type: 'Text', text: /Not saved/ }), null)
+  await wait(SAVE_DELAY_MS + 200)
+  assert.equal(storedBranch(host).branchTemplate, 'fix/{{task_key}}')
+})
+
+test('the Branch section refuses a pattern that is not a regular expression, and {{branch_type}} without a fallback', async () => {
+  const { view, host } = await showWith({ 'tasks.load': twgReady([]) }, twgStored({ site: '', profile: '' }))
+  await view.press(gear)
+  await view.type(exclusionField, '[unclosed', { replace: true })
+  assert.ok(view.find({ type: 'Text', text: /^The title exclusion pattern isn't a valid regular expression: .* Not saved/ }))
+  await wait(SAVE_DELAY_MS + 200)
+  assert.notEqual(storedBranch(host).titleExclusion, '[unclosed')
+  await view.type(exclusionField, '', { replace: true })
+  await view.type(branchTemplateField, '{{branch_type}}/{{task_key}}')
+  assert.ok(view.find({ type: 'Text', text: /^The branch template uses \{\{branch_type\}\}: give the branch types a fallback\. Not saved/ }))
+  await wait(SAVE_DELAY_MS + 200)
+  assert.equal(storedBranch(host).titleExclusion, '')
+  assert.notEqual(storedBranch(host).branchTemplate, '{{branch_type}}/{{task_key}}')
+  await view.type(fallbackField, 'feature')
+  await wait(SAVE_DELAY_MS + 200)
+  assert.equal(storedBranch(host).branchTemplate, '{{branch_type}}/{{task_key}}')
+})
+
+test('the preview shows the branch and the worktree name for the first loaded task', async () => {
+  const { view } = await showWith({ 'tasks.load': twgReady([web12Tagged(), web12Tagged({ key: 'WEB-13', issueType: 'Story' })]) }, twgStored({ site: '', profile: '' }))
+  await view.press(gear)
+  assert.deepEqual(previewShown(view), ['Preview for WEB-12', 'Branch: named by Orca', 'Worktree: web-12-add-dark-mode'])
+  await typeConvention(view)
+  assert.deepEqual(previewShown(view), ['Preview for WEB-12', 'Branch: bugfix/WEB-12__add-dark-mode--AB', 'Worktree: web-12-add-dark-mode'])
+  await view.type(exclusionField, '', { replace: true })
+  assert.deepEqual(previewShown(view), ['Preview for WEB-12', 'Branch: bugfix/WEB-12__fe-mobile-widgets-add--AB', 'Worktree: web-12-fe-mobile-widgets-add'])
+})
+
+test('with no task loaded, the preview shows an invented Story, WEB-12', async () => {
+  const { view } = await showWith({ 'tasks.load': twgReady([]) }, twgStored({ site: '', profile: '' }))
+  await view.press(gear)
+  await typeConvention(view)
+  assert.deepEqual(previewShown(view), ['Preview for WEB-12 (an example)', 'Branch: feature/WEB-12__add-dark-mode--AB', 'Worktree: web-12-add-dark-mode'])
+})
+
+test('the preview says when a Start of the task would be refused for its branch', async () => {
+  const { view } = await showWith({ 'tasks.load': twgReady([web12Tagged()]) }, twgStored({ site: '', profile: '' }))
+  await view.press(gear)
+  await typeConvention(view)
+  await view.type(branchTypeField(1), 'bug fix', { replace: true })
+  assert.ok(view.find({ type: 'Text', text: /^The branch for WEB-12, "bug fix\/WEB-12__add-dark-mode--AB", has a space/ }))
 })
 
 test('a filter that needs the Jira project key shows the message in the list, under the filter row, without opening Project settings', async () => {

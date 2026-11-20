@@ -20,6 +20,8 @@ export type JiraIssueFields = {
    *  may also hold the email. */
   assignee: unknown
   labels: unknown
+  /** The issue type object; only its `name` is read. */
+  issueType: unknown
 }
 
 /** A Jira task, or null when the issue has no key or URL. */
@@ -28,6 +30,7 @@ export function jiraTask(fields: JiraIssueFields): Task | null {
   const url = text(fields.url)
   if (!key || !url) return null
   const assignee = isRecord(fields.assignee) ? text(fields.assignee.displayName) : ''
+  const issueType = isRecord(fields.issueType) ? text(fields.issueType.name) : ''
   return {
     tracker: 'jira',
     key,
@@ -37,7 +40,8 @@ export function jiraTask(fields: JiraIssueFields): Task | null {
     status: text(fields.statusName) || null,
     statusCategory: jiraStatusCategory(fields.categoryKey),
     assignees: assignee ? [assignee] : [],
-    labels: Array.isArray(fields.labels) ? fields.labels.filter((label): label is string => text(label) !== '') : []
+    labels: Array.isArray(fields.labels) ? fields.labels.filter((label): label is string => text(label) !== '') : [],
+    ...(issueType ? { issueType } : {})
   }
 }
 
