@@ -65,23 +65,27 @@ A named text with task variables that becomes the prompt given to the agent when
 _Avoid_: Prompt (that is the filled-in result)
 
 **Global**:
-Said of a filter or prompt template kept once and offered in every project, beside the project's own; a global filter only in the projects on its tracker. Changing or deleting it changes it in every project, and no project can hide it. A project's own filter or prompt template can be made global, and a global one can be given back to a single project.
+Said of what is kept once for every project instead of for one. A global filter or prompt template is offered in every project beside the project's own, a global filter only in the projects on its tracker, and no project can hide it. The global branch settings are used instead of a project's own, by every project that has none of its own. Changing a global one changes it in every project that offers or uses it. A project's own filter, prompt template or branch settings can be made global, and a global one can be given back to a single project.
 _Avoid_: Shared, common, default (that is the default template)
 
 **Default template**:
 The prompt template a project's tasks start with unless the user chooses another one for a task. A project has exactly one.
 _Avoid_: Active template, first template
 
+**Branch settings**:
+The branch template, the branch types with their fallback, and the title exclusion pattern, which a project uses together: its own, or the global ones. A project uses the global branch settings unless it has its own, and its own change nothing in any other project.
+_Avoid_: Naming convention, branch config
+
 **Branch template**:
-A text with task variables, set per project, that gives the git branch of the task worktree a Start creates. It names only the branch, never the worktree. A project without one leaves the branch to Orca.
+A text with task variables, part of the branch settings, that gives the git branch of the task worktree a Start creates. It names only the branch, never the worktree. Branch settings without one leave the branch to Orca.
 _Avoid_: Naming convention, branch pattern, template (alone)
 
 **Branch type**:
-The word a branch template puts for a task's kind, such as `bugfix` for a Jira bug. The project chooses it per Jira issue type, with one fallback for every other task and for every GitHub task.
+The word a branch template puts for a task's kind, such as `bugfix` for a Jira bug. The branch settings choose it per Jira issue type, with one fallback for every other task and for every GitHub task.
 _Avoid_: Task type, issue type (that is the tracker's own value), prefix
 
 **Title exclusion pattern**:
-A regular expression, set per project, whose every match is removed from a task's title before the words of its worktree name and of `{{task_slug}}` are taken. It starts as one that removes bracketed tags such as `[FE]`.
+A regular expression, part of the branch settings, whose every match is removed from a task's title before the words of its worktree name and of `{{task_slug}}` are taken. It starts as one that removes bracketed tags such as `[FE]`.
 _Avoid_: Title filter, title regex
 
 **Start**:
@@ -101,7 +105,7 @@ The per-project setting that says which agent a Start launches: Orca's default a
 _Avoid_: Default agent (that is Orca's own setting)
 
 **Project settings**:
-What Kickoff keeps for one project: its tracker and how the provider reads it, its Jira project key, its own filters, its agent choice, its own prompt templates with the default template, and its branch template with its branch types and title exclusion pattern. Global filters and prompt templates are not part of any one project's settings.
+What Kickoff keeps for one project: its tracker and how the provider reads it, its Jira project key, its own filters, its agent choice, its own prompt templates with the default template, and whether it uses its own branch settings or the global ones, with its own when it has them. Global filters, prompt templates and branch settings are not part of any one project's settings.
 _Avoid_: Settings, Kickoff settings, plugin settings, config
 
 **Active project**:
