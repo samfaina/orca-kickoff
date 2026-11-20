@@ -2,6 +2,7 @@ import { assert, test } from 'orca/testing'
 import {
   chooseProvider,
   filterAsRun,
+  globalFilters,
   globalTemplates,
   projectProvider,
   projectSettings,
@@ -193,12 +194,12 @@ test('on GitHub, a search runs as written: {{jira_project}} has no meaning there
 test("a list runs the non-blank queries of its filter, on Jira and on GitHub", () => {
   const triage = { id: 'f-triage', name: 'Triage', queries: ['is:open label:needs-triage', '', 'is:open assignee:@me'] }
   const settings = { providers: {}, filters: { jira: [mine, { ...board, queries: ['project = WEB', '  ', 'labels = ui'] }], github: [triage] } }
-  assert.equal(queryCount(settings, 'jira-twg', 'f-board'), 2)
-  assert.equal(queryCount(settings, 'jira-orca'), 1)
-  assert.equal(queryCount({ providers: {} }, 'jira-orca'), 1)
-  assert.equal(queryCount({ providers: {}, filters: { jira: [{ ...mine, queries: [''] }] } }, 'jira-orca'), 0)
-  assert.equal(queryCount(settings, 'github'), 2)
-  assert.equal(queryCount({ providers: {} }, 'github'), 1)
+  assert.equal(queryCount(settings, 'jira-twg', [], 'f-board'), 2)
+  assert.equal(queryCount(settings, 'jira-orca', []), 1)
+  assert.equal(queryCount({ providers: {} }, 'jira-orca', []), 1)
+  assert.equal(queryCount({ providers: {}, filters: { jira: [{ ...mine, queries: [''] }] } }, 'jira-orca', []), 0)
+  assert.equal(queryCount(settings, 'github', []), 2)
+  assert.equal(queryCount({ providers: {} }, 'github', []), 1)
 })
 
 test("project changes keep the other projects, fields and providers' configurations", () => {
@@ -319,6 +320,44 @@ test('global templates are read apart from every project, in order, and those of
   assert.deepEqual(settings.projects[web.id], { providers: {} })
   assert.deepEqual(readSettings({ version: 1, projects: {}, global: 'corrupt' }), { version: 1, projects: {} })
   assert.deepEqual(readSettings({ version: 1, projects: {}, global: { templates: [] } }), { version: 1, projects: {} })
+})
+
+test('settings stored before global filters read the same, with no global filter on either tracker', () => {
+  const stored = { version: 1, projects: { [web.id]: { providers: {}, filters: { jira: [board] } } }, global: { templates: [{ id: 't-plan', name: 'Plan', text: '' }] } }
+  const settings = readSettings(stored)
+  assert.deepEqual(settings, stored)
+  assert.deepEqual(globalFilters(settings, 'jira'), [])
+  assert.deepEqual(globalFilters(settings, 'github'), [])
+})
+
+test('global filters are read by tracker, apart from every project, in order, and those of an unexpected shape are dropped', () => {
+  const sprint = { id: 'g-sprint', name: 'Sprint', queries: ['project = {{jira_project}}', ''] }
+  const triage = { id: 'g-triage', name: 'Triage', queries: ['is:open label:needs-triage'] }
+  const settings = readSettings({
+    version: 1,
+    projects: { [web.id]: { providers: {} } },
+    global: {
+      filters: {
+        jira: [sprint, { id: 'g-x', name: 'No queries' }, { id: 'g-sprint', name: 'Again', queries: [] }, { id: 'g-other', name: ' SPRINT ', queries: [] }, { ...mine, name: ' Mine ' }],
+        github: [triage],
+        linear: [mine]
+      }
+    }
+  })
+  assert.deepEqual(settings.global, { filters: { jira: [sprint, mine], github: [triage] } })
+  assert.deepEqual(globalFilters(settings, 'jira'), [sprint, mine])
+  assert.deepEqual(globalFilters(settings, 'github'), [triage])
+  assert.deepEqual(readSettings({ version: 1, projects: {}, global: { filters: { jira: 'none', github: [] } } }), { version: 1, projects: {} })
+  const both = readSettings({ version: 1, projects: {}, global: { templates: [{ id: 't-plan', name: 'Plan', text: '' }], filters: { github: [triage] } } })
+  assert.deepEqual(both.global, { templates: [{ id: 't-plan', name: 'Plan', text: '' }], filters: { github: [triage] } })
+})
+
+test('a list runs the non-blank queries of the filter it names, own or global, on its tracker', () => {
+  const sprint = { id: 'g-sprint', name: 'Sprint', queries: ['project = {{jira_project}}', 'labels = ui', ''] }
+  const settings = { providers: {}, filters: { jira: [mine] }, shownFilterId: { jira: 'g-sprint' } }
+  assert.equal(queryCount(settings, 'jira-orca', [sprint], 'g-sprint'), 2)
+  assert.equal(queryCount(settings, 'jira-orca', [sprint]), 2)
+  assert.equal(queryCount(settings, 'jira-orca', [], 'g-sprint'), 1)
 })
 
 test('global changes keep every project, and project changes keep the global templates', () => {

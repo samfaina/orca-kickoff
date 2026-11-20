@@ -1,4 +1,4 @@
-// Saving Project settings and what belongs to no project, such as the global prompt templates: the
+// Saving Project settings and what belongs to no project, the global prompt templates and filters: the
 // changes not saved yet, per project, and every read-modify-write of the settings in storage, one at
 // a time. No Orca API: the panel gives it storage and timers, so the tests can hold a read, a write
 // or a timer and settle it by hand.
@@ -49,7 +49,7 @@ function mergeChanges(earlier: ProjectChanges, later: ProjectChanges): ProjectCh
 /** Saves Project settings, and what belongs to no project, for the panel: each change of a project
  *  waits with its other pending changes for the timed save, or for a caller that saves now. Every
  *  save writes every project's pending changes, every write keeps what it doesn't change, the
- *  global templates included, and no promise it leaves goes unhandled. Global changes are written
+ *  global templates and filters included, and no promise it leaves goes unhandled. Global changes are written
  *  at once, never left pending. */
 export function settingsSaver({ storage, timers, onSaved, onTimedSaveFailed }: SettingsSaverOptions) {
   /** The changes not saved yet, by project. */

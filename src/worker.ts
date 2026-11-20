@@ -24,6 +24,7 @@ import {
 } from './orca'
 import {
   filterAsRun,
+  globalFilters,
   globalTemplates,
   listedFilter,
   projectProvider,
@@ -110,8 +111,8 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
     }
   }
 
-  /** A page of the tasks of the project's filter `filterId` names, on its tracker: of its whole
-   *  list, or of a tracker search with `query`. Its queries run as `filterAsRun` gives them, with
+  /** A page of the tasks of the filter `filterId` names, on the project's tracker, among its own
+   *  and the global ones of that tracker: of its whole list, or of a tracker search with `query`. Its queries run as `filterAsRun` gives them, with
    *  the project's Jira project key. A failure its queries cause names it. */
   async function loadTasks({ filterId, ...request }: { filterId?: string } & Omit<PageRequest, 'filter'>): Promise<TaskList> {
     let project: ProjectRef | null = null
@@ -119,11 +120,13 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
       const active = await activeProject()
       project = active.project
       if (!project) return { kind: 'no-project' }
-      const settings = await readProjectSettings(project.id)
+      const stored = await readStoredSettings()
+      const settings = projectSettings(stored, project.id)
       const providerId = projectProvider(settings, project)
       if (!providerId) return { kind: 'needs-config', project }
       const tracker = trackerOf(providerId)
-      const filter = listedFilter(settings, tracker, filterId)
+      const global = globalFilters(stored, tracker)
+      const filter = listedFilter(settings, tracker, global, filterId)
       const asRun = filterAsRun(filter, tracker, settings.jiraProjectKey ?? '')
       if (!asRun.ok) return { kind: 'error', project, message: asRun.message, needsJiraProjectKey: true }
       const page = await taskLister(providerId)(run, project, settings, { ...request, filter: asRun.filter })
@@ -134,7 +137,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
         provider: providerId,
         ...page,
         filterId: filter.id,
-        queryCount: queryCount(settings, providerId, filter.id),
+        queryCount: queryCount(settings, providerId, global, filter.id),
         worktrees: state ? findTaskWorktrees(tracker, project.id, state.worktrees, state.statuses) : null,
         worktreesError: state ? null : active.orcaError,
         starting: startsUnderWay(project.id),

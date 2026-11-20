@@ -7,7 +7,7 @@ import {
   DEFAULT_JQL,
   INITIAL_FILTER_ID,
   INITIAL_FILTER_NAME,
-  projectFilters,
+  ownFilters,
   type Filter,
   type JiraProviderId,
   type ProjectRef,
@@ -49,7 +49,7 @@ const web: ProjectRef = { id: 'github:acme/web', name: 'web', repo: 'acme/web' }
 const notes: ProjectRef = { id: 'repo:notes', name: 'notes', repo: null }
 
 /** The filter a GitHub project starts with. */
-const [openFilter] = projectFilters({}, 'github')
+const [openFilter] = ownFilters({}, 'github', [])
 
 /** A GitHub filter of two queries: the issues assigned to the person, then those to triage. */
 const mineFilter: Filter = { id: 'f-mine', name: 'Mine or triage', queries: ['assignee:@me', 'label:needs-triage no:assignee'] }
@@ -216,6 +216,24 @@ export default defineCheck({
   'github-filters': {
     storage: githubSettings,
     requests: answers(ready(web, 'github', githubTasks.slice(0, 2), { filterId: mineFilter.id, queryCount: 2 }))
+  },
+  // The project's own Jira filter and two global ones, the first shown: the filter row lists the
+  // project's first, then the global ones, marked Global.
+  'global-filters': {
+    storage: {
+      settings: {
+        ...jiraSettings('jira-twg', [tasksFilter], 'g-sprint').settings,
+        global: {
+          filters: {
+            jira: [
+              { id: 'g-sprint', name: 'Sprint', queries: ['project = {{jira_project}} AND sprint in openSprints()'] },
+              { id: 'g-bugs', name: 'Bugs', queries: ['project = {{jira_project}} AND type = Bug'] }
+            ]
+          }
+        }
+      }
+    },
+    requests: answers(ready(web, 'jira-twg', jiraTasks.slice(0, 2), { filterId: 'g-sprint' }))
   },
   'jira-started': { storage: jiraSettings('jira-twg'), requests: answers(jiraStarted) },
   // Five tasks stand for the 100 Orca's Jira search answers at most.

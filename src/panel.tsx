@@ -38,12 +38,17 @@ import {
 import {
   filterNameProblem,
   filterRecipes,
+  filterWriteChanges,
+  namesJiraProject,
   newFilterName,
   recipeFilterName,
   withFilterDeleted,
+  withFilterMoved,
   withFilterSaved,
-  type FilterChanges,
-  type FilterRecipe
+  withJiraProjectVariable,
+  type FilterMove,
+  type FilterRecipe,
+  type FilterWrite
 } from './filter'
 import { isRecord } from './json'
 import { jqlRecipe, type JqlRecipeAnswers, type RecipeAssignees } from './jql-recipe'
@@ -52,6 +57,7 @@ import {
   chooseProvider,
   DEFAULT_GITHUB_QUERY,
   DEFAULT_JQL,
+  globalSettings,
   globalTemplates,
   jiraProjectKey,
   listedFilter,
@@ -62,8 +68,10 @@ import {
   readSettings,
   SETTINGS_KEY,
   trackerOf,
+  type ByTracker,
   type Filter,
   type FilterSettings,
+  type ListedFilter,
   type JiraProviderId,
   type JiraSitesResult,
   type ProjectChanges,
@@ -85,6 +93,7 @@ import { settingsSaver } from './settings-save'
 import {
   defaultTemplate,
   INITIAL_TEMPLATE_TEXT,
+  JIRA_PROJECT_VARIABLE,
   projectTemplates,
   TEMPLATE_VARIABLE_DESCRIPTIONS,
   TEMPLATE_VARIABLES,
@@ -134,8 +143,9 @@ const NO_TRACKER = ':none'
 const DEFAULT_SITE = ':default'
 
 /** The listed project's settings, as the person sees them. `provider` is null while none is set.
- *  `filterSettings` holds every tracker's filters and the one each showed last, as stored; the
- *  filter row shows those of the provider's tracker (`trackerFilters`). */
+ *  `filterSettings` holds every tracker's own filters and the one each showed last, as stored, and
+ *  `globalFilters` the global ones of each tracker, as stored; the filter row shows those of the
+ *  provider's tracker (`trackerFilters`). */
 type ShownSettings = {
   projectId: string
   provider: ProviderId | null
@@ -143,6 +153,7 @@ type ShownSettings = {
   /** '' while the project has none. */
   jiraProjectKey: string
   filterSettings: FilterSettings
+  globalFilters: ByTracker<Filter[]>
   agent: string
   /** The project's own templates, then the global ones. */
   templates: ListedTemplate[]
@@ -174,12 +185,18 @@ const ASSIGNEE_OPTIONS: { value: RecipeAssignees; label: string }[] = [
   { value: 'anyone', label: 'Anyone' }
 ]
 
-/** The filter editor's draft: a filter of `projectId` on `tracker` being edited, or a new one. */
+/** The filter editor's draft: a filter of `projectId` on `tracker`, or a global one of `tracker`,
+ *  being edited, or a new one. */
 type FilterDraft = {
   projectId: string
   tracker: TrackerId
   id: string
   isNew: boolean
+  /** Where the filter is: among the global ones of `tracker`, or the project's own. For a new one,
+   *  where Save stores it. */
+  global: boolean
+  /** Global was turned off, and the bar asks to confirm the move to the project. */
+  confirmingOwn: boolean
   name: string
   queries: string[]
   /** The failed load of the list that opened the editor on this filter, shown until Save. */
@@ -373,21 +390,29 @@ async function showSettings(project: ProjectRef): Promise<void> {
     providers: settings.providers,
     jiraProjectKey: settings.jiraProjectKey ?? '',
     filterSettings: { filters: settings.filters, shownFilterId: settings.shownFilterId },
+    globalFilters: globalSettings(stored).filters ?? {},
     agent: settings.agent ?? 'orca-default',
     templates: projectTemplates(settings, global),
     defaultTemplateId: defaultTemplate(settings, global).id
   })
 }
 
-/** The filters of the shown project's tracker and the one the filter row shows, or null while the
- *  project has no tracker. */
-type TrackerFilters = { tracker: TrackerId; filters: Filter[]; shownFilterId: string }
+/** The filters the shown project lists on its tracker, its own then the global ones, and the one the
+ *  filter row shows, or null while the project has no tracker. */
+type TrackerFilters = { tracker: TrackerId; filters: ListedFilter[]; shownFilterId: string }
 
 function trackerFilters(shown: ShownSettings): TrackerFilters | null {
   if (shown.provider === null) return null
   const tracker = trackerOf(shown.provider)
-  return { tracker, filters: projectFilters(shown.filterSettings, tracker), shownFilterId: listedFilter(shown.filterSettings, tracker).id }
+  return { tracker, filters: listedFilters(shown, tracker), shownFilterId: listedFilter(shown.filterSettings, tracker, shownGlobalFilters(shown, tracker)).id }
 }
+
+/** The global filters of `tracker`, as the shown project last read or wrote them. */
+const shownGlobalFilters = (shown: ShownSettings, tracker: TrackerId): Filter[] => shown.globalFilters[tracker] ?? []
+
+/** The filters the shown project lists on `tracker`: its own, then the global ones. */
+const listedFilters = (shown: ShownSettings, tracker: TrackerId): ListedFilter[] =>
+  projectFilters(shown.filterSettings, tracker, shownGlobalFilters(shown, tracker))
 
 /** Chooses the filter the panel shows, saves that choice, and loads its tasks from the tracker,
  *  as Reload does. It leaves any tracker search, but the field keeps its words. */
@@ -419,6 +444,8 @@ function openFilter(id: string | null, loadError: string | null = null, recipe: 
     tracker: current.tracker,
     id: filter?.id ?? newId('f', current.filters),
     isNew: !filter,
+    global: filter?.global ?? false,
+    confirmingOwn: false,
     name: filter?.name ?? (recipe ? recipeFilterName(current.filters, recipe.name) : newFilterName(current.filters)),
     queries: filter ? [...filter.queries] : recipe ? [...recipe.queries] : [''],
     loadError,
@@ -492,14 +519,15 @@ function closeFilter(): void {
   set(newFilterChoice, null)
 }
 
-/** Stores the draft's filter, unless its name can't be saved, then goes back to the list and loads
- *  the filter's tasks. */
+/** Stores the draft's filter, among the global ones when Global is on, else among the project's
+ *  own, unless its name can't be saved, then goes back to the list and loads the filter's tasks. */
 async function saveFilter(): Promise<void> {
   const draft = read(filterDraft)
   const shown = read(shownSettings)
   if (!draft || draft.saving || shown?.projectId !== draft.projectId) return
-  if (filterNameProblem(projectFilters(shown.filterSettings, draft.tracker), draft.name, draft.id) !== null) return
-  await writeFilters(draft, (project) => withFilterSaved(project, draft.tracker, { id: draft.id, name: draft.name, queries: draft.queries }))
+  if (filterNameProblem(listedFilters(shown, draft.tracker), draft.name, draft.id, draft.global) !== null) return
+  const filter = { id: draft.id, name: draft.name, queries: draft.queries }
+  await writeFilters(draft, (project, global) => withFilterSaved(project, draft.tracker, global, filter, draft.global))
 }
 
 /** The first click asks for a second within a few seconds; the second deletes the filter, then
@@ -516,30 +544,108 @@ async function deleteFilter(): Promise<void> {
     }, CONFIRM_DELETE_MS)
     return
   }
-  await writeFilters(draft, (project) => withFilterDeleted(project, draft.tracker, draft.id))
+  await writeFilters(draft, (project, global) => withFilterDeleted(project, draft.tracker, global, draft.id))
 }
 
-/** Writes a change to the draft project's filters, then shows them, goes back to the list and
- *  loads it. A failed write keeps the editor open with its error and the draft. Pending Project
- *  settings are saved first, so the change applies to what the person sees. */
-async function writeFilters(draft: FilterDraft, change: (project: ProjectSettings) => FilterChanges | null): Promise<void> {
-  changeFilterDraft(draft, { saving: true, error: null, confirmingDelete: false })
-  let changes: FilterChanges | null
+/** What a write of filters on a tracker stored: the project's own filters with the one each
+ *  tracker shows, and every tracker's global filters. */
+type FiltersWritten = { project: FilterSettings; global: ByTracker<Filter[]> }
+
+/** Writes the write `compute` gives from the draft project's settings and the global filters of its
+ *  tracker as stored, through the settings saver, in one write of both. Answers its `answer` with
+ *  what it stored, or with null when it gives no write, which writes nothing. */
+function writeFilterChange<T>(
+  draft: FilterDraft,
+  compute: (project: ProjectSettings, global: Filter[]) => { answer: T; write: FilterWrite | null }
+): Promise<{ answer: T; written: FiltersWritten | null }> {
+  return settingsSave.writeProjectAndGlobal<{ answer: T; written: FiltersWritten | null }>(draft.projectId, (project, global) => {
+    const { answer, write } = compute(project, global.filters?.[draft.tracker] ?? [])
+    if (!write) return { answer: { answer, written: null } }
+    const changes = filterWriteChanges(global, draft.tracker, write)
+    return { answer: { answer, written: { project: write.project, global: changes.global.filters ?? {} } }, ...changes }
+  })
+}
+
+/** Shows the filters a write stored, while the project is still the one shown. */
+function showFilters(projectId: string, written: FiltersWritten): void {
+  const shown = read(shownSettings)
+  if (shown?.projectId === projectId) set(shownSettings, { ...shown, filterSettings: written.project, globalFilters: written.global })
+}
+
+/** Writes a change to the draft project's filters and the global ones of its tracker, then shows
+ *  them, goes back to the list and loads it. A failed write keeps the editor open with its error
+ *  and the draft. Pending Project settings are saved first, so the change applies to what the
+ *  person sees. */
+async function writeFilters(draft: FilterDraft, change: (project: ProjectSettings, global: Filter[]) => FilterWrite | null): Promise<void> {
+  changeFilterDraft(draft, { saving: true, error: null, confirmingDelete: false, confirmingOwn: false })
+  let written: FiltersWritten | null
   try {
-    changes = await settingsSave.writeProject(draft.projectId, change)
+    ;({ written } = await writeFilterChange(draft, (project, global) => ({ answer: null, write: change(project, global) })))
   } catch (error) {
     changeFilterDraft(draft, { saving: false, error: `Couldn't save the filter (${errorCode(error)}). Try again.` })
     return
   }
-  const shown = read(shownSettings)
-  if (changes && shown?.projectId === draft.projectId) set(shownSettings, { ...shown, filterSettings: changes })
+  if (written) showFilters(draft.projectId, written)
   const current = read(filterDraft)
   if (!current || !isSameDraft(current, draft)) return
   set(filterDraft, null)
-  if (!changes) return
+  if (!written) return
   set(settingsChoice, 'closed')
   leaveTrackerSearch()
   await load()
+}
+
+/** The filter editor's Global switch: on a new filter, where Save stores it. On a stored one,
+ *  turning it on moves the filter to the global ones of its tracker at once; turning it off asks
+ *  first, in the bar under the form, and turning it on again while it asks keeps it global. */
+function switchFilterGlobal(expected: FilterDraft, on: boolean): void {
+  const draft = read(filterDraft)
+  if (!draft || !isSameDraft(draft, expected) || draft.saving) return
+  if (draft.isNew) {
+    changeFilterDraft(draft, { global: on, error: null })
+    return
+  }
+  cancelConfirmDelete()
+  if (draft.global) {
+    changeFilterDraft(draft, { confirmingOwn: !on, confirmingDelete: false, error: null })
+    return
+  }
+  if (on) void moveFilter(draft, true)
+}
+
+/** Confirm, in the bar that asks before Global is turned off: moves the filter to the project. */
+function confirmFilterOwn(): void {
+  const draft = read(filterDraft)
+  if (draft?.confirmingOwn && !draft.saving) void moveFilter(draft, false)
+}
+
+/** Moves the draft's filter, as stored, to the global ones of its tracker or to the project, in one
+ *  write, and keeps the editor open on it. The name and queries typed stay in the draft for Save. A
+ *  move refused, because the destination has the name, or a failed write, changes nothing and shows
+ *  why. The filter keeps its id, unless it is the initial filter made global: then the filter shown
+ *  follows the new id. */
+async function moveFilter(draft: FilterDraft, toGlobal: boolean): Promise<void> {
+  changeFilterDraft(draft, { saving: true, error: null, confirmingDelete: false, confirmingOwn: false })
+  const shown = read(shownSettings)
+  const freshId = newId('f', shown ? listedFilters(shown, draft.tracker) : [])
+  let moved: { answer: FilterMove; written: FiltersWritten | null }
+  try {
+    moved = await writeFilterChange<FilterMove>(draft, (project, global) => {
+      const move = withFilterMoved(project, draft.tracker, global, draft.id, toGlobal, freshId)
+      return { answer: move, write: move.ok ? move.write : null }
+    })
+  } catch (error) {
+    changeFilterDraft(draft, { saving: false, error: `Couldn't move the filter (${errorCode(error)}). Try again.` })
+    return
+  }
+  const { answer, written } = moved
+  if (!answer.ok) {
+    changeFilterDraft(draft, { saving: false, error: answer.message })
+    return
+  }
+  if (written) showFilters(draft.projectId, written)
+  const { id } = answer
+  update(filterDraft, (current) => (current && isSameDraft(current, draft) ? { ...current, id, global: toGlobal, saving: false } : current))
 }
 
 /** Opens the template detail for one of the shown project's templates, or for a new one. It opens
@@ -1255,7 +1361,14 @@ export default function Panel() {
   }
   const filterEdit = read(filterDraft)
   if (filterEdit && shown?.projectId === filterEdit.projectId) {
-    return <FilterEditor draft={filterEdit} filters={projectFilters(shown.filterSettings, filterEdit.tracker)} projectName={project?.name ?? ''} />
+    return (
+      <FilterEditor
+        draft={filterEdit}
+        filters={listedFilters(shown, filterEdit.tracker)}
+        jiraProjectKey={shown.jiraProjectKey}
+        projectName={project?.name ?? ''}
+      />
+    )
   }
   const newChoice = read(newFilterChoice)
   if (newChoice && shown?.projectId === newChoice.projectId) return <NewFilterChooser choice={newChoice} projectName={project?.name ?? ''} />
@@ -1619,7 +1732,7 @@ function FilterRow({ projectId }: { projectId: string }) {
           label="Filter"
           labelHidden
           value={current.shownFilterId}
-          options={current.filters.map((filter) => ({ value: filter.id, label: filter.name }))}
+          options={current.filters.map((filter) => ({ value: filter.id, label: filter.global ? `${filter.name} (Global)` : filter.name }))}
           onChange={chooseFilter}
         />
       </Box>
@@ -2076,12 +2189,28 @@ function NewFilterChooser({ choice, projectName }: { choice: NewFilterChoice; pr
 }
 
 /** The filter editor, in place of the panel view, as the template detail: the title row with
- *  Cancel and Save, and the Delete bar, stay in place while the form between them scrolls. The
- *  form starts with the failed load that opened it, if one did. */
-function FilterEditor({ draft, filters, projectName }: { draft: FilterDraft; filters: Filter[]; projectName: string }) {
-  const nameProblem = filterNameProblem(filters, draft.name, draft.id)
+ *  Cancel and Save, and the bar under the form, stay in place while the form between them scrolls.
+ *  That bar is the Delete bar, or, while turning Global off waits for its confirmation, the bar
+ *  that asks for it. The form starts with the failed load that opened it, if one did. `filters`
+ *  are those the project lists on the draft's tracker, its own and the global ones. */
+function FilterEditor({
+  draft,
+  filters,
+  jiraProjectKey,
+  projectName
+}: {
+  draft: FilterDraft
+  filters: ListedFilter[]
+  jiraProjectKey: string
+  projectName: string
+}) {
+  const nameProblem = filterNameProblem(filters, draft.name, draft.id, draft.global)
   const save = () => void saveFilter()
   const recipes = filterRecipes(draft.tracker)
+  const isGlobal = draft.global && !draft.confirmingOwn
+  // A global Jira filter that names the project's key lists that project's tasks in every project.
+  const namesKey = isGlobal && draft.tracker === 'jira' && draft.queries.some((query) => namesJiraProject(query, jiraProjectKey))
+  const trackerName = draft.tracker === 'jira' ? 'Jira' : 'GitHub'
   return (
     <Box direction="column" gap="sm" height="100%">
       <TitleRow prefix={projectName !== '' ? `${projectName} ·` : null} title={draft.isNew ? 'New filter' : 'Edit filter'} level={3}>
@@ -2105,6 +2234,12 @@ function FilterEditor({ draft, filters, projectName }: { draft: FilterDraft; fil
             </Text>
           ) : null}
         </Stack>
+        <Stack gap="xs">
+          <Switch label="Global" checked={isGlobal} disabled={draft.saving} onChange={(on) => switchFilterGlobal(draft, on)} />
+          <Text size="sm" muted>
+            {`A global filter is offered in every ${trackerName} project, and editing or deleting it changes it in every project.`}
+          </Text>
+        </Stack>
         {draft.isNew && recipes.length > 0 ? (
           <Field label="Start from a recipe">
             <Row gap="xs" align="center" wrap>
@@ -2117,14 +2252,49 @@ function FilterEditor({ draft, filters, projectName }: { draft: FilterDraft; fil
           </Field>
         ) : null}
         <FilterQueries tracker={draft.tracker} queries={draft.queries} onChange={(queries) => changeFilterDraft(draft, { queries })} onSubmit={save} />
+        {namesKey ? (
+          <Stack gap="xs">
+            <Text size="sm" tone="warning">
+              {`This filter names ${jiraProjectKey}. Use {{${JIRA_PROJECT_VARIABLE}}} so each project lists its own tasks.`}
+            </Text>
+            <Row gap="xs" align="center">
+              <Button
+                key="filter-use-jira-project"
+                size="sm"
+                variant="outline"
+                disabled={draft.saving}
+                onPress={() => changeFilterDraft(draft, { queries: draft.queries.map((query) => withJiraProjectVariable(query, jiraProjectKey)) })}
+              >
+                {`Use {{${JIRA_PROJECT_VARIABLE}}}`}
+              </Button>
+            </Row>
+          </Stack>
+        ) : null}
         {draft.error !== null ? (
           <Callout tone="danger" icon="error">
             <Text>{draft.error}</Text>
           </Callout>
         ) : null}
       </Box>
-      {draft.isNew ? null : (
-        <Box direction="row" justify="end" align="center" shrink={false}>
+      {draft.isNew ? null : draft.confirmingOwn ? (
+        <Box direction="row" justify="end" align="center" gap="xs" shrink={false}>
+          <Text size="sm" tone="warning">
+            Other projects will stop offering it.
+          </Text>
+          <Button key="filter-keep-global" size="sm" variant="ghost" disabled={draft.saving} onPress={() => switchFilterGlobal(draft, true)}>
+            Keep global
+          </Button>
+          <Button key="filter-confirm-own" size="sm" variant="solid" disabled={draft.saving} onPress={confirmFilterOwn}>
+            Confirm
+          </Button>
+        </Box>
+      ) : (
+        <Box direction="row" justify="end" align="center" gap="xs" shrink={false}>
+          {draft.global ? (
+            <Text size="sm" muted>
+              Deletes it in every project.
+            </Text>
+          ) : null}
           <Button
             key="filter-delete"
             size="sm"

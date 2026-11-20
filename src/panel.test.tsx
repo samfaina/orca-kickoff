@@ -2842,12 +2842,15 @@ const filtersStored = (filters: StoredFilter[], shownFilterId?: string) =>
 /** The key each filter lists in `showFilters`, by filter id. */
 const FILTER_KEYS: Record<string, string> = { tasks: 'WEB-1', 'f-board': 'WEB-2', 'f-mine': 'WEB-3' }
 
+/** Stored settings as `showFilters` takes them: the web project's, and the global filters. */
+type StoredForFilters = { settings: { version: number; projects: Record<string, JsonValue>; global?: { filters?: Record<string, StoredFilter[]> } } }
+
 /** The panel on the web project with `storage`, whose `tasks.load` lists, as the worker does, the
- *  filter the request names, else the one stored as shown when it is asked, else the first: one
- *  task each, `FILTER_KEYS`, or WEB-9 for a filter not in it. It answers an error naming the filter
- *  instead for a filter whose queries are all blank. Also its host and the inputs `tasks.load` was
- *  asked with. */
-async function showFilters(storage: ReturnType<typeof filtersStored>, requests: MockRequests = {}) {
+ *  filter the request names, else the one stored as shown when it is asked, else the first, among
+ *  the project's own and the global Jira ones: one task each, `FILTER_KEYS`, or WEB-9 for a filter
+ *  not in it. It answers an error naming the filter instead for a filter whose queries are all
+ *  blank. Also its host and the inputs `tasks.load` was asked with. */
+async function showFilters(storage: StoredForFilters, requests: MockRequests = {}) {
   const inputs: LoadInput[] = []
   let host: MockHost | null = null
   let view: TestPanel
@@ -2856,8 +2859,11 @@ async function showFilters(storage: ReturnType<typeof filtersStored>, requests: 
       'tasks.load': (input: LoadInput) => {
         inputs.push(input)
         // `host` is set once the panel has mounted, after the first load.
-        const project = (host ? storedProject(host) : storage.settings.projects['github:acme/web']) as StoredFilters
-        const filters = project.filters?.jira ?? [{ id: 'tasks', name: 'Tasks', queries: ['assignee = currentUser()'] }]
+        const settings = (host ? host.data().storage.settings : storage.settings) as StoredForFilters['settings']
+        const project = settings.projects['github:acme/web'] as StoredFilters
+        const global = settings.global?.filters?.jira ?? []
+        const own = project.filters?.jira?.length ? project.filters.jira : global.length > 0 ? [] : [{ id: 'tasks', name: 'Tasks', queries: ['assignee = currentUser()'] }]
+        const filters = [...own, ...global]
         const filter = filters.find((f) => f.id === input.filterId) ?? filters.find((f) => f.id === project.shownFilterId?.jira) ?? filters[0]
         if (filter.queries.every((query) => query.trim() === '')) {
           return { kind: 'error', project: web, message: `${filter.name}: Enter a JQL query to list Jira tasks.`, filterId: filter.id }
@@ -3334,6 +3340,256 @@ test('a change of active project while the filter editor is open drops the draft
   const reopened = await mount(panel, { host: again.host })
   assert.equal(reopened.find(filterTitle('Edit filter')), null)
   assert.ok(reopened.find(filterSelect))
+})
+
+/** `storage` with these global filters by tracker. */
+const withGlobalFilters = (storage: { settings: { version: number; projects: Record<string, JsonValue> } }, filters: Record<string, StoredFilter[]>) => ({
+  settings: { ...storage.settings, global: { filters } }
+})
+
+/** The stored global filters by tracker. */
+const storedGlobalFilters = (host: MockHost) =>
+  (host.data().storage.settings as { global?: { filters?: Record<string, StoredFilter[]> } } | undefined)?.global?.filters
+
+const sprintGlobal = { id: 'g-sprint', name: 'Sprint', queries: ['project = {{jira_project}} AND sprint in openSprints()'] }
+const triageGlobal = { id: 'g-triage', name: 'Triage', queries: ['is:open label:needs-triage'] }
+const docs = { id: 'github:acme/docs', name: 'docs', repo: 'acme/docs' }
+
+test("the filter row lists the project's own filters, then the global ones of its tracker, marked Global, and can show a global one", async () => {
+  const storage = withGlobalFilters(filtersStored([tasksFilter, boardFilter]), { jira: [sprintGlobal], github: [triageGlobal] })
+  const { view, host, inputs } = await showFilters(storage)
+  assert.deepEqual(optionLabels(view, 'Filter'), ['Tasks', 'Board', 'Sprint (Global)'])
+  await view.select(filterSelect, 'g-sprint')
+  // The load saves the filter shown first, and lists it: WEB-9, a filter not in FILTER_KEYS.
+  assert.equal(inputs.length, 2)
+  assert.deepEqual((storedProject(host) as StoredFilters).shownFilterId, { jira: 'g-sprint' })
+  assert.ok(view.find({ type: 'Link', text: 'WEB-9' }))
+  assert.equal(view.valueOf(filterSelect), 'g-sprint')
+  await view.press(editFilter)
+  assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Sprint')
+  assert.equal(view.find(globalSwitch)?.props.checked, true)
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.warnings, [])
+})
+
+test('a Jira filter made global in one project is offered, marked Global, in every Jira project and in no GitHub project; editing it changes it in all, and deleting it removes it from all', async () => {
+  let project = web
+  const { view, host } = await showWith(
+    {
+      'tasks.load': () =>
+        project === docs ? ready([task('#9')], { project: docs }) : twgReady([twgTask(project === web ? 'WEB-1' : 'API-1')], { project, filterId: 'tasks' })
+    },
+    {
+      settings: {
+        version: 1,
+        projects: {
+          [web.id]: { provider: 'jira-twg', providers: { 'jira-twg': { site: '', profile: '' } }, filters: { jira: [tasksFilter, boardFilter] } },
+          [api.id]: { provider: 'jira-orca', providers: { 'jira-orca': { siteId: '' } }, filters: { jira: [mineFilter] } }
+        }
+      }
+    }
+  )
+  const reload = async (next: typeof web) => {
+    project = next
+    await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  }
+  await view.select(filterSelect, 'f-board')
+  await view.press(editFilter)
+  assert.equal(view.find(globalSwitch)?.props.checked, false)
+  await view.toggle(globalSwitch)
+  // The move is stored at once, and the editor stays open on the filter, now global.
+  assert.deepEqual((storedProject(host) as StoredFilters).filters, { jira: [tasksFilter] })
+  assert.deepEqual(storedGlobalFilters(host), { jira: [boardFilter] })
+  assert.equal(view.find(globalSwitch)?.props.checked, true)
+  assert.equal(view.valueOf({ type: 'Input', label: 'Name' }), 'Board')
+  await view.press({ type: 'Button', text: 'Cancel' })
+  assert.deepEqual(optionLabels(view, 'Filter'), ['Tasks', 'Board (Global)'])
+  assert.equal(view.valueOf(filterSelect), 'f-board')
+
+  await reload(api)
+  assert.deepEqual(optionLabels(view, 'Filter'), ['Mine', 'Board (Global)'])
+  await view.select(filterSelect, 'f-board')
+  await view.press(editFilter)
+  await view.type({ type: 'Input', label: 'Name' }, 'Sprint board', { replace: true })
+  await view.press(saveButton)
+  assert.deepEqual(storedGlobalFilters(host), { jira: [{ ...boardFilter, name: 'Sprint board' }] })
+  assert.deepEqual(optionLabels(view, 'Filter'), ['Mine', 'Sprint board (Global)'])
+
+  await reload(docs)
+  assert.deepEqual(optionLabels(view, 'Filter'), ['Open'])
+
+  await reload(web)
+  assert.deepEqual(optionLabels(view, 'Filter'), ['Tasks', 'Sprint board (Global)'])
+  assert.equal(view.valueOf(filterSelect), 'f-board')
+  await view.press(editFilter)
+  const { deleteBar } = detailParts(view)
+  assert.ok(deleteBar)
+  assert.ok(nodesIn(deleteBar, (node) => node.type === 'Text' && wordsOf(node) === 'Deletes it in every project.').length === 1)
+  await view.press({ type: 'Button', text: 'Delete filter' })
+  await view.press({ type: 'Button', text: 'Confirm delete' })
+  assert.deepEqual(storedGlobalFilters(host), { jira: [] })
+  assert.deepEqual(optionLabels(view, 'Filter'), ['Tasks'])
+
+  await reload(api)
+  assert.deepEqual(optionLabels(view, 'Filter'), ['Mine'])
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.warnings, [])
+})
+
+test('an own filter says nothing about other projects in its Delete bar, and a global one is deleted while the project lists another', async () => {
+  const { view } = await showFilters(withGlobalFilters(filtersStored([], 'g-sprint'), { jira: [sprintGlobal, { ...boardFilter, id: 'g-board' }] }))
+  assert.deepEqual(optionLabels(view, 'Filter'), ['Sprint (Global)', 'Board (Global)'])
+  await view.press(editFilter)
+  assert.equal(view.find({ type: 'Button', text: 'Delete filter' })?.disabled, false)
+  await view.press({ type: 'Button', text: 'Cancel' })
+  await view.unmount()
+
+  const own = await showFilters(filtersStored([tasksFilter, boardFilter]))
+  await own.view.press(editFilter)
+  assert.equal(own.view.find({ type: 'Text', text: 'Deletes it in every project.' }), null)
+})
+
+test('turning Global off asks first, then moves the filter to the active project only', async () => {
+  const storage = withGlobalFilters(filtersStored([tasksFilter], 'f-board'), { jira: [boardFilter, sprintGlobal] })
+  const { view, host } = await showFilters(storage)
+  await view.press(editFilter)
+  await view.toggle(globalSwitch)
+  // A confirmation bar in place of the Delete bar; nothing is stored yet.
+  const { deleteBar } = detailParts(view)
+  assert.ok(deleteBar)
+  assert.ok(nodesIn(deleteBar, (node) => node.type === 'Text' && wordsOf(node) === 'Other projects will stop offering it.').length === 1)
+  assert.deepEqual(buttonsIn(deleteBar), ['Keep global', 'Confirm'])
+  assert.equal(view.find(globalSwitch)?.props.checked, false)
+  assert.deepEqual(storedGlobalFilters(host), { jira: [boardFilter, sprintGlobal] })
+
+  await view.press({ type: 'Button', text: 'Keep global' })
+  assert.equal(view.find(globalSwitch)?.props.checked, true)
+  assert.deepEqual(buttonsIn(detailParts(view).deleteBar!), ['Delete filter'])
+  assert.deepEqual(storedGlobalFilters(host), { jira: [boardFilter, sprintGlobal] })
+
+  await view.toggle(globalSwitch)
+  await view.press({ type: 'Button', text: 'Confirm' })
+  assert.deepEqual(storedGlobalFilters(host), { jira: [sprintGlobal] })
+  assert.deepEqual((storedProject(host) as StoredFilters).filters, { jira: [tasksFilter, boardFilter] })
+  assert.deepEqual((storedProject(host) as StoredFilters).shownFilterId, { jira: 'f-board' })
+  assert.equal(view.find(globalSwitch)?.props.checked, false)
+  await view.press({ type: 'Button', text: 'Cancel' })
+  assert.deepEqual(optionLabels(view, 'Filter'), ['Tasks', 'Board', 'Sprint (Global)'])
+  assert.equal(view.valueOf(filterSelect), 'f-board')
+})
+
+test('a filter move whose name the destination group already has is refused with a message, and changes nothing', async () => {
+  const storage = withGlobalFilters(filtersStored([tasksFilter, { ...mineFilter, name: 'Board' }], 'f-mine'), { jira: [{ ...boardFilter, id: 'g-board' }] })
+  const { view, host } = await showFilters(storage)
+  await view.press(editFilter)
+  await view.toggle(globalSwitch)
+  assert.ok(view.find({ type: 'Text', text: 'A global filter is already called "Board". Rename one of them first.' }))
+  assert.equal(view.find(globalSwitch)?.props.checked, false)
+  assert.deepEqual(storedProject(host), storage.settings.projects['github:acme/web'])
+  assert.deepEqual(storedGlobalFilters(host), { jira: [{ ...boardFilter, id: 'g-board' }] })
+})
+
+test('a failed filter move keeps the filter where it was, and the editor open with the error', async () => {
+  const host = mockHost({
+    capabilities: ['storage:own', 'workspace:read'],
+    requests: { 'tasks.load': twgReady([twgTask('WEB-1')], { filterId: 'tasks' }) },
+    storage: filtersStored([tasksFilter, boardFilter]),
+    results: {
+      'storage.set': () => {
+        throw hostError('quota_exceeded', 'Storage is full')
+      }
+    }
+  })
+  const view = await mount(panel, { host })
+  await view.press(editFilter)
+  await view.toggle(globalSwitch)
+  assert.ok(view.find({ type: 'Text', text: "Couldn't move the filter (quota_exceeded). Try again." }))
+  assert.equal(view.find(globalSwitch)?.props.checked, false)
+  await view.press({ type: 'Button', text: 'Cancel' })
+  assert.deepEqual(optionLabels(view, 'Filter'), ['Tasks', 'Board'])
+})
+
+test('a new filter with Global on is saved among the global ones, and a project that listed only its initial filter keeps it', async () => {
+  const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) })
+  await view.press(newFilter)
+  await view.toggle(globalSwitch)
+  assert.equal(view.find(globalSwitch)?.props.checked, true)
+  assert.equal(storedGlobalFilters(host), undefined)
+  await view.type(queryField('Query'), 'label:bug', { replace: true })
+  await view.press(saveButton)
+  const [saved] = storedGlobalFilters(host)?.github ?? []
+  assert.deepEqual([saved?.name, saved?.queries], ['Filter 2', ['label:bug']])
+  assert.deepEqual(storedProject(host), {
+    providers: {},
+    filters: { github: [{ id: 'open', name: 'Open', queries: ['is:open'] }] },
+    shownFilterId: { github: saved.id }
+  })
+  assert.deepEqual(optionLabels(view, 'Filter'), ['Open', 'Filter 2 (Global)'])
+  assert.equal(view.valueOf(filterSelect), saved.id)
+})
+
+test("a global filter's name is checked against the global ones only", async () => {
+  const storage = { settings: { version: 1, projects: {}, global: { filters: { github: [triageGlobal] } } } }
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, storage)
+  await view.press(newFilter)
+  await view.type({ type: 'Input', label: 'Name' }, 'Triage', { replace: true })
+  assert.equal(view.find(saveButton)?.disabled, false)
+  await view.toggle(globalSwitch)
+  assert.ok(view.find({ type: 'Text', text: 'Another global filter is already called "Triage".' }))
+  assert.equal(view.find(saveButton)?.disabled, true)
+})
+
+test('the initial filter made global takes a new id and stays the filter shown', async () => {
+  const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]) })
+  await view.press(editFilter)
+  await view.toggle(globalSwitch)
+  const [moved] = storedGlobalFilters(host)?.github ?? []
+  assert.ok(moved)
+  assert.notEqual(moved.id, 'open')
+  assert.deepEqual([moved.name, moved.queries], ['Open', ['is:open']])
+  assert.deepEqual(storedProject(host), { providers: {}, filters: { github: [] }, shownFilterId: { github: moved.id } })
+  await view.press({ type: 'Button', text: 'Cancel' })
+  assert.deepEqual(optionLabels(view, 'Filter'), ['Open (Global)'])
+  assert.equal(view.valueOf(filterSelect), moved.id)
+})
+
+const HINT = 'This filter names WEB. Use {{jira_project}} so each project lists its own tasks.'
+const useVariable = { type: 'Button', text: 'Use {{jira_project}}' }
+
+test("a global Jira filter that names the project's Jira project key shows a hint under the queries, whose button rewrites the draft", async () => {
+  const boardGlobal = { id: 'g-board', name: 'Board', queries: ['project = web ORDER BY rank', 'labels = ui OR project=WEB'] }
+  const project = { filters: { jira: [tasksFilter] }, shownFilterId: { jira: 'g-board' }, jiraProjectKey: 'WEB' }
+  const { view, host } = await showFilters(withGlobalFilters(twgStored({ site: '', profile: '' }, project), { jira: [boardGlobal] }))
+  await view.press(editFilter)
+  assert.ok(view.find({ type: 'Text', text: HINT }))
+  await view.press(useVariable)
+  assert.deepEqual(queryFields(view).map(([, value]) => value), ['project = {{jira_project}} ORDER BY rank', 'labels = ui OR project={{jira_project}}'])
+  assert.equal(view.find({ type: 'Text', text: HINT }), null)
+  assert.equal(view.find(useVariable), null)
+  // Only the draft changed; Save stores it.
+  assert.deepEqual(storedGlobalFilters(host), { jira: [boardGlobal] })
+  await view.press(saveButton)
+  assert.deepEqual(storedGlobalFilters(host)?.jira?.[0]?.queries, ['project = {{jira_project}} ORDER BY rank', 'labels = ui OR project={{jira_project}}'])
+
+  // An own filter naming the key shows no hint.
+  await view.select(filterSelect, 'tasks')
+  await view.press(editFilter)
+  assert.equal(view.find({ type: 'Text', text: HINT }), null)
+})
+
+test("the hint doesn't show without a Jira project key, nor on GitHub", async () => {
+  const boardGlobal = { id: 'g-board', name: 'Board', queries: ['project = WEB'] }
+  const noKey = await showFilters(withGlobalFilters(filtersStored([], 'g-board'), { jira: [boardGlobal] }))
+  await noKey.view.press(editFilter)
+  assert.equal(noKey.view.find(useVariable), null)
+  await noKey.view.unmount()
+
+  const github = { settings: { version: 1, projects: { 'github:acme/web': { providers: {}, jiraProjectKey: 'WEB' } }, global: { filters: { github: [boardGlobal] } } } }
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, github)
+  await view.select(filterSelect, 'g-board')
+  await view.press(editFilter)
+  assert.equal(view.find(globalSwitch)?.props.checked, true)
+  assert.equal(view.find(useVariable), null)
 })
 
 /** The button that opens and closes "Filters", the header of its section. */
