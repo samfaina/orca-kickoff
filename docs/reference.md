@@ -396,7 +396,19 @@ Behaviour:
   - The folder is the sanitised name; if the path is taken, Orca tries alternatives or fails with "Pick a different worktree name".
   - The branch is `refs/heads/<prefix>/<sanitised name>`, where the prefix comes from Orca's `branchPrefix` setting (`git-username` by default, `custom` or `none`).
   - `--branch` skips the prefix.
-- Orca renames branches it named itself when an agent starts (`autoRenameBranchFromWork`). A name given with `--name` is not generated, so it is expected not to be renamed **[Assumed]**; not tested by creating a worktree.
+- How `--name` is cleaned, read in Orca 1.4.265's app bundle, not observed **[Verified]**:
+  - Each run of characters other than Unicode letters, digits, `.`, `_` and `-` becomes one `-`. Runs of `-` become one `-`, and runs of `.` become one `.`. `.` and `-` are trimmed at the ends. Case is kept, and so is `__`.
+  - For the folder, `/` is one of those characters and becomes `-`. For the default branch, `/` separates segments, which are cleaned one by one.
+  - So a convention such as `feature/WEB-12__x--AB` can't be written with `--name`: the `--` becomes `-`.
+- `--branch <name>`, read in Orca 1.4.265's app bundle, not observed **[Verified]**:
+  - The CLI passes the value as it is. Orca refuses one that starts with `-`, checks the rest with `git check-ref-format --branch`, and then uses it verbatim, with no prefix and no cleaning. A name git refuses fails the create.
+  - With `--branch`, Orca doesn't look up the git username for the prefix.
+  - The folder still comes from `--name`.
+  - A taken name is retried as `<name>-2`, `-3` and so on, up to 100 tries. The folder and the branch share that counter, so a taken branch gives `-2` to the folder too. A branch counts as taken when it exists locally or on a remote, when a GitHub PR is open for it, or when the folder path is taken. Names that differ only in case count as the same.
+  - An existing local branch is checked out instead of retried when it points at the base's commit and no other worktree has it.
+  - When an existing branch is a path prefix of the new one (`feature` for `feature/x`), the create fails with `Branch "…" is blocked by existing branch "…". Pick a different branch name.`, without retrying.
+- Orca renames branches it named itself when an agent starts (`autoRenameBranchFromWork`, on by default). It renames only a branch whose last segment, ignoring a trailing `-<n>`, is one of Orca's generated names, a list of sea creatures (`narwhal`, `seahorse`, ...), and that has no upstream yet. So a name from `--name` or `--branch` that isn't one of those words is never renamed **[Verified]** (read in Orca 1.4.265's app bundle, not observed).
+- Orca's `branchPrefix` setting gives only a prefix: `git-username` (the default), `custom` (`branchPrefixCustom`) or `none`. `git-username` is the first valid value of `git config github.user`, `git config user.username`, the `gh` login when a remote is on GitHub, and `git config user.name` when it has no spaces. A `custom` prefix that git refuses fails the create **[Verified]** (read in Orca 1.4.265's app bundle).
 - `--prompt`, `--model`, `--effort`, `--surface` and `--retry-launch` require `--agent`: `invalid_argument: --prompt requires --agent`. Without `--agent`, no agent starts **[Verified]**.
 - `--agent` must be a known id, otherwise "Unknown TUI agent" **[Verified]**. About 46 ids exist, including `claude`, `codex`, `opencode`, `gemini`, `copilot`, `grok`, `aider`, `goose`, `amp`, `cursor`, `cline`, `kiro`, `qwen-code` and `rovo`. There is no "default" value.
 - `--reference <key-or-url>` **[Verified]**:
@@ -624,6 +636,7 @@ Successful output **[Verified]** (no `ok` key):
 
   - `emailAddress` is the assignee's email: Kickoff reads only `displayName`.
   - An unassigned task has `assignee: null` **[Verified]**.
+- With `issuetype` in `--fields`, each issue has `issuetype`, the Jira REST issue type object: `self`, `id`, `description`, `name` (a string), `subtask`, `avatarId`, `entityId` and `hierarchyLevel` **[Verified]** (twg 1.4.4). Kickoff doesn't ask for it yet.
 - `description` is ADF (Jira's JSON document format), an object `{ type: 'doc', version: 1, content: [...] }` **[Verified]**. An empty description is expected to be `null` **[Assumed]**. Node types seen: `paragraph`, `orderedList` (with `attrs.order`), `listItem` and `text`. Also `heading` (with `attrs.level`), `bulletList` (nested inside a list item too), `codeBlock` (with `attrs.language`, its text holding blank lines), `hardBreak`, `blockquote` and `rule`, plus the marks `strong`, `em`, `code` and `link` **[Verified]**: the maintainer saw them reach a started agent's prompt as readable plain text inside Orca (issue #22, version not recorded). A link written as HTML `<a>` becomes a `link` mark, not an `inlineCard`. `mention` and `inlineCard` follow Atlassian's ADF documentation **[Assumed]**; `src/adf.ts` handles them.
 
 Errors **[Verified]**:
