@@ -4,7 +4,7 @@
 import type { OrcaWorkerApi } from 'orca/worker'
 import { resolveAgent, systemDefaultAgentReader, type DefaultAgent } from './agent'
 import { CliError, cleanMessage, systemRunCli, type RunCli } from './cli'
-import { filledBranch, startBranchProblem, titleExclusion, worktreeName } from './naming'
+import { startBranch, worktreeName } from './naming'
 import {
   checkOrcaAnswer,
   findActiveProject,
@@ -203,12 +203,10 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
       // Never another template: the person chose this one for this task, own or global.
       const template = findTemplate(settings, globalTemplates(stored), templateId)
       if (!template) return { ok: false, message: 'The prompt template you chose no longer exists — pick another one.' }
-      const name = worktreeName(task, titleExclusion(settings))
-      // Orca would refuse a branch git can't hold only once the create runs, so it is checked here.
+      const name = worktreeName(task, settings)
       // A taken branch is Orca's: it retries it as <branch>-2, -3 and so on.
-      const branch = filledBranch(settings, task)
-      const branchProblem = branch === null ? null : startBranchProblem(task.key, branch)
-      if (branchProblem) return { ok: false, message: branchProblem }
+      const { branch, problem } = startBranch(settings, task)
+      if (problem !== null) return { ok: false, message: problem }
       // {{branch}} is the branch as filled in, without a -2 Orca may add: the prompt comes first.
       const prompt = buildPrompt(template.text, task, project, branch ?? name, settings.jiraProjectKey ?? '')
       if (!prompt.ok) return prompt

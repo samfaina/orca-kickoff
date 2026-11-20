@@ -1,5 +1,6 @@
-// Prompt templates: `{{name}}` filled from the task, the project and the worktree name. No Node
-// imports, so the panel can use the constants too.
+// Prompt templates: `{{name}}` filled from the task, the project and the Start's branch (the
+// filled-in branch template, else the worktree name). No Node imports, so the panel can use the
+// constants too.
 import type { ProjectRef, ProjectSettings, PromptTemplate, Task } from './protocol'
 
 /** The text of the template a project lists before it stores any of its own while there is no
@@ -203,8 +204,9 @@ export const TEMPLATE_VARIABLE_DESCRIPTIONS: Record<TemplateVariable, string> = 
 export type PromptResult = { ok: true; prompt: string } | { ok: false; message: string }
 
 /** The prompt for `task` from a template's text, in a project whose Jira project key is
- *  `jiraProjectKey` ('' for none). An empty text gives the task URL. A prompt over MAX_PROMPT
- *  characters is refused. */
+ *  `jiraProjectKey` ('' for none), with `branch` as `{{branch}}`: the filled-in branch template,
+ *  else the worktree name. An empty text gives the task URL. A prompt over MAX_PROMPT characters
+ *  is refused. */
 export function buildPrompt(text: string, task: Task, project: ProjectRef, branch: string, jiraProjectKey: string): PromptResult {
   const prompt = text === '' ? task.url : fillTemplate(text, templateVariables(task, project, branch, jiraProjectKey))
   if (prompt.length > MAX_PROMPT) {

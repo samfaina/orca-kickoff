@@ -56,8 +56,7 @@ import {
   BRANCH_VARIABLE_DESCRIPTIONS,
   BRANCH_VARIABLES,
   branchSettingsProblem,
-  filledBranch,
-  startBranchProblem,
+  startBranch,
   titleExclusion,
   worktreeName,
   type BranchSettings
@@ -1539,7 +1538,7 @@ function BranchFields({ shown }: { shown: ShownSettings }) {
         ))}
       </Stack>
       <Text size="sm" muted>
-        Branch types: a Jira issue type, as the tracker shows it, and the branch type it gives.
+        Branch types: a Jira issue type, as the tracker shows it, and the branch type it gives. A row with either left empty counts as none.
       </Text>
       {branch.branchTypes.map((row, index) => (
         <Box key={`branch-type-${index}`} direction="row" align="center" gap="xs">
@@ -1547,7 +1546,7 @@ function BranchFields({ shown }: { shown: ShownSettings }) {
             <Input label={`Issue type ${index + 1}`} labelHidden value={row.issueType} placeholder="Bug" onChange={(issueType) => changeRow(index, { issueType })} />
           </Box>
           <Box grow minWidth={0}>
-            <Input label={`Branch type ${index + 1}`} labelHidden value={row.branchType} placeholder="bugfix" onChange={(value) => changeRow(index, { branchType: value })} />
+            <Input label={`Branch type ${index + 1}`} labelHidden value={row.branchType} placeholder="bugfix" onChange={(branchType) => changeRow(index, { branchType })} />
           </Box>
           <Box shrink={false}>
             <IconButton
@@ -1606,15 +1605,14 @@ function BranchFields({ shown }: { shown: ShownSettings }) {
 function BranchPreview({ shown }: { shown: ShownSettings }) {
   const loaded = firstLoadedTask(shown.projectId)
   const previewed = loaded ?? PREVIEW_TASK
-  const branch = filledBranch(shown.branch, previewed)
-  const refused = branch === null ? null : startBranchProblem(previewed.key, branch)
+  const { branch, problem: refused } = startBranch(shown.branch, previewed)
   return (
     <Stack gap="xs">
       <Text size="sm" weight="semibold">
         {loaded ? `Preview for ${previewed.key}` : `Preview for ${previewed.key} (an example)`}
       </Text>
       <Text size="sm">{branch === null ? 'Branch: named by Orca' : `Branch: ${branch}`}</Text>
-      <Text size="sm">{`Worktree: ${worktreeName(previewed, shown.branch.titleExclusion)}`}</Text>
+      <Text size="sm">{`Worktree: ${worktreeName(previewed, shown.branch)}`}</Text>
       {refused !== null ? (
         <Text size="sm" tone="warning">
           {refused}

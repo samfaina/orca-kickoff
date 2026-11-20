@@ -151,8 +151,8 @@ The **Branch** section of Project settings names the git branch a Start creates.
   | `{{branch_type}}` | The task's branch type, from the table below. |
 
   Anything else is written as it is, such as your initials: `{{branch_type}}/{{task_key}}__{{task_slug}}--AB` gives `bugfix/WEB-12__add-dark-mode--AB` for the Jira bug `WEB-12` "[FE] | [Mobile][Widgets] Add dark mode".
-- **Branch types**: a table of Jira issue types, typed as the tracker shows them, such as `Bug` → `bugfix` and `Story` → `feature`, matched ignoring case, with **Add branch type** and the trash can to remove a row, then a **Fallback branch type**. A type not in the table, a task with no type, and every GitHub task get the fallback.
-- **Title exclusion pattern**: a regular expression, `\[[^\]]*\]` at first, which removes bracketed tags such as `[FE]` anywhere in the title. Every match, ignoring case, is removed before `{{task_slug}}` and the worktree's name are made. Empty, it removes nothing. When it would leave no words, the whole title is used.
+- **Branch types**: a table of Jira issue types, typed as the tracker shows them, such as `Bug` → `bugfix` and `Story` → `feature`, matched ignoring case, with **Add branch type** and the trash can to remove a row, then a **Fallback branch type**. A row with either side empty counts as none. A type not in the table, a task with no type, and every GitHub task get the fallback.
+- **Title exclusion pattern**: a regular expression, `\[[^\]]*\]` at first, which removes bracketed tags such as `[FE]` anywhere in the title. Every match, ignoring case, is removed before `{{task_slug}}` and the worktree's name are made, keeping the words on either side apart. Empty, it removes nothing. When it would leave no words, the whole title is used.
 - **Preview**: the branch and the worktree's name a Start of the first loaded task would get, or of an example task, `WEB-12` "[FE] | [Mobile] Add dark mode", a Story, when none is loaded.
 
 The section saves itself as you type, like the rest of Project settings, but not while it has one of these problems, which it shows, keeping what it saved last:

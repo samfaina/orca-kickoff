@@ -34,14 +34,15 @@ function titleExclusionRegExp(pattern: string): { ok: true; regExp: RegExp } | {
   }
 }
 
-/** `title` with every match of the title exclusion `pattern` removed. An empty pattern, or one
+/** `title` with every match of the title exclusion `pattern` removed, each replaced by a space so
+ *  the words on either side stay apart (`Fix[FE]login` → `Fix login`). An empty pattern, or one
  *  that isn't a valid regular expression, removes nothing; when what is left has no words, the
  *  whole title is kept, so a title of tags only keeps its words. */
 export function cleanTitle(title: string, pattern: string): string {
   if (pattern === '') return title
   const compiled = titleExclusionRegExp(pattern)
   if (!compiled.ok) return title
-  const cleaned = title.replace(compiled.regExp, '')
+  const cleaned = title.replace(compiled.regExp, ' ')
   return titleWords(cleaned) === '' ? title : cleaned
 }
 
@@ -51,21 +52,24 @@ export function taskSlug(title: string, pattern: string): string {
   return titleWords(cleanTitle(title, pattern)).split('-').filter((word) => word !== '').slice(0, MAX_TITLE_WORDS).join('-')
 }
 
-/** `<prefix>-<up to four words of the title, cleaned by the title exclusion pattern>`:
+/** The project's title exclusion pattern: the stored one, else the initial one. */
+export function titleExclusion(settings: Pick<ProjectSettings, 'titleExclusion'>): string {
+  return settings.titleExclusion ?? INITIAL_TITLE_EXCLUSION
+}
+
+/** `<prefix>-<up to four words of the title, cleaned by the project's title exclusion pattern>`:
  *  `issue-42-add-dark-mode` on GitHub, `web-12-anadir-modo-oscuro-a` on Jira. */
-export function worktreeName(task: Pick<Task, 'tracker' | 'key' | 'title'>, pattern: string): string {
+export function worktreeName(task: Pick<Task, 'tracker' | 'key' | 'title'>, settings: Pick<ProjectSettings, 'titleExclusion'>): string {
   const prefix = task.tracker === 'github' ? `issue-${githubIssueNumber(task.key)}` : task.key.toLowerCase()
-  const slug = taskSlug(task.title, pattern)
+  const slug = taskSlug(task.title, titleExclusion(settings))
   return slug === '' ? prefix : `${prefix}-${slug}`
 }
 
 /** The part of a project's settings that names the branch of a Start. */
 export type BranchSettings = Pick<ProjectSettings, 'branchTemplate' | 'branchTypes' | 'branchTypeFallback' | 'titleExclusion'>
 
-/** The project's title exclusion pattern: the stored one, else the initial one. */
-export function titleExclusion(settings: Pick<ProjectSettings, 'titleExclusion'>): string {
-  return settings.titleExclusion ?? INITIAL_TITLE_EXCLUSION
-}
+/** Whether `text` is empty once trimmed. */
+const isBlank = (text: string | undefined) => (text ?? '').trim() === ''
 
 /** The variables a branch template can use. */
 export const BRANCH_VARIABLES = ['task_key', 'task_slug', 'branch_type'] as const
@@ -84,17 +88,21 @@ export const BRANCH_VARIABLE_DESCRIPTIONS: Record<BranchVariable, string> = {
  *  as none. GitHub tasks have no issue type, so they get the fallback. */
 export function branchType(settings: Pick<ProjectSettings, 'branchTypes' | 'branchTypeFallback'>, issueType: string | undefined): string {
   const wanted = issueType?.trim().toLowerCase() ?? ''
-  const row = (settings.branchTypes ?? []).find(
-    (candidate) => candidate.issueType.trim() !== '' && candidate.branchType.trim() !== '' && candidate.issueType.trim().toLowerCase() === wanted
-  )
-  return row ? row.branchType.trim() : (settings.branchTypeFallback ?? '').trim()
+  for (const row of settings.branchTypes ?? []) {
+    const type = row.issueType.trim()
+    const branch = row.branchType.trim()
+    if (type !== '' && branch !== '' && type.toLowerCase() === wanted) return branch
+  }
+  return (settings.branchTypeFallback ?? '').trim()
 }
+
+type BranchTask = Pick<Task, 'tracker' | 'key' | 'title' | 'issueType'>
 
 /** The git branch the project's branch template gives `task`, or null when the project has none
  *  (a blank template): then Orca names the branch. Unknown variables are left as they are. */
-export function filledBranch(settings: BranchSettings, task: Pick<Task, 'tracker' | 'key' | 'title' | 'issueType'>): string | null {
+export function filledBranch(settings: BranchSettings, task: BranchTask): string | null {
   const template = settings.branchTemplate ?? ''
-  if (template.trim() === '') return null
+  if (isBlank(template)) return null
   return fillTemplate(template, {
     task_key: task.tracker === 'github' ? githubIssueNumber(task.key) : task.key,
     task_slug: taskSlug(task.title, titleExclusion(settings)),
@@ -135,24 +143,30 @@ const SAMPLE_VALUE = 'a'
  *  expression, or a template that uses `{{branch_type}}` while the fallback is empty. */
 export function branchSettingsProblem(settings: BranchSettings): string | null {
   const template = settings.branchTemplate ?? ''
-  if (template.trim() !== '') {
+  if (!isBlank(template)) {
     const sample = fillTemplate(template, Object.fromEntries(BRANCH_VARIABLES.map((name) => [name, SAMPLE_VALUE])))
     const problem = gitBranchProblem(sample)
     if (problem) return `The branch template ${problem}, which git can't hold in a branch name.`
   }
   const compiled = titleExclusionRegExp(titleExclusion(settings))
   if (!compiled.ok) return `The title exclusion pattern isn't a valid regular expression: ${compiled.message}`
-  if (usesVariable(template, 'branch_type') && (settings.branchTypeFallback ?? '').trim() === '') {
+  if (usesVariable(template, 'branch_type') && isBlank(settings.branchTypeFallback)) {
     return 'The branch template uses {{branch_type}}: give the branch types a fallback.'
   }
   return null
 }
 
-/** Why a Start of `taskKey` can't use the filled-in `branch`, or null when git holds it. */
-export function startBranchProblem(taskKey: string, branch: string): string | null {
-  const problem = gitBranchProblem(branch)
-  if (!problem) return null
-  return `The branch for ${taskKey}, "${branch}", ${problem}, which git can't hold in a branch name. Change the branch template or the branch types in Project settings.`
+/** The branch a Start of `task` passes, null when the project has no branch template, and why a
+ *  Start refuses it, null when git holds it. Orca would refuse such a branch only once the create
+ *  runs, so a Start checks it first, and the Branch section's preview says so. */
+export function startBranch(settings: BranchSettings, task: BranchTask): { branch: string | null; problem: string | null } {
+  const branch = filledBranch(settings, task)
+  const problem = branch === null ? null : gitBranchProblem(branch)
+  if (branch === null || problem === null) return { branch, problem: null }
+  return {
+    branch,
+    problem: `The branch for ${task.key}, "${branch}", ${problem}, which git can't hold in a branch name. Change the branch template or the branch types in Project settings.`
+  }
 }
 
 /** `42` for the GitHub task key `#42`. */

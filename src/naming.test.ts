@@ -18,24 +18,28 @@ test('title words fold accents, lower-case and join with dashes', () => {
 })
 
 test('a Jira worktree name is the lower-cased key and up to four words of the title', () => {
-  assert.equal(worktreeName({ tracker: 'jira', key: 'WEB-12', title: 'Añadir modo oscuro a ajustes' }, INITIAL_TITLE_EXCLUSION), 'web-12-anadir-modo-oscuro-a')
+  assert.equal(worktreeName({ tracker: 'jira', key: 'WEB-12', title: 'Añadir modo oscuro a ajustes' }, {}), 'web-12-anadir-modo-oscuro-a')
 })
 
 test('a GitHub worktree name starts with issue-<n>', () => {
-  assert.equal(worktreeName({ tracker: 'github', key: '#42', title: 'Add dark mode' }, INITIAL_TITLE_EXCLUSION), 'issue-42-add-dark-mode')
+  assert.equal(worktreeName({ tracker: 'github', key: '#42', title: 'Add dark mode' }, {}), 'issue-42-add-dark-mode')
 })
 
 test('a title with no usable words gives just the prefix', () => {
-  assert.equal(worktreeName({ tracker: 'github', key: '#7', title: '¿¡!?' }, INITIAL_TITLE_EXCLUSION), 'issue-7')
+  assert.equal(worktreeName({ tracker: 'github', key: '#7', title: '¿¡!?' }, {}), 'issue-7')
 })
 
 const TAGGED = '[FE] | [Mobile][Widgets] Add dark mode'
 
 test('the initial title exclusion pattern removes bracketed tags anywhere in the title', () => {
   assert.equal(INITIAL_TITLE_EXCLUSION, '\\[[^\\]]*\\]')
-  assert.equal(cleanTitle(TAGGED, INITIAL_TITLE_EXCLUSION), ' |  Add dark mode')
-  assert.equal(cleanTitle('Add [WIP] dark mode [FE]', INITIAL_TITLE_EXCLUSION), 'Add  dark mode ')
   assert.equal(taskSlug(TAGGED, INITIAL_TITLE_EXCLUSION), 'add-dark-mode')
+  assert.equal(taskSlug('Add [WIP] dark mode [FE]', INITIAL_TITLE_EXCLUSION), 'add-dark-mode')
+})
+
+test('a removed match parts the words on either side of it', () => {
+  assert.equal(taskSlug('Fix[FE]login page', INITIAL_TITLE_EXCLUSION), 'fix-login-page')
+  assert.equal(titleWords(cleanTitle('Fix[FE]login', INITIAL_TITLE_EXCLUSION)), 'fix-login')
 })
 
 test('an empty title exclusion pattern removes nothing, and a changed one replaces the initial one', () => {
@@ -49,7 +53,7 @@ test('the pattern matches every occurrence, ignoring case', () => {
 
 test('a title the pattern leaves without words keeps its own words', () => {
   assert.equal(taskSlug('[FE] [Mobile]', INITIAL_TITLE_EXCLUSION), 'fe-mobile')
-  assert.equal(worktreeName({ tracker: 'jira', key: 'WEB-3', title: '[FE] [Mobile]' }, INITIAL_TITLE_EXCLUSION), 'web-3-fe-mobile')
+  assert.equal(worktreeName({ tracker: 'jira', key: 'WEB-3', title: '[FE] [Mobile]' }, {}), 'web-3-fe-mobile')
 })
 
 test('the slug has up to four words of the cleaned title', () => {
@@ -58,8 +62,8 @@ test('the slug has up to four words of the cleaned title', () => {
 })
 
 test('the worktree name uses the cleaned title', () => {
-  assert.equal(worktreeName({ tracker: 'jira', key: 'WEB-12', title: TAGGED }, INITIAL_TITLE_EXCLUSION), 'web-12-add-dark-mode')
-  assert.equal(worktreeName({ tracker: 'jira', key: 'WEB-12', title: TAGGED }, ''), 'web-12-fe-mobile-widgets-add')
+  assert.equal(worktreeName({ tracker: 'jira', key: 'WEB-12', title: TAGGED }, {}), 'web-12-add-dark-mode')
+  assert.equal(worktreeName({ tracker: 'jira', key: 'WEB-12', title: TAGGED }, { titleExclusion: '' }), 'web-12-fe-mobile-widgets-add')
 })
 
 test('a pattern that is not a valid regular expression removes nothing', () => {
