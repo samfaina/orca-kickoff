@@ -1906,7 +1906,8 @@ function CardTemplate({ task, projectId }: { task: Task; projectId: string }) {
 }
 
 /** The template detail, in place of the panel view. The title row with Cancel and Save, and the
- *  Delete bar, stay in place while the form between them scrolls. */
+ *  bar under the form, stay in place while the form between them scrolls. That bar is the Delete
+ *  bar, or, while turning Global off waits for its confirmation, the bar that asks for it. */
 function TemplateDetail({ draft, templates, projectName }: { draft: TemplateDraft; templates: ListedTemplate[]; projectName: string }) {
   const nameProblem = templateNameProblem(templates, draft.name, draft.id, draft.global)
   return (

@@ -2,12 +2,14 @@
 // imports, so the panel can use the constants too.
 import type { ProjectRef, ProjectSettings, PromptTemplate, Task } from './protocol'
 
-/** The text of the template a project has before it stores any, and of each new template. A
- *  constant, never stored. */
+/** The text of the template a project lists before it stores any of its own while there is no
+ *  global template, and of each new template. A constant, never stored. */
 export const INITIAL_TEMPLATE_TEXT = 'Complete {{task_key}}: {{task_url}}'
 
-/** The id and name of the template a project has before it stores any. A template stored with
- *  the earlier `template` field becomes this one too. */
+/** The id and name of the template a project lists before it stores any of its own while there is
+ *  no global template. A template stored with the earlier `template` field becomes this one too.
+ *  Many projects store an own template with this id, so the initial template made global takes a
+ *  new one. */
 export const INITIAL_TEMPLATE_ID = 'default'
 export const INITIAL_TEMPLATE_NAME = 'Default'
 

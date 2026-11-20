@@ -195,7 +195,7 @@ test("two saves asked for at once write one after the other, and neither loses t
   assert.deepEqual(storage.project('github:acme/web'), { providers: {}, agent: 'codex', defaultTemplateId: 't-impl' })
 })
 
-test('a template write saves the pending changes first, then computes its change from the settings with them, in one turn of the queue', async () => {
+test("a write of one project's changes saves the pending changes first, then computes its change from the settings with them, in one turn of the queue", async () => {
   const { saver, storage, reports } = setup()
   saver.change('github:acme/web', { defaultTemplateId: 't-impl' })
   storage.holdWrites()
@@ -205,7 +205,7 @@ test('a template write saves the pending changes first, then computes its change
     return { agent: 'codex' }
   })
   await settle()
-  // A save asked for while the template write runs waits for both of its writes.
+  // A save asked for while the project's write runs waits for both of its writes.
   saver.change('github:acme/web', { agent: 'none' })
   const after = saver.saveNow()
   storage.release()
@@ -221,7 +221,7 @@ test('a template write saves the pending changes first, then computes its change
   assert.deepEqual(reports, ['saved', 'saved'])
 })
 
-test('a template write whose save of the pending changes fails rejects, writes no template change, and keeps them pending', async () => {
+test("a write of one project's changes whose save of the pending changes fails rejects, writes no change of its own, and keeps them pending", async () => {
   const { saver, storage } = setup()
   storage.failWrites = true
   saver.change('github:acme/web', { agent: 'codex' })
@@ -239,13 +239,13 @@ test('a template write whose save of the pending changes fails rejects, writes n
   assert.deepEqual(storage.project('github:acme/web'), { providers: {}, agent: 'codex' })
 })
 
-test('a template write whose change is none writes nothing more', async () => {
+test("a write of one project's changes whose change is none writes nothing more", async () => {
   const { saver, storage } = setup()
   assert.equal(await saver.writeProject('github:acme/web', () => null), null)
   assert.deepEqual(storage.log, ['get settings'])
 })
 
-test('a failed save after a template write that changed nothing still keeps its changes pending', async () => {
+test("a failed save after a write of one project's changes that changed nothing still keeps its changes pending", async () => {
   const { saver, storage } = setup()
   await saver.writeProject('github:acme/web', () => null)
   storage.failWrites = true

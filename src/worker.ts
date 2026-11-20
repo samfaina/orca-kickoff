@@ -37,6 +37,7 @@ import {
   type JiraSitesResult,
   type ProjectRef,
   type ProjectSettings,
+  type Settings,
   type StartEnded,
   type StartResult,
   type Task,
@@ -86,8 +87,12 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
     return { projects: parseProjects(projects), ...state }
   }
 
+  async function readStoredSettings(): Promise<Settings> {
+    return readSettings(await orca.storage.get(SETTINGS_KEY))
+  }
+
   async function readProjectSettings(projectId: string): Promise<ProjectSettings> {
-    return projectSettings(readSettings(await orca.storage.get(SETTINGS_KEY)), projectId)
+    return projectSettings(await readStoredSettings(), projectId)
   }
 
   /** The active project and Orca's state, or the last known project with a warning (and no
@@ -188,7 +193,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
           message: `The last Start of ${task.key} timed out less than five minutes ago, and Orca may still be creating its worktree. Wait a few minutes and reload the tasks before starting it again.`
         }
       }
-      const stored = readSettings(await orca.storage.get(SETTINGS_KEY))
+      const stored = await readStoredSettings()
       const settings = projectSettings(stored, projectId)
       const agent = await resolveAgent(settings.agent, readDefaultAgent)
       if (!agent.ok) return agent

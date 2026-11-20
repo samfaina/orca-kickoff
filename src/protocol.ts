@@ -63,7 +63,8 @@ export type AgentChoice = string
 
 /** A named text with task variables that becomes the prompt of a Start. */
 export type PromptTemplate = {
-  /** Stable, made by the panel; never shown. */
+  /** Stable, made by the panel; never shown. A move between a project and the global templates
+   *  keeps it, except the initial template's `default`, which takes a new one when made global. */
   id: string
   /** Trimmed, not empty, and unique ignoring case among the project's own templates, or among the
    *  global ones: an own template and a global one may share a name. */
