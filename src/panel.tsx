@@ -567,7 +567,7 @@ function writeFilterChange<T>(
 }
 
 /** Shows the filters a write stored, while the project is still the one shown. */
-function showFilters(projectId: string, written: FiltersWritten): void {
+function showWrittenFilters(projectId: string, written: FiltersWritten): void {
   const shown = read(shownSettings)
   if (shown?.projectId === projectId) set(shownSettings, { ...shown, filterSettings: written.project, globalFilters: written.global })
 }
@@ -580,12 +580,13 @@ async function writeFilters(draft: FilterDraft, change: (project: ProjectSetting
   changeFilterDraft(draft, { saving: true, error: null, confirmingDelete: false, confirmingOwn: false })
   let written: FiltersWritten | null
   try {
-    ;({ written } = await writeFilterChange(draft, (project, global) => ({ answer: null, write: change(project, global) })))
+    const done = await writeFilterChange(draft, (project, global) => ({ answer: null, write: change(project, global) }))
+    written = done.written
   } catch (error) {
     changeFilterDraft(draft, { saving: false, error: `Couldn't save the filter (${errorCode(error)}). Try again.` })
     return
   }
-  if (written) showFilters(draft.projectId, written)
+  if (written) showWrittenFilters(draft.projectId, written)
   const current = read(filterDraft)
   if (!current || !isSameDraft(current, draft)) return
   set(filterDraft, null)
@@ -643,7 +644,7 @@ async function moveFilter(draft: FilterDraft, toGlobal: boolean): Promise<void> 
     changeFilterDraft(draft, { saving: false, error: answer.message })
     return
   }
-  if (written) showFilters(draft.projectId, written)
+  if (written) showWrittenFilters(draft.projectId, written)
   const { id } = answer
   update(filterDraft, (current) => (current && isSameDraft(current, draft) ? { ...current, id, global: toGlobal, saving: false } : current))
 }
@@ -1769,7 +1770,7 @@ function LoadError({ message }: { message: string }) {
 type ReadyTaskList = Extract<TaskList, { kind: 'ready' }>
 
 /** The tracker's name, as the panel says it. */
-const trackerName = (provider: ProviderId) => (trackerOf(provider) === 'github' ? 'GitHub' : 'Jira')
+const trackerName = (tracker: TrackerId) => (tracker === 'github' ? 'GitHub' : 'Jira')
 
 /** The warnings, "Filters" with the filter row and the field, and the tracker search's title, which
  *  stay in place, then the list, which scrolls inside the rest of the panel's height: the loaded
@@ -1779,7 +1780,7 @@ function ReadyList({ list }: { list: ReadyTaskList }) {
   const text = read(fieldText)
   const query = text.trim()
   const found = read(trackerSearch)
-  const tracker = trackerName(list.provider)
+  const tracker = trackerName(trackerOf(list.provider))
   return (
     <>
       {list.warning ? (
@@ -2209,8 +2210,7 @@ function FilterEditor({
   const recipes = filterRecipes(draft.tracker)
   const isGlobal = draft.global && !draft.confirmingOwn
   // A global Jira filter that names the project's key lists that project's tasks in every project.
-  const namesKey = isGlobal && draft.tracker === 'jira' && draft.queries.some((query) => namesJiraProject(query, jiraProjectKey))
-  const trackerName = draft.tracker === 'jira' ? 'Jira' : 'GitHub'
+  const namesJiraProjectKey = isGlobal && draft.tracker === 'jira' && draft.queries.some((query) => namesJiraProject(query, jiraProjectKey))
   return (
     <Box direction="column" gap="sm" height="100%">
       <TitleRow prefix={projectName !== '' ? `${projectName} ·` : null} title={draft.isNew ? 'New filter' : 'Edit filter'} level={3}>
@@ -2237,7 +2237,7 @@ function FilterEditor({
         <Stack gap="xs">
           <Switch label="Global" checked={isGlobal} disabled={draft.saving} onChange={(on) => switchFilterGlobal(draft, on)} />
           <Text size="sm" muted>
-            {`A global filter is offered in every ${trackerName} project, and editing or deleting it changes it in every project.`}
+            {`A global filter is offered in every ${trackerName(draft.tracker)} project, and editing or deleting it changes it in every project.`}
           </Text>
         </Stack>
         {draft.isNew && recipes.length > 0 ? (
@@ -2252,7 +2252,7 @@ function FilterEditor({
           </Field>
         ) : null}
         <FilterQueries tracker={draft.tracker} queries={draft.queries} onChange={(queries) => changeFilterDraft(draft, { queries })} onSubmit={save} />
-        {namesKey ? (
+        {namesJiraProjectKey ? (
           <Stack gap="xs">
             <Text size="sm" tone="warning">
               {`This filter names ${jiraProjectKey}. Use {{${JIRA_PROJECT_VARIABLE}}} so each project lists its own tasks.`}

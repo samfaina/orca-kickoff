@@ -49,8 +49,8 @@ function mergeChanges(earlier: ProjectChanges, later: ProjectChanges): ProjectCh
 /** Saves Project settings, and what belongs to no project, for the panel: each change of a project
  *  waits with its other pending changes for the timed save, or for a caller that saves now. Every
  *  save writes every project's pending changes, every write keeps what it doesn't change, the
- *  global templates and filters included, and no promise it leaves goes unhandled. Global changes are written
- *  at once, never left pending. */
+ *  global templates and filters included, and no promise it leaves goes unhandled. Global changes
+ *  are written at once, never left pending. */
 export function settingsSaver({ storage, timers, onSaved, onTimedSaveFailed }: SettingsSaverOptions) {
   /** The changes not saved yet, by project. */
   const pending = new Map<string, ProjectChanges>()
@@ -112,17 +112,6 @@ export function settingsSaver({ storage, timers, onSaved, onTimedSaveFailed }: S
     saveNow(): Promise<void> {
       cancelTimer()
       return writes(() => savePending(true))
-    },
-
-    /** Saves the pending changes, then writes the changes `compute` gives for the project's settings
-     *  as stored with them, unless it gives none, both in one turn of the queue. Answers those
-     *  changes. Rejects when either write fails; a failed save of the pending changes keeps them
-     *  pending and computes nothing. */
-    writeProject<T extends ProjectChanges>(projectId: string, compute: (project: ProjectSettings) => T | null): Promise<T | null> {
-      return writeStored((settings) => {
-        const changes = compute(projectSettings(settings, projectId))
-        return { answer: changes, settings: changes ? withProjectChanges(settings, projectId, changes) : null }
-      })
     },
 
     /** Saves the pending changes, then writes the project's changes and the global ones that
