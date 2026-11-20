@@ -140,7 +140,8 @@ test('git branch names: what git refuses is named', () => {
 })
 
 test('saving the branch settings refuses fixed text git cannot hold in the template', () => {
-  const problem = (branchTemplate: string) => branchSettingsProblem({ ...branchSettings, branchTemplate })
+  const problem = (branchTemplate: string) => branchSettingsProblem({ ...branchSettings, branchTemplate })?.message ?? null
+  assert.equal(branchSettingsProblem({ ...branchSettings, branchTemplate: 'a b' })?.field, 'branchTemplate')
   assert.equal(problem(CONVENTION), null)
   assert.equal(problem('{{ task_key }}/{{task_slug}}'), null)
   assert.equal(problem(''), null)
@@ -155,16 +156,17 @@ test('saving the branch settings refuses fixed text git cannot hold in the templ
 
 test('saving the branch settings refuses a title exclusion pattern that is not a regular expression', () => {
   const problem = branchSettingsProblem({ ...branchSettings, titleExclusion: '[unclosed' })
-  assert.ok(problem?.startsWith("The title exclusion pattern isn't a valid regular expression: "), problem ?? '')
+  assert.equal(problem?.field, 'titleExclusion')
+  assert.ok(problem.message.startsWith("The title exclusion pattern isn't a valid regular expression: "), problem.message)
   assert.equal(branchSettingsProblem({ titleExclusion: '[unclosed' }) !== null, true)
   assert.equal(branchSettingsProblem({ titleExclusion: '' }), null)
 })
 
 test('saving the branch settings refuses {{branch_type}} while the fallback is empty', () => {
-  const message = 'The branch template uses {{branch_type}}: give the branch types a fallback.'
-  assert.equal(branchSettingsProblem({ ...branchSettings, branchTypeFallback: '' }), message)
-  assert.equal(branchSettingsProblem({ ...branchSettings, branchTypeFallback: '  ' }), message)
-  assert.equal(branchSettingsProblem({ branchTemplate: 'x/{{ branch_type }}' }), message)
+  const problem = { field: 'branchTypeFallback', message: 'The branch template uses {{branch_type}}: give the branch types a fallback.' }
+  assert.deepEqual(branchSettingsProblem({ ...branchSettings, branchTypeFallback: '' }), problem)
+  assert.deepEqual(branchSettingsProblem({ ...branchSettings, branchTypeFallback: '  ' }), problem)
+  assert.deepEqual(branchSettingsProblem({ branchTemplate: 'x/{{ branch_type }}' }), problem)
   assert.equal(branchSettingsProblem({ branchTemplate: 'feature/{{task_key}}' }), null)
 })
 

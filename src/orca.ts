@@ -143,7 +143,7 @@ export type WorktreeCreate = {
 
 /** `orca worktree create` for a task, linked with `--issue <n>` on GitHub or `--reference <url>`
  *  on Jira (the full URL, so Orca needs no Jira connection to resolve it), with `--branch` when the
- *  project's branch template gives one. */
+ *  branch template of the branch settings the project uses gives one. */
 export function worktreeCreateArgs({ projectId, name, branch, task, agent, prompt }: WorktreeCreate): string[] {
   const args = ['worktree', 'create', '--project', projectId, '--name', name]
   if (branch !== null) args.push('--branch', branch)

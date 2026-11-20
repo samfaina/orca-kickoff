@@ -109,20 +109,31 @@ export type ProjectSettings = {
   /** A regular expression whose matches are removed from the title before `{{task_slug}}` and the
    *  worktree name are made. Undefined: INITIAL_TITLE_EXCLUSION (src/naming.ts); '': none. */
   titleExclusion?: string
+  /** Whether the project uses its own branch settings, the four fields above, or the global ones.
+   *  Undefined: its own when it stores any of them, else the global ones when there are any
+   *  (`usesGlobalBranchSettings` in src/branch-settings.ts). */
+  branchSettingsUsed?: 'own' | 'global'
 }
+
+/** The branch settings: the branch template, the branch types with their fallback and the title
+ *  exclusion pattern, which a project uses together, its own or the global ones. */
+export type BranchSettings = Pick<ProjectSettings, 'branchTemplate' | 'branchTypes' | 'branchTypeFallback' | 'titleExclusion'>
 
 /** One row of the branch type table: an issue type name, matched ignoring case, and its branch
  *  type. Kept as typed. */
 export type BranchTypeRow = { issueType: string; branchType: string }
 
 /** What belongs to no project: the global prompt templates, offered in every project beside its
- *  own, and the global filters of each tracker, offered in every project on that tracker. */
+ *  own, the global filters of each tracker, offered in every project on that tracker, and the
+ *  global branch settings, used by every project that has none of its own. */
 export type GlobalSettings = {
   /** In order; undefined or empty: none. */
   templates?: PromptTemplate[]
   /** The global filters of each tracker, in order; both Jira providers offer the same ones.
    *  Undefined or empty: none. */
   filters?: ByTracker<Filter[]>
+  /** Undefined: none stored. Once stored they are only edited, never deleted. */
+  branch?: BranchSettings
 }
 
 /** `global` is undefined while nothing global is stored. */
@@ -161,7 +172,8 @@ export function readSettings(raw: unknown): Settings {
   for (const [id, project] of Object.entries(raw.projects)) {
     if (isRecord(project)) settings.projects[id] = readProjectSettings(project)
   }
-  // Settings stored before global templates and filters have no `global`, and read with none.
+  // Settings stored before global templates, filters and branch settings have no `global`, and
+  // read with none.
   const global: GlobalSettings = {}
   const templates = readTemplates(isRecord(raw.global) ? raw.global.templates : undefined)
   if (templates.length > 0) global.templates = templates
@@ -171,6 +183,7 @@ export function readSettings(raw: unknown): Settings {
     if (stored.length > 0) filters[tracker] = stored
   }
   if (Object.keys(filters).length > 0) global.filters = filters
+  if (isRecord(raw.global) && isRecord(raw.global.branch)) global.branch = readBranchSettings(raw.global.branch)
   if (Object.keys(global).length > 0) settings.global = global
   return settings
 }
@@ -201,16 +214,26 @@ function readProjectSettings(raw: Record<string, unknown>): ProjectSettings {
   if (templates.length > 0) project.templates = templates
   if (typeof raw.defaultTemplateId === 'string') project.defaultTemplateId = raw.defaultTemplateId
   if (typeof raw.agent === 'string' && raw.agent !== '') project.agent = raw.agent
-  // Settings stored before branch templates have none of these, and read the same.
-  if (typeof raw.branchTemplate === 'string') project.branchTemplate = raw.branchTemplate
+  // Settings stored before branch templates, or before global branch settings, have none of these,
+  // and read the same.
+  Object.assign(project, readBranchSettings(raw))
+  if (raw.branchSettingsUsed === 'own' || raw.branchSettingsUsed === 'global') project.branchSettingsUsed = raw.branchSettingsUsed
+  return project
+}
+
+/** The branch settings stored in `raw`, a project's or the global ones: each field of the expected
+ *  shape, and the branch type rows of the expected shape, in order. */
+function readBranchSettings(raw: Record<string, unknown>): BranchSettings {
+  const branch: BranchSettings = {}
+  if (typeof raw.branchTemplate === 'string') branch.branchTemplate = raw.branchTemplate
   if (Array.isArray(raw.branchTypes)) {
-    project.branchTypes = raw.branchTypes.flatMap((row) =>
+    branch.branchTypes = raw.branchTypes.flatMap((row) =>
       isRecord(row) && strings(row, 'issueType', 'branchType') ? [{ issueType: row.issueType, branchType: row.branchType }] : []
     )
   }
-  if (typeof raw.branchTypeFallback === 'string') project.branchTypeFallback = raw.branchTypeFallback
-  if (typeof raw.titleExclusion === 'string') project.titleExclusion = raw.titleExclusion
-  return project
+  if (typeof raw.branchTypeFallback === 'string') branch.branchTypeFallback = raw.branchTypeFallback
+  if (typeof raw.titleExclusion === 'string') branch.titleExclusion = raw.titleExclusion
+  return branch
 }
 
 /** The stored templates of the expected shape, in order. A template whose id or name, ignoring
@@ -420,14 +443,16 @@ export function chooseProvider(settings: ProjectSettings, provider: ProviderId):
 }
 
 /** What the panel changes in a project's settings. `providers` holds only the providers whose
- *  configuration changed. */
+ *  configuration changed. A field changed to undefined is removed. */
 export type ProjectChanges = Partial<ProjectSettings>
 
 /** `settings` with a project's changes applied, and everything else kept, including the
- *  configuration of every provider that didn't change. */
+ *  configuration of every provider that didn't change. A field a change sets to undefined is
+ *  removed, as it would be once stored. */
 export function withProjectChanges(settings: Settings, projectId: string, changes: ProjectChanges): Settings {
   const current = projectSettings(settings, projectId)
-  const project = { ...current, ...changes, providers: { ...current.providers, ...changes.providers } }
+  const project: ProjectSettings = { ...current, ...changes, providers: { ...current.providers, ...changes.providers } }
+  for (const key of Object.keys(project) as (keyof ProjectSettings)[]) if (project[key] === undefined) delete project[key]
   return { ...settings, projects: { ...settings.projects, [projectId]: project } }
 }
 

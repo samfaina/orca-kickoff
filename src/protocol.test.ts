@@ -390,3 +390,25 @@ test('global changes keep every project, and project changes keep the global tem
   assert.deepEqual(withProjectChanges(settings, web.id, { agent: 'none' }).global, { templates: [review] })
   assert.deepEqual(withGlobalChanges(readSettings(null), { templates: [review] }), { version: 1, projects: {}, global: { templates: [review] } })
 })
+
+test('global branch settings are read apart from every project with the same fallbacks, and settings stored before them read with none', () => {
+  const branch = { branchTemplate: 'feature/{{task_key}}', branchTypes: [{ issueType: 'Bug', branchType: 'bugfix' }], branchTypeFallback: 'feature' }
+  const settings = readSettings({ version: 1, projects: {}, global: { branch: { ...branch, branchTypes: [...branch.branchTypes, 'Task'], titleExclusion: 3 } } })
+  assert.deepEqual(settings.global, { branch })
+  // Global branch settings once stored stay, even with every field left as it starts.
+  assert.deepEqual(readSettings({ version: 1, projects: {}, global: { branch: {} } }).global, { branch: {} })
+  assert.deepEqual(readSettings({ version: 1, projects: {}, global: { branch: 'corrupt' } }), { version: 1, projects: {} })
+  assert.deepEqual(readSettings({ version: 1, projects: {}, global: { templates: [] } }).global, undefined)
+})
+
+test('whether a project uses its own branch settings or the global ones is read as stored, and anything else as no mark', () => {
+  assert.equal(readProject({ providers: {}, branchSettingsUsed: 'global' }).branchSettingsUsed, 'global')
+  assert.equal(readProject({ providers: {}, branchSettingsUsed: 'own' }).branchSettingsUsed, 'own')
+  assert.deepEqual(readProject({ providers: {}, branchSettingsUsed: 'shared' }), { providers: {} })
+  assert.deepEqual(readProject({ providers: {}, branchSettingsUsed: true }), { providers: {} })
+})
+
+test('a project change to undefined removes the field as stored', () => {
+  const settings = { version: 1 as const, projects: { [web.id]: { providers: {}, branchTemplate: 'x', agent: 'codex' } } }
+  assert.deepEqual(withProjectChanges(settings, web.id, { branchTemplate: undefined }).projects[web.id], { providers: {}, agent: 'codex' })
+})

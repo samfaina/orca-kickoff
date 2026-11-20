@@ -1,4 +1,5 @@
 import { assert, test } from 'orca/testing'
+import { withBranchSwitched } from './branch-settings'
 import { filterWriteChanges, withFilterMoved, withFilterSaved } from './filter'
 import type { GlobalSettings, ProjectSettings } from './protocol'
 import { SAVE_DELAY_MS, settingsSaver } from './settings-save'
@@ -460,4 +461,145 @@ test("a change in project B after a failed save of project A keeps A's changes, 
   assert.equal(storage.project('github:acme/web')?.agent, 'codex')
   assert.equal(storage.project('github:acme/api')?.defaultTemplateId, 't-impl')
   assert.deepEqual(reports, ['timed save failed: quota_exceeded', 'saved'])
+})
+
+const teamBranch = { branchTemplate: '{{branch_type}}/{{task_key}}', branchTypeFallback: 'feature' }
+
+/** The global branch template as stored. */
+const globalBranchTemplate = (storage: ReturnType<typeof fakeStorage>) => (storage.global()?.branch as { branchTemplate?: string } | undefined)?.branchTemplate
+
+test('an edit of the global branch settings waits for the timed save with the pending project changes, and both land in one write, on top of the global ones as stored', async () => {
+  const { saver, storage, timers, reports } = setup()
+  storage.seed({ version: 1, projects: { 'github:acme/api': { providers: {}, agent: 'none' } }, global: { templates: [review], branch: teamBranch } })
+  saver.change('github:acme/web', { agent: 'codex' })
+  saver.changeGlobalBranch({ branchTemplate: 'fix/{{task_key}}' })
+  saver.changeGlobalBranch({ titleExclusion: '' })
+  assert.deepEqual(timers.delays(), [SAVE_DELAY_MS])
+  assert.deepEqual(storage.global(), { templates: [review], branch: teamBranch })
+  timers.fire()
+  await settle()
+  assert.deepEqual(storage.log, ['get settings', 'set settings'])
+  assert.deepEqual(storage.global(), { templates: [review], branch: { branchTemplate: 'fix/{{task_key}}', branchTypeFallback: 'feature', titleExclusion: '' } })
+  assert.deepEqual(storage.project('github:acme/web'), { providers: {}, agent: 'codex' })
+  assert.deepEqual(storage.project('github:acme/api'), { providers: {}, agent: 'none' })
+  assert.deepEqual(reports, ['saved'])
+})
+
+test('a failed timed save of the global branch settings keeps the edit pending under the ones made meanwhile, and the next save writes them', async () => {
+  const { saver, storage, timers, reports } = setup()
+  storage.seed({ version: 1, projects: {}, global: { branch: teamBranch } })
+  storage.holdWrites()
+  saver.changeGlobalBranch({ branchTemplate: 'fix/{{task_key}}', branchTypeFallback: 'chore' })
+  timers.fire()
+  await settle()
+  saver.changeGlobalBranch({ branchTypeFallback: 'bug' })
+  storage.failHeld(quotaExceeded())
+  await settle()
+  assert.deepEqual(reports, ['timed save failed: quota_exceeded'])
+  assert.deepEqual(storage.global(), { branch: teamBranch })
+  const now = saver.saveNow()
+  await settle()
+  storage.release()
+  await now
+  assert.deepEqual(storage.global(), { branch: { branchTemplate: 'fix/{{task_key}}', branchTypeFallback: 'bug' } })
+})
+
+test('Save now and unload save a pending edit of the global branch settings', async () => {
+  const { saver, storage, timers } = setup()
+  storage.seed({ version: 1, projects: {}, global: { branch: teamBranch } })
+  saver.changeGlobalBranch({ branchTemplate: 'a/{{task_key}}' })
+  await saver.saveNow()
+  assert.deepEqual(timers.delays(), [])
+  assert.equal(globalBranchTemplate(storage), 'a/{{task_key}}')
+  saver.changeGlobalBranch({ branchTemplate: 'b/{{task_key}}' })
+  saver.unload()
+  await settle()
+  assert.equal(globalBranchTemplate(storage), 'b/{{task_key}}')
+})
+
+/** Turns the Branch section's Global switch of `projectId` to `on` through the saver, as the panel does. */
+const switchBranch = (saver: ReturnType<typeof setup>['saver'], projectId: string, on: boolean) =>
+  saver.writeProjectAndGlobal(projectId, (project, global) => ({ answer: null, ...withBranchSwitched(project, global.branch, on) }))
+
+test("publishing a project's branch settings saves its pending edit first, then makes them the global ones and marks the project, in one write", async () => {
+  const { saver, storage } = setup()
+  storage.seed({ version: 1, projects: { 'github:acme/web': { providers: {}, branchTemplate: 'x' } }, global: { templates: [review] } })
+  saver.change('github:acme/web', { branchTemplate: 'feature/{{task_key}}', branchTypes: [] })
+  await switchBranch(saver, 'github:acme/web', true)
+  assert.deepEqual(storage.log, ['get settings', 'set settings', 'get settings', 'set settings'])
+  assert.deepEqual(storage.project('github:acme/web'), { providers: {}, branchSettingsUsed: 'global' })
+  assert.deepEqual(storage.global(), { templates: [review], branch: { branchTemplate: 'feature/{{task_key}}', branchTypes: [] } })
+})
+
+test("adopting the global branch settings drops the project's own and keeps the global ones; turning off gives it a copy, each in one write", async () => {
+  const { saver, storage } = setup()
+  storage.seed({
+    version: 1,
+    projects: { 'github:acme/web': { providers: {}, agent: 'codex', branchTemplate: 'mine', titleExclusion: '' } },
+    global: { branch: teamBranch }
+  })
+  await switchBranch(saver, 'github:acme/web', true)
+  assert.deepEqual(storage.log, ['get settings', 'set settings'])
+  assert.deepEqual(storage.project('github:acme/web'), { providers: {}, agent: 'codex', branchSettingsUsed: 'global' })
+  assert.deepEqual(storage.global(), { branch: teamBranch })
+  await switchBranch(saver, 'github:acme/web', false)
+  assert.deepEqual(storage.log, ['get settings', 'set settings', 'get settings', 'set settings'])
+  assert.deepEqual(storage.project('github:acme/web'), { providers: {}, agent: 'codex', ...teamBranch, branchSettingsUsed: 'own' })
+  assert.deepEqual(storage.global(), { branch: teamBranch })
+})
+
+test('turning off saves a pending edit of the global branch settings first, so the copy has it', async () => {
+  const { saver, storage } = setup()
+  storage.seed({ version: 1, projects: {}, global: { branch: teamBranch } })
+  saver.changeGlobalBranch({ branchTypeFallback: 'chore' })
+  await switchBranch(saver, 'github:acme/web', false)
+  assert.deepEqual(storage.project('github:acme/web'), { providers: {}, ...teamBranch, branchTypeFallback: 'chore', branchSettingsUsed: 'own' })
+})
+
+const switchCases: [string, Stored, boolean][] = [
+  ['publish', { version: 1, projects: { 'github:acme/web': { providers: {}, branchTemplate: 'mine' } } }, true],
+  ['adopt', { version: 1, projects: { 'github:acme/web': { providers: {}, branchTemplate: 'mine' } }, global: { branch: teamBranch } }, true],
+  ['turn-off', { version: 1, projects: { 'github:acme/web': { providers: {}, branchSettingsUsed: 'global' } }, global: { branch: teamBranch } }, false]
+]
+
+for (const [what, seeded, on] of switchCases) {
+  test(`a ${what} whose write fails rejects and changes nothing, and a pending change stays pending`, async () => {
+    const { saver, storage } = setup()
+    storage.seed(structuredClone(seeded))
+    storage.failWrites = true
+    saver.change('github:acme/web', { agent: 'codex' })
+    await assert.rejects(switchBranch(saver, 'github:acme/web', on), /Storage is full/)
+    assert.deepEqual(storage.project('github:acme/web'), seeded.projects['github:acme/web'])
+    assert.deepEqual(storage.global(), seeded.global)
+    storage.failWrites = false
+    await saver.saveNow()
+    assert.deepEqual(storage.project('github:acme/web'), { ...seeded.projects['github:acme/web'], agent: 'codex' })
+    assert.deepEqual(storage.global(), seeded.global)
+  })
+}
+
+test('a publish whose own write fails, after the pending changes landed, rejects and leaves the project its own and no global ones', async () => {
+  const { saver, storage } = setup()
+  storage.seed({ version: 1, projects: { 'github:acme/web': { providers: {}, branchTemplate: 'mine' } } })
+  saver.change('github:acme/web', { branchTemplate: 'feature/{{task_key}}' })
+  storage.holdWrites()
+  const publishing = switchBranch(saver, 'github:acme/web', true)
+  await settle()
+  storage.release()
+  await settle()
+  storage.failHeld(quotaExceeded())
+  await assert.rejects(publishing, /Storage is full/)
+  assert.deepEqual(storage.project('github:acme/web'), { providers: {}, branchTemplate: 'feature/{{task_key}}' })
+  assert.equal(storage.global(), undefined)
+})
+
+test('the settings as stored, with every pending change on top, show what was typed before it is saved', async () => {
+  const { saver } = setup()
+  const stored = { version: 1 as const, projects: { 'github:acme/web': { providers: {}, agent: 'none' } }, global: { branch: teamBranch } }
+  saver.change('github:acme/web', { agent: 'codex' })
+  saver.changeGlobalBranch({ branchTypeFallback: 'chore' })
+  const shown = saver.withPending(stored)
+  assert.deepEqual(shown.projects['github:acme/web'], { providers: {}, agent: 'codex' })
+  assert.deepEqual(shown.global, { branch: { ...teamBranch, branchTypeFallback: 'chore' } })
+  assert.deepEqual(stored.global, { branch: teamBranch })
 })
