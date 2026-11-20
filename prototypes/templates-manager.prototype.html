@@ -1,0 +1,405 @@
+<title>Kickoff template manager</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<!-- PROTOTYPE, throwaway. Three variants of a Prompt templates view for Kickoff's panel, opened from a
+     header button next to the Project settings gear, switchable with the bar at the bottom (or the arrow
+     keys). The panel is drawn by hand in HTML at 320 px; Orca's real components may look different.
+     Icons are Lucide, which Orca's icon names appear to follow (assumed). Every task, name and text is
+     invented. State lives in memory only. -->
+<style>
+  /* Layout: the 320 px panel on the left as Orca shows it, the notes and the live state beside it. */
+  :root {
+    --bg: #EEF0F4; --fg: #1B1F29; --muted: #5C6475; --line: #CDD2DC; --accent: #0E8F86;
+    --bar: #1B1F29; --bar-fg: #F4F5F8;
+    --p-bg: #FFFFFF; --p-fg: #1F2129; --p-muted: #6B6E7B; --p-border: #D9DBE3; --p-link: #0E7C76;
+    --p-chip: #ECEDF2; --p-accent: #0E8F86; --p-accent-fg: #FFFFFF; --p-input: #FAFAFC; --p-hover: #F1F2F6;
+    --p-current: #E3F4F2; --p-danger: #C2413A; --p-warn-bg: #FFF5E0; --p-info-bg: #EAF3FB; --p-code: #F3F4F7;
+    --font: "Segoe UI Variable Text", "Segoe UI", Inter, system-ui, sans-serif;
+    --mono: "Cascadia Code", Consolas, ui-monospace, monospace;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --bg: #12141A; --fg: #E6E8EE; --muted: #979DAD; --line: #2C303B; --accent: #5FD0C6;
+    --bar: #F4F5F8; --bar-fg: #14161C;
+    --p-bg: #1C1C24; --p-fg: #E6E6EC; --p-muted: #9A9AA8; --p-border: #34343F; --p-link: #7DD3D0;
+    --p-chip: #33333D; --p-accent: #5FD0C6; --p-accent-fg: #10202A; --p-input: #24242D; --p-hover: #2A2A34;
+    --p-current: #1E3436; --p-danger: #F07A72; --p-warn-bg: #3A3020; --p-info-bg: #1E2A38; --p-code: #24242D;
+    color-scheme: dark } }
+  :root[data-theme="dark"] {
+    --bg: #12141A; --fg: #E6E8EE; --muted: #979DAD; --line: #2C303B; --accent: #5FD0C6;
+    --bar: #F4F5F8; --bar-fg: #14161C;
+    --p-bg: #1C1C24; --p-fg: #E6E6EC; --p-muted: #9A9AA8; --p-border: #34343F; --p-link: #7DD3D0;
+    --p-chip: #33333D; --p-accent: #5FD0C6; --p-accent-fg: #10202A; --p-input: #24242D; --p-hover: #2A2A34;
+    --p-current: #1E3436; --p-danger: #F07A72; --p-warn-bg: #3A3020; --p-info-bg: #1E2A38; --p-code: #24242D;
+    color-scheme: dark }
+
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--fg); font-family: var(--font); line-height: 1.45;
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 24px 120px; }
+  .page { max-width: 960px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+  .page > header h1 { font-size: 1.35rem; margin: 0; text-wrap: balance; }
+  .page > header p { margin: 4px 0 0; color: var(--muted); max-width: 65ch; }
+  .stage { display: flex; gap: 28px; align-items: flex-start; flex-wrap: wrap; }
+  .side { flex: 1 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+  .side h2 { font-size: .78rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; }
+  .side p, .side li { margin: 0; max-width: 60ch; }
+  .side ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+  .state { font-family: var(--mono); font-size: 12.5px; background: var(--p-bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; white-space: pre-wrap; overflow-x: auto; }
+
+  /* The panel. */
+  .frame { flex: 0 0 auto; max-width: 100%; border-radius: 10px; overflow: hidden; box-shadow: 0 18px 40px rgba(0,0,0,.18), 0 0 0 1px var(--line); }
+  .panel { width: 320px; max-width: 100%; height: 640px; background: var(--p-bg); color: var(--p-fg); font-size: 14px; padding: 12px;
+    display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
+  .panel > * { flex-shrink: 0; }
+  .scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 2px; }
+  .row { display: flex; align-items: center; gap: 6px; }
+  .between { justify-content: space-between; }
+  .grow { flex: 1 1 auto; min-width: 0; }
+  .muted { color: var(--p-muted); }
+  .sm { font-size: 12.5px; }
+  .title { font-size: 15px; color: var(--p-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .title b { color: var(--p-fg); font-weight: 600; }
+  .icon { width: 16px; height: 16px; flex: 0 0 auto; }
+  .ib { position: relative; width: 28px; height: 28px; border-radius: 6px; border: 0; background: none; color: var(--p-fg); display: grid; place-items: center; cursor: pointer; padding: 0; }
+  .ib:hover { background: var(--p-hover); }
+  .ib.outline { border: 1px solid var(--p-border); width: 32px; height: 32px; }
+  .ib.hot { box-shadow: 0 0 0 2px var(--p-accent); }
+  .btn { position: relative; border: 1px solid transparent; border-radius: 6px; background: none; color: var(--p-fg); font: inherit; font-size: 13px; padding: 4px 10px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .btn:hover { background: var(--p-hover); }
+  .btn.solid { background: var(--p-accent); color: var(--p-accent-fg); }
+  .btn.outline { border-color: var(--p-border); }
+  .btn.danger { color: var(--p-danger); }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .btn.hot { box-shadow: 0 0 0 2px var(--p-accent); }
+  [data-tip]:hover::after { content: attr(data-tip); position: absolute; top: calc(100% + 6px); right: 0; z-index: 9; background: var(--p-fg); color: var(--p-bg); font-size: 12px; padding: 3px 7px; border-radius: 5px; white-space: nowrap; pointer-events: none; }
+  select, input, textarea { font: inherit; font-size: 13.5px; color: var(--p-fg); background: var(--p-input); border: 1px solid var(--p-border); border-radius: 6px; padding: 5px 8px; width: 100%; min-width: 0; }
+  textarea { font-family: var(--mono); font-size: 12.5px; resize: vertical; }
+  select:focus-visible, input:focus-visible, textarea:focus-visible, button:focus-visible { outline: 2px solid var(--p-accent); outline-offset: 1px; }
+  label.f { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--p-muted); }
+  .card { border: 1px solid var(--p-border); border-radius: 8px; padding: 9px; display: flex; flex-direction: column; gap: 8px; }
+  .key, .link { color: var(--p-link); }
+  .badge { border-radius: 6px; padding: 1px 7px; font-size: 12px; background: var(--p-chip); white-space: nowrap; }
+  .badge.accent { background: var(--p-accent); color: var(--p-accent-fg); }
+  .sep { height: 1px; background: var(--p-border); }
+  .list { display: flex; flex-direction: column; gap: 2px; }
+  .li { display: flex; gap: 8px; align-items: flex-start; padding: 7px 8px; border-radius: 6px; cursor: pointer; border: 0; background: none; color: inherit; font: inherit; text-align: left; width: 100%; }
+  .li:hover { background: var(--p-hover); }
+  .li.current { background: var(--p-current); }
+  .li .d { font-size: 12.5px; color: var(--p-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .code { font-family: var(--mono); font-size: 12px; background: var(--p-code); border-radius: 6px; padding: 7px 8px; white-space: pre-wrap; max-height: 110px; overflow: auto; }
+  .callout { border-radius: 8px; padding: 8px 10px; background: var(--p-info-bg); font-size: 12.5px; display: flex; flex-direction: column; gap: 3px; }
+  .callout b { font-size: 13px; }
+  .switch { display: flex; align-items: center; gap: 8px; font-size: 13.5px; cursor: pointer; }
+  .switch input { width: auto; }
+  details summary { cursor: pointer; font-size: 13.5px; }
+  details code { font-family: var(--mono); font-size: 12px; }
+  h3 { font-size: 13px; margin: 4px 0 0; }
+
+  /* The prototype bar: not part of the design being judged. */
+  .pbar { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); z-index: 20;
+    background: var(--bar); color: var(--bar-fg); border-radius: 999px; padding: 6px 8px; display: flex; gap: 6px; align-items: center;
+    box-shadow: 0 10px 30px rgba(0,0,0,.3); max-width: calc(100vw - 32px); flex-wrap: wrap; justify-content: center; font-size: 13px; }
+  .pbar button { background: none; border: 0; color: inherit; font: inherit; cursor: pointer; border-radius: 999px; padding: 4px 9px; display: inline-flex; align-items: center; gap: 4px; }
+  .pbar button:hover, .pbar button[aria-pressed="true"] { background: color-mix(in srgb, var(--bar-fg) 18%, transparent); }
+  .pbar .lab { font-weight: 600; padding: 0 6px; min-width: 15ch; text-align: center; }
+  .pbar .div { width: 1px; align-self: stretch; background: color-mix(in srgb, var(--bar-fg) 25%, transparent); margin: 2px 4px; }
+  .pbar svg { width: 15px; height: 15px; }
+  @media (prefers-reduced-motion: no-preference) { .btn, .ib, .li { transition: background .12s; } }
+</style>
+
+<div class="page">
+  <header>
+    <h1>Prompt templates view: three variants</h1>
+    <p>Press the templates button in the panel's header, or Manage templates in Project settings. Switch the variant and the header icon in the bar at the bottom; the arrow keys switch the variant too.</p>
+  </header>
+  <div class="stage">
+    <div class="frame"><div class="panel" id="panel"></div></div>
+    <div class="side">
+      <section><h2>This variant</h2><div id="notes"></div></section>
+      <section><h2>Same in all three</h2>
+        <ul>
+          <li>The header button opens the view; Back returns to the list. From Project settings it returns to Project settings.</li>
+          <li>Project settings keeps the Default template select, with a button beside it that opens this view.</li>
+          <li>The card's template select is unchanged.</li>
+        </ul>
+      </section>
+      <section><h2>State</h2><div class="state" id="state"></div></section>
+    </div>
+  </div>
+</div>
+
+<div class="pbar" role="toolbar" aria-label="Prototype controls">
+  <button id="prev" aria-label="Previous variant"><i data-lucide="chevron-left"></i></button>
+  <span class="lab" id="vlabel"></span>
+  <button id="next" aria-label="Next variant"><i data-lucide="chevron-right"></i></button>
+  <span class="div"></span>
+  <span>Header button:</span>
+  <span id="icons" style="display:flex;gap:2px;flex-wrap:wrap"></span>
+</div>
+
+<script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<script>
+const VARIANTS = {
+  a: { name: 'A · Select + list', notes: [
+    'The view lists every template. The Default template select sits on top; the default is marked in the list.',
+    'A row opens the template detail you know today. Its Cancel and Save come back here.',
+    'Two levels: list, then detail.'] },
+  b: { name: 'B · List only', notes: [
+    'The view lists every template, the default first with a Default badge. There is no select here.',
+    'The detail gets a Default template switch: you make a template the default from inside it.',
+    'Two levels, and the default lives with the template.'] },
+  c: { name: 'C · One screen', notes: [
+    'No list: a Template select chooses which one to edit, and the form is right under it, on the same screen.',
+    'Cancel and Save in the title row, as in the filter editor: Cancel drops the changes and goes back, Save stores and goes back. Delete stays fixed at the bottom.',
+    'Choosing another template, or +, with unsaved changes asks in the bottom bar: Keep editing or Discard.',
+    'Default is a switch in the form. One level: no going into a detail and back.'] },
+};
+const ICONS = [
+  { id: 'file-text', label: 'file-text' }, { id: 'layers', label: 'layers' }, { id: 'book', label: 'book' },
+  { id: 'terminal', label: 'terminal' }, { id: 'bot', label: 'bot' }, { id: 'blocks', label: 'blocks' },
+  { id: 'text', label: 'Button "Templates"' },
+];
+const VARS = ['task_key', 'task_title', 'task_url', 'task_description', 'task_status', 'tracker', 'repo', 'branch', 'jira_project'];
+
+const S = {
+  variant: ['a', 'b', 'c'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'a',
+  icon: 'file-text',
+  stack: ['list'],
+  templates: [
+    { id: 't1', name: 'implement', global: false, text: 'Implement {{task_key}}: {{task_title}}\n{{task_url}}\n\nWork test-first and open a draft PR on {{branch}}.' },
+    { id: 't2', name: 'prototype', global: false, text: '/prototype {{task_key}} {{task_title}}' },
+    { id: 't3', name: 'review', global: true, text: 'Review the open PR for {{task_key}} ({{task_url}}) and list what blocks a merge.' },
+  ],
+  defaultId: 't1',
+  cards: {},
+  draft: null,       // { id, isNew, name, text, global, isDefault, confirmDelete }
+  editId: 't1',      // variant C: the template the form shows
+  seq: 4,
+};
+
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const ic = (name, cls = 'icon') => `<i data-lucide="${name}" class="${cls}"></i>`;
+const tpl = (id) => S.templates.find((t) => t.id === id);
+const label = (t) => (t.global ? `${t.name} (Global)` : t.name);
+const view = () => S.stack[S.stack.length - 1];
+const go = (v) => { S.stack.push(v); render(); };
+const back = () => { S.stack.pop(); if (!S.stack.length) S.stack = ['list']; S.draft = null; render(); };
+const ordered = () => [...S.templates.filter((t) => !t.global), ...S.templates.filter((t) => t.global)];
+const options = (value) => ordered().map((t) => `<option value="${t.id}"${t.id === value ? ' selected' : ''}>${esc(label(t))}</option>`).join('');
+const firstLine = (text) => (text.split('\n').find((l) => l.trim()) || 'Empty: the prompt is the task URL');
+
+function titleRow(title, actions) {
+  return `<div class="row between"><div class="title grow">web · <b>${esc(title)}</b></div><div class="row" style="gap:4px">${actions}</div></div>`;
+}
+
+function headerButton() {
+  if (S.icon === 'text') return `<button class="btn outline hot" data-act="open-manager" data-tip="Prompt templates">${ic('file-text')}Templates</button>`;
+  return `<button class="ib hot" data-act="open-manager" aria-label="Prompt templates" data-tip="Prompt templates">${ic(S.icon)}</button>`;
+}
+
+function listView() {
+  const card = (key, title, badges) => {
+    const value = S.cards[key] || S.defaultId;
+    return `<div class="card"><div><span class="key">${key}</span> ${esc(title)}</div>
+      <div class="row" style="flex-wrap:wrap;gap:5px"><span class="badge accent">To Do</span>${badges.map((b) => `<span class="badge">${b}</span>`).join('')}</div>
+      <div class="row"><select class="grow" aria-label="Template for ${key}" data-card="${key}">${options(value)}</select>
+      <button class="ib outline" aria-label="Start ${key}" data-tip="Start">${ic('play')}</button></div></div>`;
+  };
+  return `<div class="row between"><div class="title grow">Kickoff · <b>web</b></div>
+      <div class="row" style="gap:2px">
+        <button class="ib" aria-label="Reload tasks" data-tip="Reload tasks">${ic('refresh-cw')}</button>
+        ${headerButton()}
+        <button class="ib" aria-label="Project settings" data-tip="Project settings" data-act="open-settings">${ic('settings')}</button></div></div>
+    <input placeholder="Search tasks" aria-label="Search tasks">
+    <div class="row"><select class="grow" aria-label="Filter"><option>Board</option><option>Assigned to me (Global)</option></select>
+      <button class="ib" aria-label="Edit filter" data-tip="Edit filter">${ic('pencil')}</button><button class="ib" aria-label="New filter" data-tip="New filter">${ic('plus')}</button></div>
+    <div class="sep"></div>
+    <div class="scroll">
+      <div class="card"><div><span class="key">WEB-12</span> Add dark mode to settings</div><div class="link sm">web-12-add-dark-mode-to</div><div class="muted sm">Agent: claude</div></div>
+      ${card('WEB-16', 'Remove the old checkout banner', [])}
+      ${card('WEB-18', 'Translate the error pages', ['i18n', 'ui'])}
+      ${card('WEB-21', 'Retry failed payments once', ['payments'])}
+    </div>`;
+}
+
+function settingsView() {
+  const d = tpl(S.defaultId);
+  return `${titleRow('Project settings', `<button class="btn solid" data-act="back">Done</button>`)}
+    <div class="scroll">
+      <h3>Tracker</h3>
+      <label class="f">Tracker<select><option>Jira (Orca)</option><option>Jira (twg)</option><option>GitHub</option></select></label>
+      <label class="f">Jira project key<input value="WEB"></label>
+      <div class="sep"></div>
+      <h3>Start</h3>
+      <label class="f">Agent<select><option>Orca's default agent</option><option>claude</option><option>None</option></select></label>
+      <div class="f" style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--p-muted)">Default template
+        <div class="row"><select class="grow" aria-label="Default template" data-act-change="default">${options(S.defaultId)}</select>
+          <button class="ib hot" data-act="open-manager" aria-label="Manage templates" data-tip="Manage templates">${ic(S.icon === 'text' ? 'file-text' : S.icon)}</button></div></div>
+      <div class="code">${esc(d.text || 'Empty: the prompt is the task URL.')}</div>
+      <div class="sep"></div>
+      <h3>Branch</h3>
+      <label class="switch"><input type="checkbox" checked> Global</label>
+      <div class="muted sm">Uses the global branch settings.</div>
+    </div>`;
+}
+
+function managerA() {
+  const rows = ordered().map((t) => `<button class="li${t.id === S.defaultId ? ' current' : ''}" data-open="${t.id}">
+      <div class="grow"><div class="row" style="gap:6px">${esc(t.name)}${t.global ? '<span class="badge">Global</span>' : ''}${t.id === S.defaultId ? '<span class="muted sm">default</span>' : ''}</div>
+      <div class="d">${esc(firstLine(t.text))}</div></div>${ic('chevron-right', 'icon muted')}</button>`).join('');
+  return `${titleRow('Prompt templates', `<button class="ib" aria-label="New template" data-tip="New template" data-act="new">${ic('plus')}</button><button class="btn" data-act="back">${ic('arrow-left')}Back</button>`)}
+    <label class="f">Default template<select data-act-change="default">${options(S.defaultId)}</select></label>
+    <div class="muted sm">Cards start with the default unless you choose another template on them.</div>
+    <div class="sep"></div>
+    <div class="scroll"><div class="list">${rows}</div></div>`;
+}
+
+function managerB() {
+  const list = ordered().sort((x, y) => (y.id === S.defaultId) - (x.id === S.defaultId));
+  const rows = list.map((t) => `<button class="li" data-open="${t.id}">
+      <div class="grow"><div class="row" style="gap:6px">${esc(t.name)}${t.id === S.defaultId ? `<span class="badge accent">${ic('star', 'icon')} Default</span>` : ''}${t.global ? '<span class="badge">Global</span>' : ''}</div>
+      <div class="d">${esc(firstLine(t.text))}</div></div>${ic('chevron-right', 'icon muted')}</button>`).join('');
+  return `${titleRow('Prompt templates', `<button class="ib" aria-label="New template" data-tip="New template" data-act="new">${ic('plus')}</button><button class="btn" data-act="back">${ic('arrow-left')}Back</button>`)}
+    <div class="scroll"><div class="list">${rows}</div>
+    <div class="muted sm">Open a template to edit it or make it the default.</div></div>`;
+}
+
+function fields(d, withDefault) {
+  return `<label class="f">Name<input id="f-name" value="${esc(d.name)}" data-draft="name"></label>
+    <div><label class="switch"><input type="checkbox" data-draft="global"${d.global ? ' checked' : ''}> Global</label>
+      <div class="muted sm">A global template is offered in every project, and editing or deleting it changes it in every project.</div></div>
+    ${withDefault ? `<div><label class="switch"><input type="checkbox" data-draft="isDefault"${d.isDefault ? ' checked' : ''}${d.isDefault && !d.isNew && d.id === S.defaultId ? ' disabled' : ''}> Default template</label>
+      <div class="muted sm">Cards start with it unless you choose another. ${d.id === S.defaultId && !d.isNew ? 'To change the default, make another template the default.' : ''}</div></div>` : ''}
+    <label class="f">Text<textarea id="f-text" rows="8" data-draft="text">${esc(d.text)}</textarea></label>
+    <details><summary>Variables</summary><div style="display:flex;flex-direction:column;gap:3px;margin-top:6px">${VARS.map((v) => `<code>{{${v}}}</code>`).join('')}</div></details>
+    <div class="callout"><b>Run a skill</b>To run a Claude Code skill, start the template with its command, for example /tdd {{task_key}}.</div>`;
+}
+
+function deleteBar(d) {
+  if (d.isNew) return '';
+  return `<div class="row" style="justify-content:flex-end">${d.global ? '<span class="muted sm">Deletes it in every project.</span>' : ''}
+    <button class="btn danger" data-act="delete"${S.templates.length < 2 ? ' disabled' : ''}>${ic('trash-2')}${d.confirmDelete ? 'Confirm delete' : 'Delete template'}</button></div>`;
+}
+
+function detailView() {
+  const d = S.draft;
+  return `${titleRow(d.isNew ? 'New template' : 'Edit template', `<button class="btn" data-act="cancel">Cancel</button><button class="btn solid" data-act="save"${d.name.trim() ? '' : ' disabled'}>Save</button>`)}
+    <div class="scroll">${fields(d, S.variant === 'b')}</div>${deleteBar(d)}`;
+}
+
+function managerC() {
+  if (!S.draft) S.draft = draftOf(tpl(S.editId) ? S.editId : S.defaultId);
+  const d = S.draft;
+  const t = tpl(d.id);
+  const dirty = d.isNew || !t || t.name !== d.name || t.text !== d.text || t.global !== d.global || (d.isDefault !== (S.defaultId === d.id));
+  S.dirty = dirty;
+  const sel = d.isNew ? `<option selected>New template</option>${options('')}` : options(d.id);
+  const pending = S.pendingSwitch;
+  const bottom = pending
+    ? `<div class="row" style="justify-content:flex-end"><span class="sm" style="color:var(--p-danger)">Discard your changes to ${esc(d.isNew ? 'the new template' : t.name)}?</span>
+        <button class="btn" data-act="keep-editing">Keep editing</button><button class="btn solid" data-act="discard">Discard</button></div>`
+    : deleteBar(d);
+  return `${titleRow('Prompt templates', `<button class="btn" data-act="cancel">Cancel</button><button class="btn solid" data-act="save"${dirty && d.name.trim() ? '' : ' disabled'}>Save</button>`)}
+    <div class="row"><select class="grow" aria-label="Template" data-act-change="edit"${pending ? ' disabled' : ''}>${sel}</select>
+      <button class="ib" aria-label="New template" data-tip="New template" data-act="new"${pending ? ' disabled' : ''}>${ic('plus')}</button></div>
+    <div class="sep"></div>
+    <div class="scroll">${fields(d, true)}</div>
+    ${bottom}`;
+}
+
+function draftOf(id) {
+  if (id === null) return { id: 't' + S.seq++, isNew: true, name: '', text: 'Complete {{task_key}}: {{task_url}}', global: false, isDefault: false, confirmDelete: false };
+  const t = tpl(id);
+  return { id: t.id, isNew: false, name: t.name, text: t.text, global: t.global, isDefault: S.defaultId === t.id, confirmDelete: false };
+}
+
+function save() {
+  const d = S.draft;
+  if (!d.name.trim()) return;
+  const t = { id: d.id, name: d.name.trim(), text: d.text, global: d.global };
+  const i = S.templates.findIndex((x) => x.id === d.id);
+  if (i < 0) S.templates.push(t); else S.templates[i] = t;
+  if (d.isDefault) S.defaultId = d.id;
+  S.draft = null; back();
+}
+
+// Variant C: choosing another template, or +, while the form has changes asks first in the bottom bar.
+function switchTo(id) {
+  if (S.dirty) { S.pendingSwitch = { id }; return render(); }
+  S.editId = id ?? S.editId; S.draft = draftOf(id); render();
+}
+
+function remove() {
+  const d = S.draft;
+  if (!d.confirmDelete) { d.confirmDelete = true; render(); return; }
+  S.templates = S.templates.filter((t) => t.id !== d.id);
+  if (S.defaultId === d.id) S.defaultId = ordered()[0].id;
+  for (const k of Object.keys(S.cards)) if (S.cards[k] === d.id) delete S.cards[k];
+  if (S.variant === 'c') { S.editId = S.defaultId; S.draft = null; render(); } else { S.draft = null; back(); }
+}
+
+function render() {
+  const v = view();
+  const html = v === 'list' ? listView() : v === 'settings' ? settingsView() : v === 'detail' ? detailView()
+    : S.variant === 'a' ? managerA() : S.variant === 'b' ? managerB() : managerC();
+  const active = document.activeElement && document.activeElement.id;
+  const pos = active && document.activeElement.selectionStart;
+  $('#panel').innerHTML = html;
+  if (active) { const el = document.getElementById(active); if (el) { el.focus(); try { el.setSelectionRange(pos, pos); } catch {} } }
+  $('#vlabel').textContent = VARIANTS[S.variant].name;
+  $('#notes').innerHTML = `<ul>${VARIANTS[S.variant].notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>`;
+  $('#icons').innerHTML = ICONS.map((i) => `<button data-icon="${i.id}" aria-pressed="${S.icon === i.id}" title="${esc(i.label)}">${i.id === 'text' ? 'Text' : ic(i.id)}</button>`).join('');
+  $('#state').textContent = [
+    `view:      ${S.stack.join(' → ')}`,
+    `default:   ${tpl(S.defaultId)?.name}`,
+    `templates: ${ordered().map(label).join(', ')}`,
+    `cards:     ${Object.keys(S.cards).length ? Object.entries(S.cards).map(([k, id]) => `${k}=${tpl(id)?.name}`).join(', ') : '(all on the default)'}`,
+    S.draft ? `draft:     ${S.draft.isNew ? 'new' : tpl(S.draft.id)?.name} · name "${S.draft.name}"${S.draft.isDefault ? ' · default' : ''}` : 'draft:     none',
+  ].join('\n');
+  if (window.lucide) lucide.createIcons();
+}
+
+function setVariant(k) {
+  S.variant = k; S.draft = null; S.editId = S.defaultId;
+  S.stack = S.stack.filter((v) => v !== 'detail');
+  try { history.replaceState(null, '', '#' + k); } catch { location.hash = k; }
+  render();
+}
+const keys = ['a', 'b', 'c'];
+const step = (n) => setVariant(keys[(keys.indexOf(S.variant) + n + keys.length) % keys.length]);
+
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b || b.disabled) return;
+  if (b.id === 'prev') return step(-1);
+  if (b.id === 'next') return step(1);
+  if (b.dataset.icon) { S.icon = b.dataset.icon; return render(); }
+  if (b.dataset.open) { S.draft = draftOf(b.dataset.open); return go('detail'); }
+  const act = b.dataset.act;
+  if (act === 'open-manager') { S.draft = null; S.pendingSwitch = null; S.dirty = false; S.editId = S.defaultId; return go('manager'); }
+  if (act === 'open-settings') return go('settings');
+  if (act === 'back' || act === 'cancel') return back();
+  if (act === 'new') { if (S.variant === 'c') return switchTo(null); S.draft = draftOf(null); return go('detail'); }
+  if (act === 'save') return save();
+  if (act === 'delete') return remove();
+  if (act === 'keep-editing') { S.pendingSwitch = null; return render(); }
+  if (act === 'discard') { const { id } = S.pendingSwitch; S.pendingSwitch = null; S.dirty = false; return switchTo(id); }
+});
+document.addEventListener('input', (e) => {
+  const f = e.target.dataset.draft;
+  if (f && S.draft) { S.draft[f] = e.target.type === 'checkbox' ? e.target.checked : e.target.value; S.draft.confirmDelete = false; render(); }
+});
+document.addEventListener('change', (e) => {
+  const t = e.target;
+  if (t.dataset.card) { S.cards[t.dataset.card] = t.value; return render(); }
+  if (t.dataset.actChange === 'default') { S.defaultId = t.value; return render(); }
+  if (t.dataset.actChange === 'edit') { const id = t.value; t.value = S.draft.isNew ? 'New template' : S.draft.id; return switchTo(id); }
+});
+document.addEventListener('keydown', (e) => {
+  if (e.target.closest('input, textarea, select, [contenteditable]')) return;
+  if (e.key === 'ArrowLeft') step(-1);
+  if (e.key === 'ArrowRight') step(1);
+});
+window.addEventListener('hashchange', () => { const k = location.hash.slice(1); if (keys.includes(k) && k !== S.variant) setVariant(k); });
+render();
+</script>
