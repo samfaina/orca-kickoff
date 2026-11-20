@@ -3,6 +3,7 @@
 // a thrown message.
 import type { OrcaWorkerApi } from 'orca/worker'
 import { resolveAgent, systemDefaultAgentReader, type DefaultAgent } from './agent'
+import { projectBranchSettings } from './branch-settings'
 import { CliError, cleanMessage, systemRunCli, type RunCli } from './cli'
 import { startBranch, worktreeName } from './naming'
 import {
@@ -25,6 +26,7 @@ import {
 import {
   filterAsRun,
   globalFilters,
+  globalSettings,
   globalTemplates,
   listedFilter,
   projectProvider,
@@ -203,16 +205,18 @@ export function activateWith(orca: OrcaWorkerApi, { run, readDefaultAgent, now }
       // Never another template: the person chose this one for this task, own or global.
       const template = findTemplate(settings, globalTemplates(stored), templateId)
       if (!template) return { ok: false, message: 'The prompt template you chose no longer exists — pick another one.' }
-      const name = worktreeName(task, settings)
+      // The project's own branch settings, or the global ones, as stored, name both.
+      const branchSettings = projectBranchSettings(settings, globalSettings(stored).branch)
+      const name = worktreeName(task, branchSettings)
       // A taken branch is Orca's: it retries it as <branch>-2, -3 and so on.
-      const { branch, problem } = startBranch(settings, task)
+      const { branch, problem } = startBranch(branchSettings, task)
       if (problem !== null) return { ok: false, message: problem }
       // {{branch}} is the branch as filled in, without a -2 Orca may add: the prompt comes first.
       const prompt = buildPrompt(template.text, task, project, branch ?? name, settings.jiraProjectKey ?? '')
       if (!prompt.ok) return prompt
       const args = worktreeCreateArgs({ projectId, name, branch, task, agent: agent.agent, prompt: prompt.prompt })
       creating.set(id, { projectId, taskKey: task.key })
-      void createAndPostEnd(id, args,{ projectId, taskKey: task.key, agent: agent.agent })
+      void createAndPostEnd(id, args, { projectId, taskKey: task.key, agent: agent.agent })
       return { ok: true, underWay: true }
     } catch (error) {
       return { ok: false, message: messageOf(error) }

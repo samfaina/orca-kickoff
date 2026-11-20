@@ -1,8 +1,8 @@
 // Worktree names and branches for tasks, and reading a task key back from a name. The name is only
 // a readable label and a fallback link (ADR-0002): Orca's own link on the worktree comes first. The
-// branch comes from the project's branch template, when it has one. No Node imports, so the panel
-// can use it too.
-import type { ProjectSettings, Task, TrackerId } from './protocol'
+// branch comes from the branch template of the branch settings the project uses, when they have one
+// (src/branch-settings.ts). No Node imports, so the panel can use it too.
+import type { BranchSettings, ProjectSettings, Task, TrackerId } from './protocol'
 import { fillTemplate, usesVariable } from './template'
 
 const MAX_TITLE_WORDS = 4
@@ -18,8 +18,8 @@ export function titleWords(text: string): string {
     .replace(/^-+|-+$/g, '')
 }
 
-/** The title exclusion pattern a project has until it stores one: bracketed tags such as `[FE]`.
- *  A constant, stored only once changed. */
+/** The title exclusion pattern of branch settings, a project's or the global ones, until they store
+ *  one: bracketed tags such as `[FE]`. A constant, stored only once changed. */
 export const INITIAL_TITLE_EXCLUSION = '\\[[^\\]]*\\]'
 
 /** The flags the title exclusion pattern runs with: every match, ignoring case, Unicode. */
@@ -52,21 +52,22 @@ export function taskSlug(title: string, pattern: string): string {
   return titleWords(cleanTitle(title, pattern)).split('-').filter((word) => word !== '').slice(0, MAX_TITLE_WORDS).join('-')
 }
 
-/** The project's title exclusion pattern: the stored one, else the initial one. */
+/** The title exclusion pattern of `settings`, the branch settings a project uses: the stored one,
+ *  else the initial one. */
 export function titleExclusion(settings: Pick<ProjectSettings, 'titleExclusion'>): string {
   return settings.titleExclusion ?? INITIAL_TITLE_EXCLUSION
 }
 
-/** `<prefix>-<up to four words of the title, cleaned by the project's title exclusion pattern>`:
+/** `<prefix>-<up to four words of the title, cleaned by the title exclusion pattern>`, that of
+ *  `settings`, the branch settings the project uses:
+
+
  *  `issue-42-add-dark-mode` on GitHub, `web-12-anadir-modo-oscuro-a` on Jira. */
 export function worktreeName(task: Pick<Task, 'tracker' | 'key' | 'title'>, settings: Pick<ProjectSettings, 'titleExclusion'>): string {
   const prefix = task.tracker === 'github' ? `issue-${githubIssueNumber(task.key)}` : task.key.toLowerCase()
   const slug = taskSlug(task.title, titleExclusion(settings))
   return slug === '' ? prefix : `${prefix}-${slug}`
 }
-
-/** The part of a project's settings that names the branch of a Start. */
-export type BranchSettings = Pick<ProjectSettings, 'branchTemplate' | 'branchTypes' | 'branchTypeFallback' | 'titleExclusion'>
 
 /** Whether `text` is empty once trimmed. */
 const isBlank = (text: string | undefined) => (text ?? '').trim() === ''
@@ -98,8 +99,8 @@ export function branchType(settings: Pick<ProjectSettings, 'branchTypes' | 'bran
 
 type BranchTask = Pick<Task, 'tracker' | 'key' | 'title' | 'issueType'>
 
-/** The git branch the project's branch template gives `task`, or null when the project has none
- *  (a blank template): then Orca names the branch. Unknown variables are left as they are. */
+/** The git branch the branch template of `settings` gives `task`, or null when they have none (a
+ *  blank template): then Orca names the branch. Unknown variables are left as they are. */
 export function filledBranch(settings: BranchSettings, task: BranchTask): string | null {
   const template = settings.branchTemplate ?? ''
   if (isBlank(template)) return null
@@ -138,9 +139,10 @@ export function gitBranchProblem(name: string): string | null {
  *  which git holds anywhere. */
 const SAMPLE_VALUE = 'a'
 
-/** Why the Branch section can't be saved, or null when it can: fixed text in the branch template
- *  that git can't hold in a branch name, a title exclusion pattern that isn't a valid regular
- *  expression, or a template that uses `{{branch_type}}` while the fallback is empty. */
+/** Why the Branch section can't be saved, the project's own branch settings or the global ones, or
+ *  null when it can: fixed text in the branch template that git can't hold in a branch name, a
+ *  title exclusion pattern that isn't a valid regular expression, or a template that uses
+ *  `{{branch_type}}` while the fallback is empty. */
 export function branchSettingsProblem(settings: BranchSettings): string | null {
   const template = settings.branchTemplate ?? ''
   if (!isBlank(template)) {
@@ -156,7 +158,7 @@ export function branchSettingsProblem(settings: BranchSettings): string | null {
   return null
 }
 
-/** The branch a Start of `task` passes, null when the project has no branch template, and why a
+/** The branch a Start of `task` passes, null when `settings` have no branch template, and why a
  *  Start refuses it, null when git holds it. Orca would refuse such a branch only once the create
  *  runs, so a Start checks it first, and the Branch section's preview says so. */
 export function startBranch(settings: BranchSettings, task: BranchTask): { branch: string | null; problem: string | null } {

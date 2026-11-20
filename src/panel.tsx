@@ -50,6 +50,7 @@ import {
   type FilterRecipe,
   type FilterWrite
 } from './filter'
+import { projectBranchSettings, sameBranchSettings, usesGlobalBranchSettings, withBranchSwitched } from './branch-settings'
 import { isRecord } from './json'
 import { jqlRecipe, type JqlRecipeAnswers, type RecipeAssignees } from './jql-recipe'
 import {
@@ -58,8 +59,7 @@ import {
   branchSettingsProblem,
   startBranch,
   titleExclusion,
-  worktreeName,
-  type BranchSettings
+  worktreeName
 } from './naming'
 import {
   appendTasks,
@@ -77,6 +77,7 @@ import {
   readSettings,
   SETTINGS_KEY,
   trackerOf,
+  type BranchSettings,
   type BranchTypeRow,
   type ByTracker,
   type Filter,
@@ -168,15 +169,54 @@ type ShownSettings = {
   /** The project's own templates, then the global ones. */
   templates: ListedTemplate[]
   defaultTemplateId: string
-  /** The Branch section as the person sees it, saved only while `branchSettingsProblem` finds
-   *  nothing wrong with it. */
+  /** The Branch section as the person sees it: the branch settings the project uses, the global
+   *  ones while `branchGlobal`, else its own. Saved only while `branchSettingsProblem` finds nothing
+   *  wrong with it. */
   branch: ShownBranch
+  /** Whether the project uses the global branch settings, so the Branch section shows and edits
+   *  them: its Global switch. */
+  branchGlobal: boolean
+  /** The global branch settings as last read or saved, undefined while none are stored. */
+  globalBranch: BranchSettings | undefined
+  branchSwitch: BranchSwitch
 }
 
-/** The Branch section's fields, as typed. `titleExclusionSet`: the project stores its own title
- *  exclusion pattern, or the person changed it; until then the initial one is shown and never
- *  stored. */
+/** The Branch section's fields, as typed. `titleExclusionSet`: the branch settings shown store
+ *  their own title exclusion pattern, or the person changed it; until then the initial one is shown
+ *  and never stored. */
 type ShownBranch = Required<BranchSettings> & { titleExclusionSet: boolean }
+
+/** The Branch section's Global switch. `asking`: turning it on waits for the bar's confirmation,
+ *  to make the project's own branch settings the global ones (`publish`), or to drop them for the
+ *  global ones (`adopt`). `copied`: turning it off gave the project a copy of the global ones, and a
+ *  note says so. `error`: why the last switch write failed. */
+type BranchSwitch = { asking: 'publish' | 'adopt' | null; saving: boolean; error: string | null; copied: boolean }
+
+const BRANCH_SWITCH_IDLE: BranchSwitch = { asking: null, saving: false, error: null, copied: false }
+
+/** The Branch section's fields for `settings`. */
+function shownBranch(settings: BranchSettings): ShownBranch {
+  return {
+    branchTemplate: settings.branchTemplate ?? '',
+    branchTypes: settings.branchTypes ?? [],
+    branchTypeFallback: settings.branchTypeFallback ?? '',
+    titleExclusion: titleExclusion(settings),
+    titleExclusionSet: settings.titleExclusion !== undefined
+  }
+}
+
+/** The branch settings the Branch section saves: every field, but the title exclusion pattern only
+ *  once it was changed from the initial one. */
+function savedBranch(branch: ShownBranch): BranchSettings {
+  const { branchTemplate, branchTypes, branchTypeFallback } = branch
+  return { branchTemplate, branchTypes, branchTypeFallback, ...(branch.titleExclusionSet ? { titleExclusion: branch.titleExclusion } : {}) }
+}
+
+/** The Branch section of `project`, with `global`, the global branch settings, as stored. */
+function branchShownFor(project: ProjectSettings, global: BranchSettings | undefined): Pick<ShownSettings, 'branch' | 'branchGlobal' | 'globalBranch'> {
+  return { branch: shownBranch(projectBranchSettings(project, global)), branchGlobal: usesGlobalBranchSettings(project, global), globalBranch: global }
+
+}
 
 /** The task the Branch section's preview shows when no task is loaded. */
 const PREVIEW_TASK: Task = {
@@ -393,8 +433,8 @@ const settingsSave = settingsSaver({
 })
 
 /** A change Project settings makes; the filters change through `chooseFilter` and the filter
- *  editor, and the branch settings through `changeBranch`. */
-type SettingsChange = Omit<ProjectChanges, keyof FilterSettings | keyof BranchSettings>
+ *  editor, and the branch settings through `changeBranch` and the Branch section's Global switch. */
+type SettingsChange = Omit<ProjectChanges, keyof FilterSettings | keyof BranchSettings | 'branchSettingsUsed'>
 
 function changeSettings(changes: SettingsChange): void {
   const current = read(shownSettings)
@@ -409,10 +449,12 @@ function changeSettings(changes: SettingsChange): void {
   settingsSave.change(current.projectId, changes)
 }
 
-/** Shows the stored settings of `project`, unless they are already shown. */
+/** Shows the stored settings of `project`, with the changes not saved yet, unless they are already
+ *  shown: an edit of the global branch settings made in another project shows here before it is
+ *  saved, so an edit here doesn't put back what it replaced. */
 async function showSettings(project: ProjectRef): Promise<void> {
   if (read(shownSettings)?.projectId === project.id) return
-  const stored = readSettings(await storage.get(SETTINGS_KEY))
+  const stored = settingsSave.withPending(readSettings(await storage.get(SETTINGS_KEY)))
   const settings = projectSettings(stored, project.id)
   const global = globalTemplates(stored)
   const provider = projectProvider(settings, project)
@@ -426,29 +468,94 @@ async function showSettings(project: ProjectRef): Promise<void> {
     agent: settings.agent ?? 'orca-default',
     templates: projectTemplates(settings, global),
     defaultTemplateId: defaultTemplate(settings, global).id,
-    branch: {
-      branchTemplate: settings.branchTemplate ?? '',
-      branchTypes: settings.branchTypes ?? [],
-      branchTypeFallback: settings.branchTypeFallback ?? '',
-      titleExclusion: titleExclusion(settings),
-      titleExclusionSet: settings.titleExclusion !== undefined
-    }
+    ...branchShownFor(settings, globalSettings(stored).branch),
+    branchSwitch: BRANCH_SWITCH_IDLE
   })
 }
 
 /** Changes the Branch section as shown, and saves the whole section, through the settings saver,
  *  only while `branchSettingsProblem` finds nothing wrong with it: what it refuses is shown, with
- *  why, and the last section it accepted stays saved. The title exclusion pattern is saved only
- *  once the project has one of its own. */
+ *  why, and the last section it accepted stays saved. It saves the global branch settings while
+ *  the Global switch is on, else the project's own. The title exclusion pattern is saved only once
+ *  it was changed from the initial one. Nothing changes while the switch writes. */
 function changeBranch(changes: Partial<Omit<ShownBranch, 'titleExclusionSet'>>): void {
   const current = read(shownSettings)
-  if (!current) return
+  if (!current || current.branchSwitch.saving) return
   const titleExclusionSet = current.branch.titleExclusionSet || changes.titleExclusion !== undefined
   const branch: ShownBranch = { ...current.branch, ...changes, titleExclusionSet }
-  set(shownSettings, { ...current, branch })
-  if (branchSettingsProblem(branch) !== null) return
-  const { branchTemplate, branchTypes, branchTypeFallback } = branch
-  settingsSave.change(current.projectId, { branchTemplate, branchTypes, branchTypeFallback, ...(titleExclusionSet ? { titleExclusion: branch.titleExclusion } : {}) })
+  if (branchSettingsProblem(branch) !== null) {
+    set(shownSettings, { ...current, branch })
+    return
+  }
+  const saved = savedBranch(branch)
+  set(shownSettings, { ...current, branch, globalBranch: current.branchGlobal ? saved : current.globalBranch })
+  if (current.branchGlobal) settingsSave.changeGlobalBranch(saved)
+  else settingsSave.change(current.projectId, saved)
+}
+
+/** Changes the Branch section's Global switch, while `projectId` is still the project shown. */
+function changeBranchSwitch(projectId: string, changes: Partial<BranchSwitch>): void {
+  update(shownSettings, (shown) => (shown?.projectId === projectId ? { ...shown, branchSwitch: { ...shown.branchSwitch, ...changes } } : shown))
+}
+
+/** The Branch section's Global switch. Off: the project gets a copy of the global branch settings
+ *  as its own, at once, since none of its branches change. On: with no global ones stored, the bar
+ *  under the view asks before the project's own become them; with some, it asks before the
+ *  project's own are dropped for them, unless they are the same. Turning it back while the bar asks
+ *  closes the bar. */
+function switchBranchGlobal(on: boolean): void {
+  const shown = read(shownSettings)
+  if (!shown || shown.branchSwitch.saving) return
+  if (on === shown.branchGlobal) {
+    changeBranchSwitch(shown.projectId, { asking: null })
+    return
+  }
+  if (!on) {
+    void writeBranchSwitch(shown.projectId, false)
+    return
+  }
+  const { globalBranch } = shown
+  if (globalBranch !== undefined && sameBranchSettings(savedBranch(shown.branch), globalBranch)) {
+    void writeBranchSwitch(shown.projectId, true)
+    return
+  }
+  changeBranchSwitch(shown.projectId, { asking: globalBranch === undefined ? 'publish' : 'adopt', error: null, copied: false })
+}
+
+/** Make global, or Use global, in the bar that asks before the Global switch turns on. Make global
+ *  waits for a Branch section git can hold, since it makes the section the global one. */
+function confirmBranchGlobal(): void {
+  const shown = read(shownSettings)
+  if (!shown || shown.branchSwitch.asking === null || shown.branchSwitch.saving) return
+  if (shown.branchSwitch.asking === 'publish' && branchSettingsProblem(shown.branch) !== null) return
+  void writeBranchSwitch(shown.projectId, true)
+}
+
+/** Turns the project's Global switch to `on` through the settings saver: the project's settings
+ *  and the global branch settings in one write, computed from them as stored, after the pending
+ *  changes. Then shows the Branch section as written, or, when the write fails, why, with nothing
+ *  changed. */
+async function writeBranchSwitch(projectId: string, on: boolean): Promise<void> {
+  const what = !on
+    ? 'give this project its own branch settings'
+    : read(shownSettings)?.globalBranch === undefined
+      ? 'make these branch settings global'
+      : 'use the global branch settings'
+  changeBranchSwitch(projectId, { asking: null, saving: true, error: null, copied: false })
+  let written: { project: ProjectSettings; global: BranchSettings | undefined }
+  try {
+    written = await settingsSave.writeProjectAndGlobal(projectId, (project, global) => {
+      const write = withBranchSwitched(project, global.branch, on)
+      if (!write) return { answer: { project, global: global.branch } }
+      return { answer: { project: { ...project, ...write.project }, global: write.global?.branch ?? global.branch }, ...write }
+    })
+  } catch (error) {
+    changeBranchSwitch(projectId, { saving: false, error: `Couldn't ${what} (${errorCode(error)}). Try again.` })
+    return
+  }
+  const shown = read(shownSettings)
+  if (shown?.projectId !== projectId) return
+  set(shownSettings, { ...shown, ...branchShownFor(written.project, written.global), branchSwitch: { ...BRANCH_SWITCH_IDLE, copied: !on } })
 }
 
 /** The filters the shown project lists on its tracker, its own then the global ones, and the one the
@@ -1477,31 +1584,75 @@ function TitleRow({ prefix, title, level, children }: { prefix: string | null; t
   )
 }
 
-/** Project settings, in place of the panel view: the tracker, then what a Start uses. */
+/** Project settings, in place of the panel view: the tracker, then what a Start uses. The title row
+ *  and the bar under the sections stay in place while the sections between them scroll. That bar
+ *  asks before the Branch section's Global switch turns on, or, while it is on, warns that the
+ *  section edits the global branch settings. */
 function SettingsView({ projectName, shown }: { projectName: string; shown: ShownSettings }) {
   return (
-    <Stack gap="sm">
+    <Box direction="column" gap="sm" height="100%">
       <TitleRow prefix={`${projectName} ·`} title="Project settings" level={3}>
         <Button key="settings-done" size="sm" variant="solid" onPress={closeSettings}>
           Done
         </Button>
       </TitleRow>
       <SettingsSaveError />
-      <Text size="sm" weight="semibold">
-        Tracker
+      <Box direction="column" gap="sm" grow minHeight={0} maxHeight="100%" scroll="y">
+        <Text size="sm" weight="semibold">
+          Tracker
+        </Text>
+        <TrackerFields shown={shown} />
+        <Separator />
+        <Text size="sm" weight="semibold">
+          Start
+        </Text>
+        <StartFields shown={shown} />
+        <Separator />
+        <Text size="sm" weight="semibold">
+          Branch
+        </Text>
+        <BranchFields shown={shown} />
+      </Box>
+      <BranchGlobalBar shown={shown} />
+    </Box>
+  )
+}
+
+/** Under Project settings: the bar that asks before the Branch section's Global switch turns on,
+ *  or, while it is on, the warning that the section edits the global branch settings; else
+ *  nothing. */
+function BranchGlobalBar({ shown }: { shown: ShownSettings }) {
+  const { asking, saving } = shown.branchSwitch
+  if (asking !== null) {
+    const publish = asking === 'publish'
+    return (
+      <Box direction="row" justify="end" align="center" gap="xs" shrink={false}>
+        <Text size="sm" tone="warning">
+          {publish ? 'Projects without their own branch settings will name branches this way.' : "This project's own branch settings are discarded."}
+        </Text>
+        <Button key="branch-global-cancel" size="sm" variant="ghost" disabled={saving} onPress={() => switchBranchGlobal(false)}>
+          {publish ? 'Cancel' : 'Keep own'}
+        </Button>
+        <Button
+          key="branch-global-confirm"
+          size="sm"
+          variant="solid"
+          disabled={saving || (publish && branchSettingsProblem(shown.branch) !== null)}
+          onPress={confirmBranchGlobal}
+        >
+          {publish ? 'Make global' : 'Use global'}
+        </Button>
+      </Box>
+    )
+  }
+  if (!shown.branchGlobal) return null
+  // No count of projects: those Kickoff has never opened use the global branch settings too.
+  return (
+    <Callout tone="warning" icon="warning" title="Editing the global branch settings.">
+      <Text size="sm">
+        Changes how every project that uses them names the branches and worktrees of its next Starts. Task worktrees already started keep their branches.
       </Text>
-      <TrackerFields shown={shown} />
-      <Separator />
-      <Text size="sm" weight="semibold">
-        Start
-      </Text>
-      <StartFields shown={shown} />
-      <Separator />
-      <Text size="sm" weight="semibold">
-        Branch
-      </Text>
-      <BranchFields shown={shown} />
-    </Stack>
+    </Callout>
   )
 }
 
@@ -1512,20 +1663,41 @@ function firstLoadedTask(projectId: string): Task | null {
   return current?.kind === 'ready' && current.project.id === projectId ? (current.tasks[0] ?? null) : null
 }
 
-/** The branch template, the branch type table with its fallback and the title exclusion pattern,
- *  then why they aren't saved, if they aren't, and the preview of a Start's branch and worktree. */
+/** The Global switch, then the branch settings the project uses: the branch template, the branch
+ *  type table with its fallback and the title exclusion pattern, then why they aren't saved, if
+ *  they aren't, and the preview of a Start's branch and worktree. Nothing can be typed while the
+ *  switch writes. */
 function BranchFields({ shown }: { shown: ShownSettings }) {
   const { branch } = shown
+  const { asking, saving, error, copied } = shown.branchSwitch
   const problem = branchSettingsProblem(branch)
   const changeRow = (index: number, changes: Partial<BranchTypeRow>) =>
     changeBranch({ branchTypes: branch.branchTypes.map((row, at) => (at === index ? { ...row, ...changes } : row)) })
   return (
     <Stack gap="sm">
       <Stack gap="xs">
+        <Box direction="row" align="center" gap="xs">
+          <Switch label="Global" checked={shown.branchGlobal || asking !== null} disabled={saving} onChange={switchBranchGlobal} />
+          {saving ? <Spinner label="Saving the branch settings" labelHidden /> : null}
+        </Box>
+        <Text size="sm" muted>
+          Global branch settings are used by every project without its own. Turn it off to give this project its own copy.
+        </Text>
+        {copied ? (
+          <Text size="sm">This project now has its own copy of the global branch settings. Changes here change only this project.</Text>
+        ) : null}
+        {error !== null ? (
+          <Callout tone="danger" icon="error">
+            <Text>{error}</Text>
+          </Callout>
+        ) : null}
+      </Stack>
+      <Stack gap="xs">
         <Input
           label="Branch template"
           value={branch.branchTemplate}
           placeholder="{{branch_type}}/{{task_key}}__{{task_slug}}"
+          disabled={saving}
           onChange={(branchTemplate) => changeBranch({ branchTemplate })}
         />
         <Text size="sm" muted>
@@ -1543,10 +1715,10 @@ function BranchFields({ shown }: { shown: ShownSettings }) {
       {branch.branchTypes.map((row, index) => (
         <Box key={`branch-type-${index}`} direction="row" align="center" gap="xs">
           <Box grow minWidth={0}>
-            <Input label={`Issue type ${index + 1}`} labelHidden value={row.issueType} placeholder="Bug" onChange={(issueType) => changeRow(index, { issueType })} />
+            <Input label={`Issue type ${index + 1}`} labelHidden value={row.issueType} placeholder="Bug" disabled={saving} onChange={(issueType) => changeRow(index, { issueType })} />
           </Box>
           <Box grow minWidth={0}>
-            <Input label={`Branch type ${index + 1}`} labelHidden value={row.branchType} placeholder="bugfix" onChange={(branchType) => changeRow(index, { branchType })} />
+            <Input label={`Branch type ${index + 1}`} labelHidden value={row.branchType} placeholder="bugfix" disabled={saving} onChange={(branchType) => changeRow(index, { branchType })} />
           </Box>
           <Box shrink={false}>
             <IconButton
@@ -1556,6 +1728,7 @@ function BranchFields({ shown }: { shown: ShownSettings }) {
               size="sm"
               variant="ghost"
               tone="danger"
+              disabled={saving}
               onPress={() => changeBranch({ branchTypes: branch.branchTypes.filter((_, at) => at !== index) })}
             />
           </Box>
@@ -1567,6 +1740,7 @@ function BranchFields({ shown }: { shown: ShownSettings }) {
           icon="add"
           size="sm"
           variant="solid"
+          disabled={saving}
           onPress={() => changeBranch({ branchTypes: [...branch.branchTypes, { issueType: '', branchType: '' }] })}
         >
           Add branch type
@@ -1577,6 +1751,7 @@ function BranchFields({ shown }: { shown: ShownSettings }) {
           label="Fallback branch type"
           value={branch.branchTypeFallback}
           placeholder="feature"
+          disabled={saving}
           onChange={(branchTypeFallback) => changeBranch({ branchTypeFallback })}
         />
         <Text size="sm" muted>
@@ -1584,7 +1759,7 @@ function BranchFields({ shown }: { shown: ShownSettings }) {
         </Text>
       </Stack>
       <Stack gap="xs">
-        <Input label="Title exclusion pattern" value={branch.titleExclusion} onChange={(pattern) => changeBranch({ titleExclusion: pattern })} />
+        <Input label="Title exclusion pattern" value={branch.titleExclusion} disabled={saving} onChange={(pattern) => changeBranch({ titleExclusion: pattern })} />
         <Text size="sm" muted>
           A regular expression. Every match, ignoring case, is removed from the title before {'{{task_slug}}'} and the worktree name are made. Empty: nothing is removed.
         </Text>

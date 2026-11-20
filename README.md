@@ -42,7 +42,7 @@ Open the **Kickoff** panel from its icon (a lightning bolt) in Orca's right side
 
 Each task shows as a card with its key and title, then its labels, after its status on Jira, then its assignees, if any. **Start** (the play button):
 
-1. creates a worktree named after the task's key and up to four words of its title, without bracketed tags such as `[FE]` (see [Branch](#branch)), such as `web-12-add-dark-mode` for Jira's `WEB-12` "[FE] Add dark mode", or `issue-42-add-dark-mode` for GitHub's `#42`; its git branch comes from the project's [branch template](#branch), or, without one, Orca names it;
+1. creates a worktree named after the task's key and up to four words of its title, without bracketed tags such as `[FE]` (see [Branch](#branch)), such as `web-12-add-dark-mode` for Jira's `WEB-12` "[FE] Add dark mode", or `issue-42-add-dark-mode` for GitHub's `#42`; its git branch comes from the [branch template](#branch) of the branch settings the project uses, its own or the [global](#global-branch-settings) ones, or, without one, Orca names it;
 2. links it to the task in Orca, so Orca shows the task on the worktree;
 3. launches the project's agent in it, with the prompt filled from the chosen template.
 
@@ -53,7 +53,7 @@ Creating the worktree can take a minute. Once it exists, the card shows the work
 - **Agent**: Orca's default agent, a named one (`claude`, `codex`, `gemini`, `opencode`, `copilot`), or none. If Orca's default can't be read, Start says so and asks you to pick one.
 - **Prompt templates**: a project can have several, each with a name, its own and the [global](#global-templates) ones. The default template is used unless you choose another on a task's card. The pencil edits the template chosen as default, and **+** adds one.
 
-Under **Branch**, they hold how a Start names its git branch (see [Branch](#branch)).
+Under **Branch**, they hold how a Start names its git branch, or say that the project uses the global branch settings (see [Branch](#branch)).
 
 **Filters**, above the list and open at first, holds the filter row and the **Search tasks** field; closed, it says the filter listed and the words typed. The field narrows the loaded tasks as you type, by key, title or label. **Enter** (or **Search in GitHub** / **Search in Jira**) asks the tracker instead, for the tasks of the same list that match your words, including those not loaded yet. **Clear search** goes back to the list.
 
@@ -114,7 +114,7 @@ A template is the text the agent gets as its prompt. `{{name}}` is replaced by t
 | `{{task_status}}` | The status as the tracker shows it, such as `In Progress`; `Open` on GitHub. |
 | `{{tracker}}` | `github` or `jira`. |
 | `{{repo}}` | The project's repository (`owner/name`) when Orca knows it, else the project's name. |
-| `{{branch}}` | The new worktree's git branch from the project's [branch template](#branch), such as `feature/WEB-12__add-dark-mode`; without one, the worktree's name, such as `web-12-add-dark-mode`. It doesn't include a `-2` Orca may add to a taken branch, since the prompt is filled before the worktree is created. |
+| `{{branch}}` | The new worktree's git branch from the [branch template](#branch) the project uses, such as `feature/WEB-12__add-dark-mode`; without one, the worktree's name, such as `web-12-add-dark-mode`. It doesn't include a `-2` Orca may add to a taken branch, since the prompt is filled before the worktree is created. |
 | `{{jira_project}}` | The project's Jira project key, such as `WEB`, set in Project settings; empty when it has none. |
 
 A filled prompt over 30 000 characters makes Start fail, since the Windows command line holds about 32 000.
@@ -140,7 +140,7 @@ A prompt template is either the project's own or **global**: kept once, apart fr
 
 ## Branch
 
-The **Branch** section of Project settings names the git branch a Start creates. It never changes the worktree's name, which still starts with the task's key.
+The **Branch** section of Project settings holds the project's **branch settings**: the branch template, the branch types with their fallback, and the title exclusion pattern. They name the git branch a Start creates, and the title exclusion pattern the worktree's words. They never change the start of the worktree's name, which is the task's key. A project uses its own branch settings or the [global](#global-branch-settings) ones, never a mix.
 
 - **Branch template**: empty at first, and then Orca names the branch, with its own branch prefix setting. Set, a Start passes the filled-in template to Orca, which uses it as it is. Its variables use the prompt templates' `{{name}}` syntax:
 
@@ -162,6 +162,21 @@ The section saves itself as you type, like the rest of Project settings, but not
 - a template that uses `{{branch_type}}` while the fallback is empty.
 
 A Start checks the filled-in branch the same way, for a branch type git can't hold, such as one with a space, and refuses with a message. A branch that is already taken is left to Orca, which tries `<branch>-2`, `-3` and so on.
+
+### Global branch settings
+
+The branch settings can be **global**: kept once, apart from every project's settings, and used *instead of* a project's own by every project that has none of its own, on Jira and GitHub alike. A team whose projects all name their branches the same way sets that up once.
+ A Start, `{{branch}}` and the preview use the branch settings the project uses.
+
+- **Which ones a project uses**: once the Global switch below has been used in a project, the project says which: its own or the global ones. Until then, a project that stores any branch setting of its own, even an empty template, uses its own; one with none uses the global ones, if there are any. While there are no global branch settings, a project with none of its own names branches as before: Orca names the branch, and the title exclusion pattern is the initial one.
+- **The Global switch**, at the top of the Branch section, is on while the project uses the global branch settings. While there are none, it is off, even in a project with none of its own, so typing in the section never makes global ones.
+  - **On, with none global yet**: a bar under Project settings first asks, since *Projects without their own branch settings will name branches this way*; **Make global** makes the section, as shown, the global branch settings, and the project uses them. It waits for a section git can hold.
+  - **On, with global ones**: when the project's own are the same, it just switches. Otherwise the bar asks, since *This project's own branch settings are discarded*; **Use global** drops them, and **Keep own** keeps them.
+  - **Off**: the project gets a copy of the global branch settings as its own at once, since none of its branches change, and a note says so. Later edits change only that project.
+- **Editing them**: while the switch is on, the section shows and edits the global branch settings, and a warning stays in view under Project settings: **Editing the global branch settings.** *Changes how every project that uses them names the branches and worktrees of its next Starts. Task worktrees already started keep their branches.* Orca never renames a branch it didn't name itself (`docs/reference.md`, `orca worktree create`). The warning gives no count of projects, since projects Kickoff has never opened use them too.
+- **No deleting**: once stored, the global branch settings are only edited.
+
+Each of Make global, Use global and turning the switch off writes the project's settings and the global branch settings together, in one write, so a project is never left with neither. A write that fails changes nothing and says why.
 
 ## Providers
 

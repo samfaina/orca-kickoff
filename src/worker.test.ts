@@ -638,6 +638,55 @@ test('{{branch}} in a prompt gives the filled-in branch with a branch template, 
   }
 })
 
+/** Settings of the web project on Jira (twg) with `project` added, and the global branch settings
+ *  that every project of a team uses. */
+const globalTeamBranch = (project: Record<string, unknown> = {}) => ({
+  settings: {
+    version: 1,
+    projects: { 'github:acme/web': { provider: 'jira-twg', providers: { 'jira-twg': { site: '', profile: '' } }, ...project } },
+    global: {
+      branch: { branchTemplate: 'team/{{branch_type}}/{{task_key}}', branchTypes: [{ issueType: 'Bug', branchType: 'fix' }], branchTypeFallback: 'feat', titleExclusion: '' }
+    }
+  }
+})
+
+test('a Start in a project with none of its own branch settings uses the global ones: the branch, the worktree name and {{branch}}', async () => {
+  const template = { templates: [{ id: 'default', name: 'Default', text: 'Work on {{branch}}' }] }
+  for (const storage of [globalTeamBranch(template), globalTeamBranch({ ...template, branchTemplate: 'mine/{{task_key}}', branchSettingsUsed: 'global' })]) {
+    const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED }, { storage })
+    assert.deepEqual(await worker.request('task.start', { projectId: 'github:acme/web', task: taggedWeb12('Bug'), templateId: 'default' }), { ok: true, underWay: true })
+    const { args } = creates(calls)[0]
+    assert.equal(flagValue(args, '--branch'), 'team/fix/WEB-12')
+    // The global title exclusion pattern removes nothing.
+    assert.equal(flagValue(args, '--name'), 'web-12-fe-mobile-widgets-add')
+    assert.equal(flagValue(args, '--prompt'), 'Work on team/fix/WEB-12')
+  }
+})
+
+test('a Start in a project with its own branch settings, or marked as using its own, ignores the global ones', async () => {
+  for (const [storage, branch] of [
+    [globalTeamBranch({ branchTemplate: '' }), undefined],
+    [globalTeamBranch({ branchTemplate: 'mine/{{task_key}}' }), 'mine/WEB-12'],
+    [globalTeamBranch({ branchSettingsUsed: 'own' }), undefined]
+  ] as const) {
+    const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED }, { storage })
+    await worker.request('task.start', { projectId: 'github:acme/web', task: taggedWeb12('Bug'), templateId: 'default' })
+    const { args } = creates(calls)[0]
+    assert.equal(flagValue(args, '--branch'), branch)
+    assert.equal(flagValue(args, '--name'), 'web-12-add-dark-mode')
+  }
+})
+
+test('a Start refuses a branch the global branch settings fill in that git would refuse', async () => {
+  const storage = globalTeamBranch()
+  storage.settings.global.branch.branchTypes = [{ issueType: 'Bug', branchType: 'a b' }]
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED }, { storage })
+  const answer = await worker.request('task.start', { projectId: 'github:acme/web', task: taggedWeb12('Bug'), templateId: 'default' })
+  assert.equal(answer.ok, false)
+  assert.match(answer.ok ? '' : answer.message, /^The branch for WEB-12, "team\/a b\/WEB-12", has a space/)
+  assert.equal(creates(calls).length, 0)
+})
+
 test("a Start of a Jira task already linked in Orca doesn't run worktree create", async () => {
   const linked = {
     id: 'r1::/src/dark', projectId: 'github:acme/web', displayName: 'dark-mode', isArchived: false, linkedIssue: null,

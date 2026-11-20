@@ -1301,7 +1301,7 @@ test('the hint follows the text, and the closed Variables list gives each variab
       [['Code {{repo}}'], "{{repo}} The project's repository (owner/name) when Orca knows it, else the project's name."],
       [
         ['Code {{branch}}'],
-        "{{branch}} The new worktree's git branch from the project's branch template, such as feature/WEB-12__add-dark-mode. Without a branch template, the worktree's name, such as web-12-add-dark-mode. It doesn't include a -2 Orca may add."
+        "{{branch}} The new worktree's git branch from the branch template the project uses, its own or the global one, such as feature/WEB-12__add-dark-mode. Without a branch template, the worktree's name, such as web-12-add-dark-mode. It doesn't include a -2 Orca may add."
       ],
       [['Code {{jira_project}}'], "{{jira_project}} The project's Jira project key, such as WEB, set in Project settings. Empty when it has none."]
     ]
@@ -4185,6 +4185,232 @@ test('the preview says when a Start of the task would be refused for its branch'
   await typeConvention(view)
   await view.type(branchTypeField(1), 'bug fix', { replace: true })
   assert.ok(view.find({ type: 'Text', text: /^The branch for WEB-12, "bug fix\/WEB-12__add-dark-mode--AB", has a space/ }))
+})
+
+const branchGlobalSwitch = { type: 'Switch', label: 'Global' }
+const branchGlobalOn = (view: TestPanel) => view.find(branchGlobalSwitch)?.props.checked
+const GLOBAL_BRANCH_LINE = 'Global branch settings are used by every project without its own. Turn it off to give this project its own copy.'
+const PUBLISH_ASK = 'Projects without their own branch settings will name branches this way.'
+const ADOPT_ASK = "This project's own branch settings are discarded."
+const COPIED_NOTE = 'This project now has its own copy of the global branch settings. Changes here change only this project.'
+const GLOBAL_BRANCH_WARNING = 'Changes how every project that uses them names the branches and worktrees of its next Starts. Task worktrees already started keep their branches.'
+const TEAM_BRANCH = { branchTemplate: 'team/{{branch_type}}/{{task_key}}', branchTypes: [{ issueType: 'Bug', branchType: 'fix' }], branchTypeFallback: 'feat' }
+
+/** The web project on Jira (twg), with `project` added, and the global branch settings of a team. */
+const globalBranchStored = (project: Record<string, JsonValue> = {}) => ({
+  settings: { ...twgStored({ site: '', profile: '' }, project).settings, global: { branch: TEAM_BRANCH } }
+})
+
+const storedGlobalBranch = (host: MockHost) => (host.data().storage.settings as { global?: { branch?: unknown } } | undefined)?.global?.branch
+const storedBranchMark = (host: MockHost) => (storedProject(host) as { branchSettingsUsed?: string } | undefined)?.branchSettingsUsed
+
+/** What Project settings shows under the part that scrolls, or null when nothing is there. */
+function settingsBar(view: TestPanel): TreeSnapshot | null {
+  const frame = view.tree()
+  assert.ok(frame && typeof frame !== 'string')
+  assertProps(frame, { direction: 'column', height: '100%' })
+  const parts = elementsIn(frame)
+  const form = parts.findIndex((part) => part.props?.scroll === 'y')
+  assert.ok(form >= 0, 'Project settings has a part that scrolls')
+  return parts[form + 1] ?? null
+}
+
+const textIn = (node: TreeSnapshot, text: string) => nodesIn(node, (inner) => inner.type === 'Text' && wordsOf(inner) === text).length === 1
+
+test("with no global branch settings stored, the Branch section's Global switch is off and says what it does, and typing stores the project's own", async () => {
+  const { view, host } = await showWith({ 'tasks.load': twgReady([]) }, twgStored({ site: '', profile: '' }))
+  await view.press(gear)
+  assert.equal(branchGlobalOn(view), false)
+  assert.ok(view.find({ type: 'Text', text: GLOBAL_BRANCH_LINE }))
+  assert.equal(settingsBar(view), null)
+  await view.type(branchTemplateField, 'feature/{{task_key}}')
+  await wait(SAVE_DELAY_MS + 200)
+  assert.equal(storedBranch(host).branchTemplate, 'feature/{{task_key}}')
+  assert.equal(storedGlobalBranch(host), undefined)
+  assert.equal(branchGlobalOn(view), false)
+})
+
+test('turning Global on with none stored asks first: Cancel changes nothing, and Make global makes the section the global branch settings, used by a project with none of its own but not by one with its own', async () => {
+  let project: typeof web | typeof notes = web
+  const jira = { provider: 'jira-twg', providers: { 'jira-twg': { site: '', profile: '' } } }
+  const { view, host } = await showWith(
+    { 'tasks.load': () => twgReady([web12Tagged()], { project }) },
+    { settings: { version: 1, projects: { [web.id]: jira, [api.id]: jira, [notes.id]: { ...jira, branchTemplate: 'own/{{task_key}}' } } } }
+  )
+  await view.press(gear)
+  await typeConvention(view)
+  await view.toggle(branchGlobalSwitch)
+  const bar = settingsBar(view)
+  assert.ok(bar)
+  assert.ok(textIn(bar, PUBLISH_ASK))
+  assert.deepEqual(buttonsIn(bar), ['Cancel', 'Make global'])
+  assert.equal(branchGlobalOn(view), true)
+  assert.equal(storedGlobalBranch(host), undefined)
+  await view.press({ type: 'Button', text: 'Cancel' })
+  assert.equal(settingsBar(view), null)
+  assert.equal(branchGlobalOn(view), false)
+  assert.equal(storedGlobalBranch(host), undefined)
+
+  await view.toggle(branchGlobalSwitch)
+  await view.press({ type: 'Button', text: 'Make global' })
+  assert.deepEqual(storedGlobalBranch(host), { branchTemplate: CONVENTION, branchTypes: [{ issueType: 'Bug', branchType: 'bugfix' }], branchTypeFallback: 'feature' })
+  assert.deepEqual(storedBranch(host), { branchTemplate: undefined, branchTypes: undefined, branchTypeFallback: undefined, titleExclusion: undefined })
+  assert.equal(storedBranchMark(host), 'global')
+  assert.equal(branchGlobalOn(view), true)
+  assert.equal(view.valueOf(branchTemplateField), CONVENTION)
+  assert.deepEqual(previewShown(view), ['Preview for WEB-12', 'Branch: bugfix/WEB-12__add-dark-mode--AB', 'Worktree: web-12-add-dark-mode'])
+
+  project = api
+  await view.press(done)
+  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  await view.press(gear)
+  assert.equal(branchGlobalOn(view), true)
+  assert.equal(view.valueOf(branchTemplateField), CONVENTION)
+  assert.deepEqual(previewShown(view), ['Preview for WEB-12', 'Branch: bugfix/WEB-12__add-dark-mode--AB', 'Worktree: web-12-add-dark-mode'])
+
+  project = notes
+  await view.press(done)
+  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  await view.press(gear)
+  assert.equal(branchGlobalOn(view), false)
+  assert.equal(view.valueOf(branchTemplateField), 'own/{{task_key}}')
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.warnings, [])
+})
+
+test('Make global waits for a Branch section git can hold', async () => {
+  const { view, host } = await showWith({ 'tasks.load': twgReady([]) }, twgStored({ site: '', profile: '' }))
+  await view.press(gear)
+  await view.type(branchTemplateField, 'a b')
+  await view.toggle(branchGlobalSwitch)
+  assert.equal(view.find({ type: 'Button', text: 'Make global' })?.props.disabled, true)
+  await view.type(branchTemplateField, 'a-b', { replace: true })
+  assert.notEqual(view.find({ type: 'Button', text: 'Make global' })?.props.disabled, true)
+  await view.press({ type: 'Button', text: 'Make global' })
+  assert.deepEqual(storedGlobalBranch(host), { branchTemplate: 'a-b', branchTypes: [], branchTypeFallback: '' })
+})
+
+test('while the switch is on, the section shows and edits the global branch settings, under a warning that stays in view', async () => {
+  const { view, host } = await showWith({ 'tasks.load': twgReady([web12Tagged()]) }, globalBranchStored())
+  await view.press(gear)
+  assert.equal(branchGlobalOn(view), true)
+  assert.equal(view.valueOf(branchTemplateField), TEAM_BRANCH.branchTemplate)
+  assert.deepEqual(previewShown(view), ['Preview for WEB-12', 'Branch: team/fix/WEB-12', 'Worktree: web-12-add-dark-mode'])
+  const bar = settingsBar(view)
+  assert.ok(bar)
+  assert.equal(bar.type, 'Callout')
+  assertProps(bar, { tone: 'warning', title: 'Editing the global branch settings.' })
+  assert.ok(textIn(bar, GLOBAL_BRANCH_WARNING))
+  await view.type(fallbackField, 'feature', { replace: true })
+  await view.type(issueTypeField(1), 'Story', { replace: true })
+  assert.deepEqual(previewShown(view), ['Preview for WEB-12', 'Branch: team/feature/WEB-12', 'Worktree: web-12-add-dark-mode'])
+  await wait(SAVE_DELAY_MS + 200)
+  assert.deepEqual(storedGlobalBranch(host), { ...TEAM_BRANCH, branchTypes: [{ issueType: 'Story', branchType: 'fix' }], branchTypeFallback: 'feature' })
+  assert.deepEqual(storedBranch(host), { branchTemplate: undefined, branchTypes: undefined, branchTypeFallback: undefined, titleExclusion: undefined })
+})
+
+test("turning Global on in a project with its own asks before dropping them: Keep own changes nothing, Use global drops them", async () => {
+  const { view, host } = await showWith({ 'tasks.load': twgReady([web12Tagged()]) }, globalBranchStored({ branchTemplate: 'mine/{{task_key}}' }))
+  await view.press(gear)
+  assert.equal(branchGlobalOn(view), false)
+  assert.equal(settingsBar(view), null)
+  await view.toggle(branchGlobalSwitch)
+  const bar = settingsBar(view)
+  assert.ok(bar)
+  assert.ok(textIn(bar, ADOPT_ASK))
+  assert.deepEqual(buttonsIn(bar), ['Keep own', 'Use global'])
+  assert.equal(branchGlobalOn(view), true)
+  await view.press({ type: 'Button', text: 'Keep own' })
+  assert.equal(branchGlobalOn(view), false)
+  assert.equal(storedBranch(host).branchTemplate, 'mine/{{task_key}}')
+
+  await view.toggle(branchGlobalSwitch)
+  await view.press({ type: 'Button', text: 'Use global' })
+  assert.deepEqual(storedBranch(host), { branchTemplate: undefined, branchTypes: undefined, branchTypeFallback: undefined, titleExclusion: undefined })
+  assert.equal(storedBranchMark(host), 'global')
+  assert.deepEqual(storedGlobalBranch(host), TEAM_BRANCH)
+  assert.equal(branchGlobalOn(view), true)
+  assert.equal(view.valueOf(branchTemplateField), TEAM_BRANCH.branchTemplate)
+  assert.equal(settingsBar(view)?.type, 'Callout')
+})
+
+test('turning Global on in a project whose own equal the global ones switches without asking', async () => {
+  const { view, host } = await showWith({ 'tasks.load': twgReady([]) }, globalBranchStored({ ...TEAM_BRANCH }))
+  await view.press(gear)
+  assert.equal(branchGlobalOn(view), false)
+  await view.toggle(branchGlobalSwitch)
+  assert.equal(branchGlobalOn(view), true)
+  assert.equal(storedBranchMark(host), 'global')
+  assert.equal(settingsBar(view)?.type, 'Callout')
+})
+
+test('turning Global off gives the project a copy at once and says so: the preview stays, and later edits change only the project', async () => {
+  const { view, host } = await showWith({ 'tasks.load': twgReady([web12Tagged()]) }, globalBranchStored())
+  await view.press(gear)
+  const before = previewShown(view)
+  await view.toggle(branchGlobalSwitch)
+  assert.equal(branchGlobalOn(view), false)
+  assert.equal(settingsBar(view), null)
+  assert.ok(view.find({ type: 'Text', text: COPIED_NOTE }))
+  assert.deepEqual(storedBranch(host), { ...TEAM_BRANCH, titleExclusion: undefined })
+  assert.equal(storedBranchMark(host), 'own')
+  assert.deepEqual(previewShown(view), before)
+  await view.type(branchTemplateField, 'x/{{task_key}}', { replace: true })
+  await wait(SAVE_DELAY_MS + 200)
+  assert.equal(storedBranch(host).branchTemplate, 'x/{{task_key}}')
+  assert.deepEqual(storedGlobalBranch(host), TEAM_BRANCH)
+})
+
+/** A host with `data` stored, whose settings writes fail while `failing` says so. */
+function branchHost(data: JsonValue, failing: () => boolean) {
+  let stored = data
+  const host = mockHost({
+    capabilities: ['storage:own', 'workspace:read'],
+    requests: { 'tasks.load': twgReady([web12Tagged()]) },
+    results: {
+      'storage.get': () => ({ value: stored }),
+      'storage.set': (params: { key: string; value: JsonValue }) => {
+        if (failing()) throw hostError('quota_exceeded', 'Storage is full')
+        stored = params.value
+        return { ok: true }
+      }
+    }
+  })
+  return { host, stored: () => stored }
+}
+
+test('a failed switch write shows why and changes nothing, and the next try writes it', async () => {
+  let failing = true
+  const { host, stored } = branchHost(globalBranchStored().settings, () => failing)
+  const view = await mount(panel, { host })
+  await view.press(gear)
+  await view.toggle(branchGlobalSwitch)
+  assert.ok(view.find({ type: 'Callout', text: "Couldn't give this project its own branch settings (quota_exceeded). Try again." }))
+  assert.equal(branchGlobalOn(view), true)
+  assert.deepEqual(stored(), globalBranchStored().settings)
+  failing = false
+  await view.toggle(branchGlobalSwitch)
+  assert.equal(branchGlobalOn(view), false)
+  assert.equal(view.find({ type: 'Callout', text: /^Couldn't/ }), null)
+
+  failing = true
+  await view.press({ type: 'IconButton', label: 'Remove branch type 1' })
+  await view.toggle(branchGlobalSwitch)
+  await view.press({ type: 'Button', text: 'Use global' })
+  assert.ok(view.find({ type: 'Callout', text: "Couldn't use the global branch settings (quota_exceeded). Try again." }))
+  assert.equal(branchGlobalOn(view), false)
+  assert.equal(view.find(issueTypeField(1)), null)
+})
+
+test('a failed Make global leaves the project its own and no global ones', async () => {
+  const { host, stored } = branchHost(twgStored({ site: '', profile: '' }, { branchTemplate: 'mine' }).settings, () => true)
+  const view = await mount(panel, { host })
+  await view.press(gear)
+  await view.toggle(branchGlobalSwitch)
+  await view.press({ type: 'Button', text: 'Make global' })
+  assert.ok(view.find({ type: 'Callout', text: "Couldn't make these branch settings global (quota_exceeded). Try again." }))
+  assert.equal(branchGlobalOn(view), false)
+  assert.deepEqual(stored(), twgStored({ site: '', profile: '' }, { branchTemplate: 'mine' }).settings)
 })
 
 test('a filter that needs the Jira project key shows the message in the list, under the filter row, without opening Project settings', async () => {

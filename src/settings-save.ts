@@ -1,7 +1,7 @@
-// Saving Project settings and what belongs to no project, the global prompt templates and filters: the
-// changes not saved yet, per project, and every read-modify-write of the settings in storage, one at
-// a time. No Orca API: the panel gives it storage and timers, so the tests can hold a read, a write
-// or a timer and settle it by hand.
+// Saving Project settings and what belongs to no project, the global prompt templates, filters and
+// branch settings: the changes not saved yet, per project and to the global branch settings, and
+// every read-modify-write of the settings in storage, one at a time. No Orca API: the panel gives
+// it storage and timers, so the tests can hold a read, a write or a timer and settle it by hand.
 import {
   globalSettings,
   projectSettings,
@@ -9,6 +9,7 @@ import {
   SETTINGS_KEY,
   withGlobalChanges,
   withProjectChanges,
+  type BranchSettings,
   type GlobalChanges,
   type GlobalSettings,
   type ProjectChanges,
@@ -46,17 +47,26 @@ function mergeChanges(earlier: ProjectChanges, later: ProjectChanges): ProjectCh
   return { ...earlier, ...later, providers: { ...earlier.providers, ...later.providers } }
 }
 
-/** Saves Project settings, and what belongs to no project, for the panel: each change of a project
- *  waits with its other pending changes for the timed save, or for a caller that saves now. Every
- *  save writes every project's pending changes, every write keeps what it doesn't change, the
- *  global templates and filters included, and no promise it leaves goes unhandled. Global changes
- *  are written at once, never left pending. */
+/** Saves Project settings, and what belongs to no project, for the panel: each change of a project,
+ *  and each edit of the global branch settings, waits with the other pending changes for the timed
+ *  save, or for a caller that saves now. Every save writes every pending change in one write, every
+ *  write keeps what it doesn't change, everything global included, and no promise it leaves goes
+ *  unhandled. Other global changes are written at once, never left pending. */
 export function settingsSaver({ storage, timers, onSaved, onTimedSaveFailed }: SettingsSaverOptions) {
   /** The changes not saved yet, by project. */
   const pending = new Map<string, ProjectChanges>()
+  /** The edits of the global branch settings not saved yet, by field. */
+  let pendingBranch: BranchSettings | null = null
   const writes = serialQueue()
   /** The timer of the timed save, while one is pending. */
   let timer: unknown = null
+
+  /** `settings` with `changes`, by project, and `branch`, edits of the global branch settings, on
+   *  top. */
+  function withChanges(settings: Settings, changes: ReadonlyMap<string, ProjectChanges>, branch: BranchSettings | null): Settings {
+    for (const [projectId, project] of changes) settings = withProjectChanges(settings, projectId, project)
+    return branch ? withGlobalChanges(settings, { branch: { ...globalSettings(settings).branch, ...branch } }) : settings
+  }
 
   /** Stops the timer of a pending save, for a save that runs sooner. */
   function cancelTimer(): void {
@@ -64,19 +74,23 @@ export function settingsSaver({ storage, timers, onSaved, onTimedSaveFailed }: S
     timer = null
   }
 
-  /** Saves every project's pending changes in one write. A failed write puts them back, under the
-   *  changes made meanwhile, while `keepOnFailure`. Only through `writes`, and never given to it
-   *  bare: the queue would pass the previous task's result as `keepOnFailure`. */
+  /** Saves every project's pending changes, and the pending edits of the global branch settings on
+   *  top of those stored, in one write. A failed write puts them back, under the changes made
+   *  meanwhile, while `keepOnFailure`. Only through `writes`, and never given to it bare: the queue
+   *  would pass the previous task's result as `keepOnFailure`. */
   async function savePending(keepOnFailure: boolean): Promise<void> {
-    if (pending.size === 0) return
+    if (pending.size === 0 && pendingBranch === null) return
     const toSave = new Map(pending)
+    const branchToSave = pendingBranch
     pending.clear()
+    pendingBranch = null
     try {
-      let settings = readSettings(await storage.get(SETTINGS_KEY))
-      for (const [projectId, changes] of toSave) settings = withProjectChanges(settings, projectId, changes)
-      await storage.set(SETTINGS_KEY, settings)
+      await storage.set(SETTINGS_KEY, withChanges(readSettings(await storage.get(SETTINGS_KEY)), toSave, branchToSave))
     } catch (error) {
-      if (keepOnFailure) for (const [projectId, changes] of toSave) pending.set(projectId, mergeChanges(changes, pending.get(projectId) ?? {}))
+      if (keepOnFailure) {
+        for (const [projectId, changes] of toSave) pending.set(projectId, mergeChanges(changes, pending.get(projectId) ?? {}))
+        if (branchToSave) pendingBranch = { ...branchToSave, ...(pendingBranch ?? {}) }
+      }
       throw error
     }
     onSaved()
@@ -99,12 +113,25 @@ export function settingsSaver({ storage, timers, onSaved, onTimedSaveFailed }: S
     writes(() => savePending(true)).catch(onTimedSaveFailed)
   }
 
+  /** Times a save of the pending changes, from now. */
+  function timeSave(): void {
+    cancelTimer()
+    timer = timers.setTimeout(saveOnTimer, SAVE_DELAY_MS)
+  }
+
   return {
     /** Keeps `changes` with the project's other pending changes, later ones on top, and times a save. */
     change(projectId: string, changes: ProjectChanges): void {
       pending.set(projectId, mergeChanges(pending.get(projectId) ?? {}, changes))
-      cancelTimer()
-      timer = timers.setTimeout(saveOnTimer, SAVE_DELAY_MS)
+      timeSave()
+    },
+
+    /** Keeps `changes` to the global branch settings with the other pending edits of them, later
+     *  ones on top, and times a save, which writes them on top of the global branch settings as
+     *  stored. */
+    changeGlobalBranch(changes: BranchSettings): void {
+      pendingBranch = { ...pendingBranch, ...changes }
+      timeSave()
     },
 
     /** Saves every pending change now, after every write asked for before, for a caller that
@@ -131,7 +158,14 @@ export function settingsSaver({ storage, timers, onSaved, onTimedSaveFailed }: S
       })
     },
 
-    /** The save when the panel closes. A failure drops the changes it saved, since no panel is left
+    /** `settings`, as read from storage, with every pending change on top, as the panel shows them:
+     *  a project shown while an edit of the global branch settings waits shows that edit. */
+    withPending(settings: Settings): Settings {
+      return withChanges(settings, pending, pendingBranch)
+    },
+
+    /** The save when the panel closes.
+ A failure drops the changes it saved, since no panel is left
      *  to show it or to save them again, and rejects nowhere. */
     unload(): void {
       cancelTimer()
