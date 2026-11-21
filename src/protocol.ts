@@ -73,9 +73,6 @@ export type PromptTemplate = {
   name: string
   /** '': the prompt is the task URL. */
   text: string
-  /** The template's New worktree switch. false: Run here, in the worktree selected in Orca, stands
-   *  out on its tasks' cards; undefined, as every template stored before it: Start does. */
-  newWorktree?: false
 }
 
 export type ProjectSettings = {
@@ -239,19 +236,19 @@ function readBranchSettings(raw: Record<string, unknown>): BranchSettings {
   return branch
 }
 
-/** The stored templates of the expected shape, in order, with `newWorktree` only when it is false.
- *  A template whose id or name, ignoring case, an earlier one already has is dropped too. */
+/** The stored templates of the expected shape, in order, with only their id, name and text: any
+ *  other field, such as the `newWorktree` an earlier version stored, is dropped. A template whose
+ *  id or name, ignoring case, an earlier one already has is dropped too. */
 function readTemplates(raw: unknown): PromptTemplate[] {
   const templates: PromptTemplate[] = []
   if (!Array.isArray(raw)) return templates
   for (const item of raw) {
     if (!isRecord(item)) continue
-    const runsHere = item.newWorktree === false
     if (!strings(item, 'id', 'name', 'text')) continue
     const name = item.name.trim()
     if (item.id === '' || name === '') continue
     if (templates.some((template) => template.id === item.id || sameTemplateName(template.name, name))) continue
-    templates.push({ id: item.id, name, text: item.text, ...(runsHere ? { newWorktree: false as const } : {}) })
+    templates.push({ id: item.id, name, text: item.text })
   }
   return templates
 }

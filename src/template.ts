@@ -65,13 +65,6 @@ export function findTemplate(settings: TemplateSettings, global: readonly Prompt
   return projectTemplates(settings, global).find((template) => template.id === id)
 }
 
-/** Whether `template`'s New worktree switch is on, as it is unless it stores `newWorktree: false`:
- *  its tasks launch in a new worktree by default, so Start stands out on their cards rather than
- *  Run here. */
-export function launchesNewWorktree(template: PromptTemplate): boolean {
-  return template.newWorktree !== false
-}
-
 /** `templates` with `template` in its place when one has its id, else at the end. */
 function withReplaced(templates: readonly PromptTemplate[], template: PromptTemplate): PromptTemplate[] {
   const known = templates.some((candidate) => candidate.id === template.id)
@@ -86,7 +79,7 @@ export type TemplateSaveOptions = { isGlobal: boolean; isDefault: boolean; fresh
 /** A Save of a template: the template's id after it, and what it stores, or why it is refused. */
 export type TemplateSave = { ok: true; id: string; write: TemplateWrite } | { ok: false; message: string }
 
-/** `template` saved, its name trimmed and its New worktree setting as given, among the project's
+/** `template` saved, its name trimmed, among the project's
  *  own templates or, when `isGlobal`, the global ones, in one write: in its place when that group has it, else at the end, also when
  *  neither group holds it any more, as after another project deleted it. A template the other group
  *  holds moves, with its id, to the end of this one, so the project's default template

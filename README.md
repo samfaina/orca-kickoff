@@ -53,7 +53,7 @@ A card that can start has, in its last row, the template `Select` (with two temp
 - **Run here** (the terminal button) launches the agent in the worktree you selected in Orca, without a new worktree (see [Run here](#run-here)).
 - **Start** (the play button), at the end of the row, as above.
 
-The button the chosen template's [New worktree](#the-prompt-templates-view) setting names stands out, filled with the accent color, and the other is plain: Start when the setting is on, Run here when it is off. Choosing another template in the `Select` moves it. Both can be pressed, so pressing the plain one launches it this once: it never changes the template, and Kickoff remembers nothing of it. With the agent choice **No agent**, the card has no Run here, and Start stands out.
+Both buttons look the same, whichever template is chosen. With the agent choice **No agent**, the card has no Run here, only Start.
 
 **Project settings** also hold, under **Start**:
 
@@ -68,7 +68,7 @@ GitHub lists up to 100 tasks per query, and Orca's Jira connection up to 100 per
 
 ### Run here
 
-Some templates run a skill that creates its own linked worktree, such as one that ships tickets with Orca workers and runs `orca worktree create --issue <n>` itself. A Start would create a worktree first, so the task would get two, and the agent would run in the first for nothing. **Run here**, the terminal button before Start on the card, hands the filled prompt to a new agent in the worktree selected in Orca's sidebar, as it is. It stands out on the cards of a template whose New worktree setting is off:
+Some templates run a skill that creates its own linked worktree, such as one that ships tickets with Orca workers and runs `orca worktree create --issue <n>` itself. A Start would create a worktree first, so the task would get two, and the agent would run in the first for nothing. **Run here**, the terminal button before Start on the card, hands the filled prompt to a new agent in the worktree selected in Orca's sidebar, as it is:
 
 1. it checks that a worktree is selected, that it belongs to the listed project, that the task has no worktree yet, and that the project's agent choice gives an agent;
 2. it fills the prompt from the chosen template, with `{{branch}}` the selected worktree's current branch, only as text;
@@ -151,10 +151,9 @@ Only blank lines may come before the command, and the worktree the agent runs in
 A project can have several prompt templates, each with a name, its own and the [global](#global-templates) ones. **Prompt templates** (the layers button in the panel's header, between Reload tasks and Project settings) and **Manage templates** in Project settings open the view in place of the panel, on the default template. **Cancel** and **Save** go back where it was opened from: the task list or Project settings.
 
 - **Template**, under the title, chooses the template to edit, among every template of the project, its own first, then the global ones, marked **(Global)**; **+** beside it starts a new one. Choosing another, or **+**, while the form has changes not saved yet, asks first in the bar at the bottom: *Discard your changes to …?* **Keep editing** keeps them; **Discard** opens the other one. Without changes it opens at once.
-- **The form**: **Name**, the **Global** switch, the **Default template** switch, the **New worktree** switch, **Text**, the **Variables** and how to run a skill.
-- **Save** stores the name, the text, Global, Default template and New worktree at once, in one write, and leaves the view; it waits while the bar at the bottom asks a question. **Cancel** drops all of it.
+- **The form**: **Name**, the **Global** switch, the **Default template** switch, **Text**, the **Variables** and how to run a skill.
+- **Save** stores the name, the text, Global and Default template at once, in one write, and leaves the view; it waits while the bar at the bottom asks a question. **Cancel** drops all of it.
 - **Default template**: on, **Save** makes the template the project's default. On the current default it is on and can't be turned off: the default changes by turning it on in another template.
-- **New worktree**: on, **Start** stands out on the template's task cards; off, [Run here](#run-here) does, which runs in the worktree selected in Orca, without a new worktree. It is on for a new template and for every template saved before it existed, and moves with the template between the project and the global templates. A card's other button launches the other one, once.
 - **Delete template**, in the bar at the bottom, which stays in place while the form scrolls, removes the template after a second click, and the view shows the default template. A project keeps at least one template, own or global. Deleting the default template makes the first one listed the default.
 
 Closing the panel, or changing the active project, drops what wasn't saved.

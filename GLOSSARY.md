@@ -61,7 +61,7 @@ Asking the tracker for the tasks of the filter shown that match the user's words
 _Avoid_: Search (alone), remote search, query
 
 **Prompt template**:
-A named text with task variables that becomes the prompt given to the agent of a Start or a Run here. A project has one or more, its own and the global ones; no two of its own share a name, nor two global ones. Each Start or Run here uses the one the user chooses for that task. Each prompt template also says which of Start and Run here stands out on the task's card; the user can press the other one for that launch only.
+A named text with task variables that becomes the prompt given to the agent of a Start or a Run here. A project has one or more, its own and the global ones; no two of its own share a name, nor two global ones. Each Start or Run here uses the one the user chooses for that task.
 _Avoid_: Prompt (that is the filled-in result)
 
 **Global**:

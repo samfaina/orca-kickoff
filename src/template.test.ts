@@ -4,7 +4,6 @@ import {
   buildPrompt,
   defaultTemplate,
   INITIAL_TEMPLATE_TEXT,
-  launchesNewWorktree,
   ownTemplates,
   projectTemplates,
   TEMPLATE_VARIABLE_DESCRIPTIONS,
@@ -315,30 +314,6 @@ test('saving a global template as own moves it to the end of the active project,
     id: 't-review',
     write: { project: { templates: [{ ...review, text: '' }], defaultTemplateId: 't-review' }, global: { templates: [] } }
   })
-})
-
-test('a Save keeps New worktree as the template gives it: off stays off in its place and through a move either way, on drops the field', () => {
-  const ship = { id: 't-ship', name: 'Ship', text: '/ship-tickets {{task_key}}', newWorktree: false as const }
-  const settings = { templates: [implement, ship], defaultTemplateId: 't-impl' }
-  assert.deepEqual(savedWrite(withTemplateSaved(settings, [review], { ...ship, text: 'x' }, asOwn)).project.templates, [implement, { ...ship, text: 'x' }])
-  assert.deepEqual(savedWrite(withTemplateSaved(settings, [review], ship, asGlobal)), {
-    project: { templates: [implement], defaultTemplateId: 't-impl' },
-    global: { templates: [review, ship] }
-  })
-  assert.deepEqual(savedWrite(withTemplateSaved({ templates: [implement] }, [ship], ship, asOwn)), {
-    project: { templates: [implement, ship], defaultTemplateId: 't-impl' },
-    global: { templates: [] }
-  })
-  const { newWorktree: _, ...turnedOn } = ship
-  assert.deepEqual(savedWrite(withTemplateSaved(settings, [], turnedOn, asOwn)).project.templates, [implement, turnedOn])
-  // The initial template made global with New worktree off keeps it under its new id.
-  const initial = { id: 'default', name: 'Default', text: 'Complete {{task_key}}: {{task_url}}', newWorktree: false as const }
-  assert.deepEqual(savedWrite(withTemplateSaved({}, [], initial, asGlobal)).global.templates, [{ ...initial, id: 't-fresh' }])
-})
-
-test('a template launches its tasks in a new worktree unless it stores newWorktree: false', () => {
-  assert.equal(launchesNewWorktree(implement), true)
-  assert.equal(launchesNewWorktree({ ...implement, newWorktree: false }), false)
 })
 
 test('a move whose name, as saved, the destination group already has, ignoring case, is refused with a message', () => {

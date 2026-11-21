@@ -283,17 +283,17 @@ test('stored templates are kept in order, with their default template', () => {
   assert.deepEqual(readTemplates({ providers: {}, templates, defaultTemplateId: 't-triage', template: 'ignored' }), { templates, defaultId: 't-triage' })
 })
 
-test('a template keeps New worktree off as newWorktree: false, own or global; stored without it, or with any other value, it is on', () => {
-  const runHere = { id: 't-ship', name: 'Ship', text: '/ship-tickets {{task_key}}', newWorktree: false }
-  const others = [
+test('a stored newWorktree field is dropped, whatever its value, own or global', () => {
+  const stored = [
+    { id: 't-ship', name: 'Ship', text: '/ship-tickets {{task_key}}', newWorktree: false },
     { id: 't-impl', name: 'Implement', text: 'a' },
     { id: 't-on', name: 'On', text: 'b', newWorktree: true },
     { id: 't-odd', name: 'Odd', text: 'c', newWorktree: 'no' }
   ]
-  const plain = others.map(({ id, name, text }) => ({ id, name, text }))
-  assert.deepEqual(readTemplates({ providers: {}, templates: [runHere, ...others] }).templates, [runHere, ...plain])
-  const read = readSettings({ version: 1, projects: {}, global: { templates: [runHere, ...others] } })
-  assert.deepEqual(globalTemplates(read), [runHere, ...plain])
+  const plain = stored.map(({ id, name, text }) => ({ id, name, text }))
+  assert.deepEqual(readTemplates({ providers: {}, templates: stored }).templates, plain)
+  const read = readSettings({ version: 1, projects: {}, global: { templates: stored } })
+  assert.deepEqual(globalTemplates(read), plain)
 })
 
 test('an unknown or missing defaultTemplateId gives the first template as the default', () => {

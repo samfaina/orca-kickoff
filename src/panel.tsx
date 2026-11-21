@@ -106,7 +106,6 @@ import {
   defaultTemplate,
   INITIAL_TEMPLATE_TEXT,
   JIRA_PROJECT_VARIABLE,
-  launchesNewWorktree,
   projectTemplates,
   TEMPLATE_VARIABLE_DESCRIPTIONS,
   TEMPLATE_VARIABLES,
@@ -300,9 +299,6 @@ type TemplateDraft = {
   global: boolean
   /** Whether Save makes the template the project's default template. */
   isDefault: boolean
-  /** The New worktree switch: whether Start stands out on the template's task cards rather than
-   *  Run here. */
-  newWorktree: boolean
   /** Global was turned off on a global template, and the bar asks to confirm it. */
   confirmingOwn: boolean
   /** Another template, or a new one (`id: null`), was chosen while the draft had changes, and the
@@ -376,17 +372,6 @@ function chosenTemplateId(shown: ShownSettings, taskKey: string): string {
   const chosen = read(cardTemplates)[cardKey(shown.projectId, taskKey)]
   return shown.templates.some((template) => template.id === chosen) ? chosen : shown.defaultTemplateId
 }
-
-/** Whether the card's Start stands out rather than its Run here: the New worktree setting of its
- *  chosen template. A project whose agent choice is "No agent" has no Run here, so Start does. */
-function startStandsOut(shown: ShownSettings, taskKey: string): boolean {
-  if (shown.agent === 'none') return true
-  const template = shown.templates.find((candidate) => candidate.id === chosenTemplateId(shown, taskKey))
-  return template ? launchesNewWorktree(template) : true
-}
-
-/** A card's launch button as it stands out, solid accent, or not, ghost. */
-const emphasis = (standsOut: boolean) => (standsOut ? ({ variant: 'solid', tone: 'accent' } as const) : ({ variant: 'ghost' } as const))
 
 /** The project's templates as `Select` options, the global ones marked. */
 const templateOptions = (templates: ListedTemplate[]) =>
@@ -876,18 +861,17 @@ function openTemplate(id: string | null, origin: TemplatesOrigin): boolean {
 }
 
 /** What Save stores of a template, as the view's draft holds it. */
-type TemplateFields = Pick<TemplateDraft, 'name' | 'text' | 'global' | 'isDefault' | 'newWorktree'>
+type TemplateFields = Pick<TemplateDraft, 'name' | 'text' | 'global' | 'isDefault'>
 
 /** A new template as it opens. */
-const NEW_TEMPLATE_FIELDS: TemplateFields = { name: '', text: INITIAL_TEMPLATE_TEXT, global: false, isDefault: false, newWorktree: true }
+const NEW_TEMPLATE_FIELDS: TemplateFields = { name: '', text: INITIAL_TEMPLATE_TEXT, global: false, isDefault: false }
 
 /** A listed template as Save would store it again. */
 const templateFields = (template: ListedTemplate, shown: ShownSettings): TemplateFields => ({
   name: template.name,
   text: template.text,
   global: template.global,
-  isDefault: template.id === shown.defaultTemplateId,
-  newWorktree: launchesNewWorktree(template)
+  isDefault: template.id === shown.defaultTemplateId
 })
 
 /** The draft's template as the shown project lists it, or undefined for a new one or one gone. */
@@ -967,7 +951,7 @@ function closeTemplate(): void {
   set(templateDraft, null)
 }
 
-/** Save: stores the draft's name, text, Global, Default template and New worktree in one write,
+/** Save: stores the draft's name, text, Global and Default template in one write,
  *  then goes back to the view it was opened from, unless its name can't be saved or the bar under
  *  the form is asking a question. A template whose Global changed moves; a move refused, because the destination has the name, or a failed write, changes nothing
  *  and keeps the draft with the reason. Pending Project settings are saved first, so the change
@@ -980,7 +964,7 @@ async function saveTemplate(): Promise<void> {
   if (templateNameProblem(shown.templates, draft.name, draft.id, draft.global) !== null) return
   cancelConfirmDelete()
   changeTemplateDraft(draft, { saving: true, error: null, confirmingDelete: false })
-  const template: PromptTemplate = { id: draft.id, name: draft.name, text: draft.text, ...(draft.newWorktree ? {} : { newWorktree: false }) }
+  const template: PromptTemplate = { id: draft.id, name: draft.name, text: draft.text }
   const options = { isGlobal: draft.global, isDefault: draft.isDefault, freshId: newId('t', shown.templates) }
   let saved: TemplateSave
   try {
@@ -1088,14 +1072,6 @@ function switchDefault(expected: TemplateDraft, on: boolean): void {
   if (!draft || !isSameDraft(draft, expected) || draft.saving) return
   cancelConfirmDelete()
   changeTemplateDraft(draft, { isDefault: on, confirmingDelete: false, error: null })
-}
-
-/** The New worktree switch, kept in the draft for Save. */
-function switchNewWorktree(expected: TemplateDraft, on: boolean): void {
-  const draft = read(templateDraft)
-  if (!draft || !isSameDraft(draft, expected) || draft.saving) return
-  cancelConfirmDelete()
-  changeTemplateDraft(draft, { newWorktree: on, confirmingDelete: false, error: null })
 }
 
 /** Chooses the project's provider, saves it with its configuration and lists its tasks. */
@@ -2501,7 +2477,6 @@ function TaskCard({ task, projectId, worktrees }: { task: Task; projectId: strin
   const settings = shown?.projectId === projectId ? shown : null
   // Until the project's settings show, the agent choice is unknown, so the card offers only Start.
   const offersRunHere = settings !== null && settings.agent !== 'none'
-  const solidStart = settings ? startStandsOut(settings, task.key) : true
   const error = read(taskErrors)[task.key]
   const assignees = assigneeLine(task)
   const agent = worktree ? agentLine(worktree, read(agentStarting)[task.key] === projectId) : null
@@ -2544,7 +2519,7 @@ function TaskCard({ task, projectId, worktrees }: { task: Task; projectId: strin
               <IconButton
                 key={`run-here:${task.key}`}
                 icon="terminal"
-                {...emphasis(!solidStart)}
+                variant="outline"
                 label={`Run ${task.key} here`}
                 tooltip="Run here, in the selected worktree"
                 disabled={worktrees === null}
@@ -2556,7 +2531,7 @@ function TaskCard({ task, projectId, worktrees }: { task: Task; projectId: strin
             <IconButton
               key={`start:${task.key}`}
               icon="play"
-              {...emphasis(solidStart)}
+              variant="outline"
               label={`Start ${task.key}`}
               tooltip="Start in a new worktree"
               disabled={worktrees === null}
@@ -2663,12 +2638,6 @@ function TemplatesView({ draft, shown, projectName }: { draft: TemplateDraft; sh
             {isCurrentDefault
               ? "Tasks start with it unless you choose another template on their card. To change the default, turn this on in another template."
               : 'Tasks start with the default template unless you choose another one on their card.'}
-          </Text>
-        </Stack>
-        <Stack gap="xs">
-          <Switch label="New worktree" checked={draft.newWorktree} disabled={draft.saving} onChange={(on) => switchNewWorktree(draft, on)} />
-          <Text size="sm" muted>
-            Off: tasks launched with this template run here, in the worktree selected in Orca, without a new worktree.
           </Text>
         </Stack>
         <Stack gap="xs">
