@@ -1000,7 +1000,7 @@ const shipTemplate = (project: Record<string, unknown> = {}) => ({
     projects: {
       'github:acme/web': {
         providers: {},
-        templates: [{ id: 't-ship', name: 'Ship', text: '/ship-tickets {{task_key}} on {{branch}} in {{repo}}', newWorktree: false }],
+        templates: [{ id: 't-ship', name: 'Ship', text: '/ship-tickets {{task_key}} on {{branch}} in {{repo}}' }],
         ...project
       }
     }

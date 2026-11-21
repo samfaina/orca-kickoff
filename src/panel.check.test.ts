@@ -98,21 +98,24 @@ test('global-templates opens the Prompt templates view from the header on the de
   assert.deepEqual(shown.warnings, [])
 })
 
-test('run-here shows Run here solid and Start ghost on the cards of a template with New worktree off, with no switch, and Start solid once a card chooses another template', async () => {
+test('run-here shows Run here and Start on every card, both outline with no tone, also once a card chooses another template, and no New worktree switch', async () => {
   const shown = await render('run-here')
-  const runs = shown.findAll({ role: 'button', label: /^Run #\d+ here$/ })
-  const starts = shown.findAll({ role: 'button', label: /^Start #\d+$/ })
+  const outline = (button: { props: Record<string, unknown> }) => button.props.variant === 'outline' && button.props.tone === undefined
+  const buttons = () => ({
+    runs: shown.findAll({ role: 'button', label: /^Run #\d+ here$/ }),
+    starts: shown.findAll({ role: 'button', label: /^Start #\d+$/ })
+  })
+  const { runs, starts } = buttons()
   assert.equal(runs.length, 3)
   assert.equal(starts.length, 3)
   assert.ok([...runs, ...starts].every((button) => !button.disabled))
-  assert.ok(runs.every((run) => run.props.variant === 'solid' && run.props.tone === 'accent'))
-  assert.ok(starts.every((start) => start.props.variant === 'ghost'))
+  assert.ok([...runs, ...starts].every(outline))
   assert.equal(shown.find({ type: 'Switch' }), null)
   await shown.select({ type: 'Select', label: 'Template for #41' }, 'fix')
-  assert.equal(shown.find({ role: 'button', label: 'Start #41' })?.props.variant, 'solid')
-  assert.equal(shown.find({ role: 'button', label: 'Run #41 here' })?.props.variant, 'ghost')
+  const after = buttons()
+  assert.ok([...after.runs, ...after.starts].every(outline))
   await shown.press({ type: 'IconButton', label: 'Prompt templates' })
-  assert.equal(shown.find({ type: 'Switch', label: 'New worktree' })?.props.checked, false)
+  assert.equal(shown.find({ type: 'Switch', label: 'New worktree' }), null)
 })
 
 test('jira-started shows started tasks with their worktree and agent, one starting, and Load more', async () => {

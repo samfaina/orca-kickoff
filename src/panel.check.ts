@@ -215,9 +215,9 @@ export default defineCheck({
     },
     requests: answers(ready(web, 'github', githubTasks))
   },
-  // The default template has New worktree off, so the cards show Run here solid and Start ghost,
-  // beside the template Select. The Prompt templates view opens on it with its New worktree switch
-  // off.
+  // Two templates, the default one running a skill that creates its own worktree: the cards show
+  // Run here and Start, both outline, beside the template Select. The Prompt templates view opens
+  // on it, with no New worktree switch.
   'run-here': {
     storage: {
       settings: {
@@ -226,7 +226,7 @@ export default defineCheck({
           [web.id]: {
             providers: {},
             templates: [
-              { id: 'ship', name: 'Ship', text: '/ship-tickets {{task_key}}', newWorktree: false },
+              { id: 'ship', name: 'Ship', text: '/ship-tickets {{task_key}}' },
               { id: 'fix', name: 'Fix', text: 'Fix {{task_key}}' }
             ],
             defaultTemplateId: 'ship'
