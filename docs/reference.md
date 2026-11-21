@@ -468,6 +468,7 @@ To try this from Git Bash, set `MSYS_NO_PATHCONV=1`: otherwise MSYS turns an arg
 - **`--focus`.** Without it the tab opens without switching to it. With it, the launch made its worktree the active one in `worktree ps`, where another worktree had been active before. That the new tab is shown inside Orca was not seen **[Assumed]**; for a Run here the worktree is already the active one.
 - **Prompt.** Delivered as `worktree create --prompt` delivers it (see [Skill commands in `--prompt`](#skill-commands-in---prompt)).
 - **Lost reply.** If the reply is lost, Orca asks to run the same command again with `--retry-launch <operationId>` from the error, never as a fresh launch **[Verified]** (`--help`). Kickoff doesn't retry.
+- **Oldest Orca.** Neither `--help` nor the plugin docs say which Orca version added `orca agent launch`, and 1.4.265 is the oldest it was tried with. So since Kickoff 0.5.0, the first release with Run here, `engines.orca` is `>=1.4.265`. Whether an older Orca has the command is not known **[Assumed]**.
 
 ### `orca worktree activate --worktree id:<id> --json`
 

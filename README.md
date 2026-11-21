@@ -6,7 +6,7 @@ Inspired by [rr235/orca-task-launcher](https://github.com/rr235/orca-task-launch
 
 ## Requirements
 
-- **Orca 1.4.255 or later.**
+- **Orca 1.4.265 or later.**
 - For **GitHub** projects: the [GitHub CLI](https://cli.github.com) (`gh`), logged in with `gh auth login`.
 - For **Jira**, one of:
   - Orca's own Jira connection, set up in Orca's settings; or

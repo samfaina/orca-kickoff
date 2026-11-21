@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "kickoff",
   "name": "Kickoff",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Lists open tasks from Jira or GitHub and starts each one in its own linked worktree, with an agent and per-project prompt templates.",
   "license": "MIT",
   "icon": "assets/icon.png",
@@ -11,7 +11,7 @@
     "alt": "Kickoff with the line \"Your prompt templates, one click from any GitHub or Jira task.\" and an arrow to the open template menu in its panel."
   },
   "engines": {
-    "orca": ">=1.4.255"
+    "orca": ">=1.4.265"
   },
   "execution": "trusted-worker",
   "pluginApi": 1,
