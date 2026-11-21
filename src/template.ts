@@ -65,8 +65,9 @@ export function findTemplate(settings: TemplateSettings, global: readonly Prompt
   return projectTemplates(settings, global).find((template) => template.id === id)
 }
 
-/** Whether a task launched with `template` gets a Start, in a new worktree, rather than a Run here:
- *  its New worktree switch, on unless it stores `newWorktree: false`. */
+/** Whether `template`'s New worktree switch is on, as it is unless it stores `newWorktree: false`:
+ *  its tasks launch in a new worktree by default, so Start stands out on their cards rather than
+ *  Run here. */
 export function launchesNewWorktree(template: PromptTemplate): boolean {
   return template.newWorktree !== false
 }

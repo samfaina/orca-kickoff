@@ -75,7 +75,6 @@ import {
   projectSettings,
   providerConfig,
   readSettings,
-  RUN_HERE_NEEDS_AGENT,
   SETTINGS_KEY,
   trackerOf,
   type BranchSettings,
@@ -301,7 +300,8 @@ type TemplateDraft = {
   global: boolean
   /** Whether Save makes the template the project's default template. */
   isDefault: boolean
-  /** The New worktree switch: whether the template's tasks get a Start rather than a Run here. */
+  /** The New worktree switch: whether Start stands out on the template's task cards rather than
+   *  Run here. */
   newWorktree: boolean
   /** Global was turned off on a global template, and the bar asks to confirm it. */
   confirmingOwn: boolean
@@ -355,11 +355,6 @@ const taskErrors = atom<Record<string, string>>({})
  *  stored; a card whose template no longer exists shows the default template again. */
 const cardTemplates = atom<Record<string, string>>({})
 
-/** The New worktree switch as changed on each card for its next launch, by project and task key,
- *  while the panel is open. Never stored, and never written to the template: a launch, or another
- *  template chosen on the card, drops it, so the card shows its template's setting again. */
-const cardNewWorktree = atom<Record<string, boolean>>({})
-
 /** Cards whose Run here hasn't answered yet, by project and task key. */
 const runningHere = atom<Record<string, true>>({})
 /** The Run here of each card in `runningHere`, so a second press joins it. */
@@ -382,21 +377,16 @@ function chosenTemplateId(shown: ShownSettings, taskKey: string): string {
   return shown.templates.some((template) => template.id === chosen) ? chosen : shown.defaultTemplateId
 }
 
-/** Whether the card's next launch is a Start, in a new worktree, rather than a Run here: its New
- *  worktree switch as changed for that launch, else the setting of its chosen template. A project
- *  whose agent choice is "No agent" always starts. */
-function cardLaunchesNewWorktree(shown: ShownSettings, taskKey: string): boolean {
+/** Whether the card's Start stands out rather than its Run here: the New worktree setting of its
+ *  chosen template. A project whose agent choice is "No agent" has no Run here, so Start does. */
+function startStandsOut(shown: ShownSettings, taskKey: string): boolean {
   if (shown.agent === 'none') return true
-  const changed = read(cardNewWorktree)[cardKey(shown.projectId, taskKey)]
-  if (changed !== undefined) return changed
   const template = shown.templates.find((candidate) => candidate.id === chosenTemplateId(shown, taskKey))
   return template ? launchesNewWorktree(template) : true
 }
 
-/** Drops the card's change of its New worktree switch. */
-function dropCardNewWorktree(projectId: string, taskKey: string): void {
-  update(cardNewWorktree, ({ [cardKey(projectId, taskKey)]: _, ...rest }) => rest)
-}
+/** A card's launch button as it stands out, solid accent, or not, ghost. */
+const emphasis = (standsOut: boolean) => (standsOut ? ({ variant: 'solid', tone: 'accent' } as const) : ({ variant: 'ghost' } as const))
 
 /** The project's templates as `Select` options, the global ones marked. */
 const templateOptions = (templates: ListedTemplate[]) =>
@@ -1463,13 +1453,6 @@ async function askStart(projectId: string, task: Task): Promise<StartResult> {
   }
 }
 
-/** A card's launch: a Start or a Run here, as its New worktree switch says. The switch's change
- *  applies to this launch only. */
-function launchTask(task: Task, projectId: string, newWorktree: boolean): void {
-  dropCardNewWorktree(projectId, task.key)
-  void (newWorktree ? startTask(task) : runTaskHere(task))
-}
-
 /** Runs the task here with its card's template, or joins the Run here of the card still running,
  *  so two presses launch one agent. The card shows a spinner until the worker answers, then a
  *  failure's message. Kickoff keeps no record of it: a worktree the agent links to the task shows
@@ -1651,7 +1634,6 @@ export function setup(ctx: PanelContext): void {
   lastPolledProjectId = undefined
   set(agentStarting, {})
   set(cardTemplates, {})
-  set(cardNewWorktree, {})
   set(runningHere, {})
   hereRuns.clear()
   set(templateDraft, null)
@@ -2507,19 +2489,19 @@ function assigneeLine(task: Task): string | null {
 }
 
 /** One row per part: the key and the whole title; the worktree, or the status and labels; the
- *  assignees; the agent; the template, New worktree and Start or Run here, while there is no
- *  worktree, with a note when the project has no agent. */
+ *  assignees; the agent; the template, Run here and Start, while there is no worktree. Without an
+ *  agent the row has no Run here. */
 function TaskCard({ task, projectId, worktrees }: { task: Task; projectId: string; worktrees: Record<string, TaskWorktree> | null }) {
   // Every GitHub task is open, so its status says nothing.
   const status = task.tracker !== 'github' ? task.status : null
   const worktree = worktrees?.[task.key] ?? null
   const isStarting = worktree === null && read(starting)[task.key] === true
   const isRunningHere = worktree === null && !isStarting && read(runningHere)[cardKey(projectId, task.key)] === true
-  const canLaunch = worktree === null && !isStarting && !isRunningHere
   const shown = read(shownSettings)
   const settings = shown?.projectId === projectId ? shown : null
-  const noAgent = settings?.agent === 'none'
-  const newWorktree = settings ? cardLaunchesNewWorktree(settings, task.key) : true
+  // Until the project's settings show, the agent choice is unknown, so the card offers only Start.
+  const offersRunHere = settings !== null && settings.agent !== 'none'
+  const solidStart = settings ? startStandsOut(settings, task.key) : true
   const error = read(taskErrors)[task.key]
   const assignees = assigneeLine(task)
   const agent = worktree ? agentLine(worktree, read(agentStarting)[task.key] === projectId) : null
@@ -2557,45 +2539,32 @@ function TaskCard({ task, projectId, worktrees }: { task: Task; projectId: strin
       ) : (
         <Box direction="row" align="center" justify="end" gap="xs">
           <CardTemplate task={task} projectId={projectId} />
-          <Box shrink={false}>
-            <Switch
-              key={`new-worktree:${task.key}`}
-              label="New worktree"
-              checked={newWorktree}
-              disabled={settings === null || noAgent}
-              onChange={(on) => update(cardNewWorktree, (changed) => ({ ...changed, [cardKey(projectId, task.key)]: on }))}
-            />
-          </Box>
-          <Box shrink={false}>
-            {newWorktree ? (
-              <IconButton
-                key={`start:${task.key}`}
-                icon="play"
-                variant="outline"
-                label={`Start ${task.key}`}
-                tooltip="Start"
-                disabled={worktrees === null}
-                onPress={() => launchTask(task, projectId, true)}
-              />
-            ) : (
+          {offersRunHere ? (
+            <Box shrink={false}>
               <IconButton
                 key={`run-here:${task.key}`}
                 icon="terminal"
-                variant="outline"
+                {...emphasis(!solidStart)}
                 label={`Run ${task.key} here`}
-                tooltip="Run here"
+                tooltip="Run here, in the selected worktree"
                 disabled={worktrees === null}
-                onPress={() => launchTask(task, projectId, false)}
+                onPress={() => void runTaskHere(task)}
               />
-            )}
+            </Box>
+          ) : null}
+          <Box shrink={false}>
+            <IconButton
+              key={`start:${task.key}`}
+              icon="play"
+              {...emphasis(solidStart)}
+              label={`Start ${task.key}`}
+              tooltip="Start in a new worktree"
+              disabled={worktrees === null}
+              onPress={() => void startTask(task)}
+            />
           </Box>
         </Box>
       )}
-      {canLaunch && noAgent ? (
-        <Text size="sm" muted>
-          {RUN_HERE_NEEDS_AGENT}
-        </Text>
-      ) : null}
       {isStarting ? (
         <Text size="sm" muted>
           Creating the worktree can take a minute.
@@ -2610,8 +2579,8 @@ function TaskCard({ task, projectId, worktrees }: { task: Task; projectId: strin
   )
 }
 
-/** The card's template `Select`, filling the Start row before the New worktree switch and the
- *  button; only when the project has two or more templates. */
+/** The card's template `Select`, filling the Start row before Run here and Start; only when the
+ *  project has two or more templates. */
 function CardTemplate({ task, projectId }: { task: Task; projectId: string }) {
   const shown = read(shownSettings)
   if (shown?.projectId !== projectId || shown.templates.length < 2) return null
@@ -2622,11 +2591,7 @@ function CardTemplate({ task, projectId }: { task: Task; projectId: string }) {
         labelHidden
         value={chosenTemplateId(shown, task.key)}
         options={templateOptions(shown.templates)}
-        onChange={(id) => {
-          update(cardTemplates, (chosen) => ({ ...chosen, [cardKey(projectId, task.key)]: id }))
-          // The New worktree switch follows the template chosen.
-          dropCardNewWorktree(projectId, task.key)
-        }}
+        onChange={(id) => update(cardTemplates, (chosen) => ({ ...chosen, [cardKey(projectId, task.key)]: id }))}
       />
     </Box>
   )

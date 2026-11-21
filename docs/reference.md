@@ -247,6 +247,7 @@ Layout and sizing, from the generated types and `references/components.md` of `o
 - `ListItem` takes `title`, `description`, `icon`, `current`, `disabled` and `onPress`; with `onPress` the whole row is the press target and can't hold other controls.
 - `IconButton` with `variant="outline"` and `tone="accent"` draws its icon and border in the text color, with no accent **[Verified]** (seen by the maintainer, Orca 1.4.261).
 - `IconButton` with `variant="ghost"` and `tone="danger"` draws its icon in red, as Kickoff's remove-query trash button does **[Verified]** (seen by the maintainer, Orca 1.4.263, issue #87).
+- `IconButton` with `variant="solid"` and `tone="accent"` is filled with the accent color, and with `variant="ghost"` and no tone it draws only its icon, so the two tell a card's Start and Run here apart in the light and dark themes **[Assumed]** (issue #134, for the maintainer to see in Orca). Both are in the generated types' `Variant` and `Tone` **[Verified]** (Orca 1.4.268).
 - There is no menu, popover, dialog or split button. Tooltips exist only as the `tooltip` prop of `Button` and `IconButton`.
 - `orca plugin shot <key> --width <px>` draws the panel at a given width, to check narrow layouts.
 - A plugin panel's tab shows only the panel's icon, with its title as a tooltip **[Verified]** (seen by the maintainer).
