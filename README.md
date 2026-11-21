@@ -53,7 +53,7 @@ A card that can start has, in its last row, the template `Select` (with two temp
 - **Run here** (the terminal button) launches the agent in the worktree you selected in Orca, without a new worktree (see [Run here](#run-here)).
 - **Start** (the play button), at the end of the row, as above.
 
-Both buttons look the same, whichever template is chosen: you pick one for each launch, and Kickoff remembers nothing of it. With the agent choice **No agent**, the card has no Run here, only Start.
+Both buttons look the same, whichever template is chosen. With the agent choice **No agent**, the card has no Run here, only Start.
 
 **Project settings** also hold, under **Start**:
 

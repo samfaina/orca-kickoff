@@ -1173,7 +1173,7 @@ test('with one template, cards show no template Select', async () => {
   assert.ok(view.find({ testId: 'start:#42' }))
 })
 
-/** A template whose skill creates its own worktree, so its tasks are run here. */
+/** A template of the project's own, other than the initial one. */
 const ship = { id: 't-ship', name: 'Ship', text: '/ship-tickets {{task_key}}' }
 
 /** The card's Start and Run here buttons of a task. */

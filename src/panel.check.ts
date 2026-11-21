@@ -215,9 +215,8 @@ export default defineCheck({
     },
     requests: answers(ready(web, 'github', githubTasks))
   },
-  // Two templates, the default one running a skill that creates its own worktree: the cards show
-  // Run here and Start, both outline, beside the template Select. The Prompt templates view opens
-  // on it, with no New worktree switch.
+  // Two templates: the cards show Run here and Start, both outline, beside the template Select.
+  // The Prompt templates view has no New worktree switch.
   'run-here': {
     storage: {
       settings: {
