@@ -559,30 +559,37 @@ test('a card whose worktree runs no agent shows no agent line', async () => {
   assert.equal(elementsIn(cardOf(view, '#42')).length, 2)
 })
 
-test('Start is an outline play icon labelled with the task key, at the end of its row, and disabled without worktrees', async () => {
+test('a card that can start ends its row with Run here, a terminal icon, then Start, a play icon, with no switch; both disabled without worktrees', async () => {
   const view = await show(ready([task('#42')]))
   const start = view.find({ type: 'IconButton', label: 'Start #42' })
   assert.ok(start)
   assert.equal(view.find({ testId: 'start:#42' })?.label, 'Start #42')
-  assert.equal(start.props.icon, 'play')
-  assert.equal(start.props.variant, 'outline')
-  assert.equal(start.props.tone, undefined)
-  assert.equal(start.props.tooltip, 'Start')
+  assertProps(start, { icon: 'play', tooltip: 'Start in a new worktree' })
   assert.equal(start.disabled, false)
+  const run = view.find({ type: 'IconButton', label: 'Run #42 here' })
+  assert.ok(run)
+  assert.equal(view.find({ testId: 'run-here:#42' })?.label, 'Run #42 here')
+  assertProps(run, { icon: 'terminal', tooltip: 'Run here, in the selected worktree' })
+  assert.equal(run.disabled, false)
+  // A template stored without New worktree starts: Start stands out.
+  assertProps(start, { variant: 'solid', tone: 'accent' })
+  assertProps(run, { variant: 'ghost', tone: undefined })
   const [, startRow] = elementsIn(cardOf(view, '#42'))
   assertProps(startRow, { direction: 'row', align: 'center', justify: 'end', gap: 'xs' })
-  // With one template, the New worktree switch, then Start.
-  const [toggle, holder, ...others] = elementsIn(startRow)
-  assertProps(toggle, { shrink: false })
-  assert.deepEqual(nodesIn(toggle, (node) => node.type === 'Switch').map((node) => node.key), ['new-worktree:#42'])
-  assertProps(holder, { shrink: false })
-  assert.equal(holder.children?.length, 1)
+  // With one template, Run here, then Start.
+  const [runHolder, startHolder, ...others] = elementsIn(startRow)
+  assertProps(runHolder, { shrink: false })
+  assert.deepEqual(nodesIn(runHolder, (node) => node.type === 'IconButton').map((node) => node.key), ['run-here:#42'])
+  assertProps(startHolder, { shrink: false })
+  assert.deepEqual(nodesIn(startHolder, (node) => node.type === 'IconButton').map((node) => node.key), ['start:#42'])
   assert.deepEqual(others, [])
+  assert.equal(view.find({ type: 'Switch' }), null)
   assert.equal(view.find({ type: 'Button', text: 'Start' }), null)
   await view.unmount()
 
   const unread = await show(ready([task('#42')], { worktrees: null, worktreesError: 'orca failed.' }))
   assert.equal(unread.find({ type: 'IconButton', label: 'Start #42' })?.disabled, true)
+  assert.equal(unread.find({ type: 'IconButton', label: 'Run #42 here' })?.disabled, true)
 })
 
 test('says when no project is selected', async () => {
@@ -1145,17 +1152,18 @@ test('Start uses the template chosen on the card, or the default template when n
   assert.deepEqual(view.warnings, [])
 })
 
-test('with two templates, the template Select fills the Start row before the New worktree switch and the Start icon', async () => {
+test('with two templates, the template Select fills the Start row before Run here and Start', async () => {
   const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
   const [, startRow] = elementsIn(cardOf(view, '#42'))
-  const [select, toggle, start, ...rest] = elementsIn(startRow)
+  const [select, run, start, ...rest] = elementsIn(startRow)
   assertProps(select, { grow: true, minWidth: 0 })
   assert.deepEqual(nodesIn(select, (node) => node.type === 'Select').map((node) => node.props?.label), ['Template for #42'])
-  assertProps(toggle, { shrink: false })
-  assert.deepEqual(nodesIn(toggle, (node) => node.type === 'Switch').map((node) => node.props?.label), ['New worktree'])
+  assertProps(run, { shrink: false })
+  assert.equal(nodesIn(run, (node) => node.key === 'run-here:#42').length, 1)
   assertProps(start, { shrink: false })
-  assert.deepEqual(rest, [])
   assert.equal(nodesIn(start, (node) => node.key === 'start:#42').length, 1)
+  assert.deepEqual(rest, [])
+  assert.equal(view.find({ type: 'Switch' }), null)
   assert.deepEqual(view.warnings, [])
 })
 
@@ -1165,73 +1173,71 @@ test('with one template, cards show no template Select', async () => {
   assert.ok(view.find({ testId: 'start:#42' }))
 })
 
-/** A template whose tasks get a Run here. */
+/** A template whose task cards make Run here stand out. */
 const ship = { id: 't-ship', name: 'Ship', text: '/ship-tickets {{task_key}}', newWorktree: false }
 
-/** The card's New worktree switch of a task, and its Run here button. */
-const cardSwitch = (key: string) => ({ testId: `new-worktree:${key}` })
+/** The card's Start and Run here buttons of a task. */
+const startButton = (key: string) => ({ testId: `start:${key}` })
 const runHereButton = (key: string) => ({ testId: `run-here:${key}` })
 
-test('a template with New worktree off makes its cards offer Run here, a terminal icon, with the switch off; one stored without it offers Start', async () => {
-  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, stored({ templates: [ship, implement], defaultTemplateId: 't-ship' }))
-  const toggle = view.find(cardSwitch('#42'))
-  assert.equal(toggle?.type, 'Switch')
-  assert.equal(toggle?.label, 'New worktree')
-  assert.equal(toggle?.props.checked, false)
-  assert.equal(toggle?.disabled, false)
-  const run = view.find({ type: 'IconButton', label: 'Run #42 here' })
-  assert.ok(run)
-  assert.equal(view.find(runHereButton('#42'))?.label, 'Run #42 here')
-  assertProps(run, { icon: 'terminal', variant: 'outline', tooltip: 'Run here' })
-  assert.equal(view.find({ testId: 'start:#42' }), null)
+/** How the card's Start and Run here look: `solid` for solid accent, `ghost` for ghost with no
+ *  tone, else their variant and tone. */
+function emphasisOf(view: TestPanel, key: string): { start: string; runHere: string } {
+  const look = ({ variant, tone }: Record<string, unknown>) =>
+    variant === 'solid' && tone === 'accent' ? 'solid' : variant === 'ghost' && tone === undefined ? 'ghost' : `${variant} ${tone}`
+  return { start: look(view.find(startButton(key))!.props), runHere: look(view.find(runHereButton(key))!.props) }
+}
+const startSolid = { start: 'solid', runHere: 'ghost' }
+const runHereSolid = { start: 'ghost', runHere: 'solid' }
+
+test("the chosen template's New worktree setting decides which button stands out, and choosing another template in the card's Select moves it", async () => {
+  const { view } = await showWith({ 'tasks.load': ready([task('#42'), task('#7')]) }, stored({ templates: [ship, implement], defaultTemplateId: 't-ship' }))
+  // Ship runs here: Run here is solid accent and Start ghost.
+  assert.deepEqual(emphasisOf(view, '#42'), runHereSolid)
 
   await view.select(cardTemplate('#42'), 't-impl')
-  assert.equal(view.find(cardSwitch('#42'))?.props.checked, true)
-  assert.ok(view.find({ testId: 'start:#42' }))
-  assert.equal(view.find(runHereButton('#42')), null)
+  assert.deepEqual(emphasisOf(view, '#42'), startSolid)
+  // Only the card whose template changed.
+  assert.deepEqual(emphasisOf(view, '#7'), runHereSolid)
+  await view.select(cardTemplate('#42'), 't-ship')
+  assert.deepEqual(emphasisOf(view, '#42'), runHereSolid)
   assert.deepEqual(view.errors, [])
   assert.deepEqual(view.warnings, [])
 })
 
-test("the card's switch shows with a single template, and overrides it for one launch only, until another template is chosen or the panel opens again", async () => {
+test('pressing the ghost Run here runs the task here once, with its template; the card then shows its emphasis again and nothing is stored', async () => {
   const runs: unknown[] = []
-  const { view } = await showWith({
-    'tasks.load': ready([task('#42'), task('#7')]),
-    'task.runHere': (input) => (runs.push(input), { ok: true })
+  const starts: unknown[] = []
+  const { view, host } = await showWith({
+    'tasks.load': ready([task('#42')]),
+    'task.runHere': (input) => (runs.push(input), { ok: true }),
+    'task.start': (input) => (starts.push(input), { ok: true, underWay: true })
   })
-  assert.equal(view.find(cardSwitch('#42'))?.props.checked, true)
-  await view.toggle(cardSwitch('#42'))
-  assert.equal(view.find(cardSwitch('#42'))?.props.checked, false)
-  // Only the card whose switch changed.
-  assert.ok(view.find({ testId: 'start:#7' }))
+  const before = storedProject(host)
+  assert.deepEqual(emphasisOf(view, '#42'), startSolid)
   await view.press(runHereButton('#42'))
   assert.deepEqual(runs, [{ projectId: 'github:acme/web', task: task('#42'), templateId: 'default' }])
-  // After the launch the card shows the template's setting again, and the task can still start.
-  assert.equal(view.find(cardSwitch('#42'))?.props.checked, true)
-  assert.ok(view.find({ testId: 'start:#42' }))
-  await view.unmount()
-
-  const again = await showWith({ 'tasks.load': ready([task('#42')]) }, stored({ templates: [ship, implement], defaultTemplateId: 't-ship' }))
-  await again.view.toggle(cardSwitch('#42'))
-  assert.ok(again.view.find({ testId: 'start:#42' }))
-  await again.view.select(cardTemplate('#42'), 't-impl')
-  await again.view.select(cardTemplate('#42'), 't-ship')
-  assert.equal(again.view.find(cardSwitch('#42'))?.props.checked, false)
-  await again.view.toggle(cardSwitch('#42'))
-  await again.view.unmount()
-  const reopened = await showWith({ 'tasks.load': ready([task('#42')]) }, stored({ templates: [ship, implement], defaultTemplateId: 't-ship' }))
-  assert.equal(reopened.view.find(cardSwitch('#42'))?.props.checked, false)
+  assert.deepEqual(starts, [])
+  assert.deepEqual(emphasisOf(view, '#42'), startSolid)
+  assert.deepEqual(storedProject(host), before)
 })
 
-test("a card's switch turned on starts a task whose template runs here", async () => {
+test('pressing the ghost Start starts a task whose template runs here, with that template; nothing is stored', async () => {
   const starts: unknown[] = []
-  const { view } = await showWith(
-    { 'tasks.load': ready([task('#42')]), 'task.start': (input) => (starts.push(input), { ok: true, underWay: true }) },
+  const runs: unknown[] = []
+  const { view, host } = await showWith(
+    {
+      'tasks.load': ready([task('#42')]),
+      'task.start': (input) => (starts.push(input), { ok: true, underWay: true }),
+      'task.runHere': (input) => (runs.push(input), { ok: true })
+    },
     stored({ templates: [ship], defaultTemplateId: 't-ship' })
   )
-  await view.toggle(cardSwitch('#42'))
-  await view.press({ testId: 'start:#42' })
+  assert.deepEqual(emphasisOf(view, '#42'), runHereSolid)
+  await view.press(startButton('#42'))
   assert.deepEqual(starts, [{ projectId: 'github:acme/web', task: task('#42'), templateId: 't-ship' }])
+  assert.deepEqual(runs, [])
+  assert.deepEqual((storedProject(host) as { templates: unknown[] }).templates, [ship])
 })
 
 test('while Run here runs, a spinner "Running #42 here" takes the place of the Start row; a success leaves the card as it was', async () => {
@@ -1254,7 +1260,7 @@ test('while Run here runs, a spinner "Running #42 here" takes the place of the S
   assert.equal(spinner.type, 'Spinner')
   assert.deepEqual(rest, [])
   assert.equal(view.find(runHereButton('#42')), null)
-  assert.equal(view.find(cardSwitch('#42')), null)
+  assert.equal(view.find(startButton('#42')), null)
   assert.ok(view.find(runHereButton('#7')))
   run.release()
   await pressed
@@ -1343,22 +1349,25 @@ test("a Run here the worker doesn't answer says so on the card", async () => {
   assert.ok(view.find({ type: 'Text', text: "Kickoff's worker didn't answer (timeout). Look in Orca whether an agent started for #42." }))
 })
 
-test('with the agent choice "No agent", the switch is on and disabled with a note, and a template that runs here starts', async () => {
-  const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, stored({ templates: [ship], defaultTemplateId: 't-ship', agent: 'none' }))
-  const toggle = view.find(cardSwitch('#42'))
-  assert.equal(toggle?.props.checked, true)
-  assert.equal(toggle?.disabled, true)
-  assert.ok(view.find({ testId: 'start:#42' }))
+test('with the agent choice "No agent", a card shows only Start, solid, even with a template that runs here, and no note', async () => {
+  const starts: unknown[] = []
+  const { view } = await showWith(
+    { 'tasks.load': ready([task('#42')]), 'task.start': (input) => (starts.push(input), { ok: true, underWay: true }) },
+    stored({ templates: [ship], defaultTemplateId: 't-ship', agent: 'none' })
+  )
   assert.equal(view.find(runHereButton('#42')), null)
-  const [, , note, ...rest] = elementsIn(cardOf(view, '#42'))
-  assert.equal(wordsOf(note), 'Run here needs an agent: choose one in Project settings.')
-  assertProps(note, { size: 'sm', muted: true })
+  assertProps(view.find(startButton('#42'))!, { icon: 'play', variant: 'solid', tone: 'accent' })
+  const [, startRow, ...rest] = elementsIn(cardOf(view, '#42'))
+  assert.deepEqual(nodesIn(startRow, (node) => node.type === 'IconButton').map((node) => node.key), ['start:#42'])
   assert.deepEqual(rest, [])
+  assert.equal(view.find({ type: 'Text', text: /needs an agent/ }), null)
+  await view.press(startButton('#42'))
+  assert.deepEqual(starts, [{ projectId: 'github:acme/web', task: task('#42'), templateId: 't-ship' }])
 })
 
-test("a started task's card has no New worktree switch and no Run here", async () => {
+test("a started task's card has neither Start nor Run here", async () => {
   const { view } = await showWith({ 'tasks.load': ready([task('#42')], { worktrees: { '#42': started } }) }, stored({ templates: [ship], defaultTemplateId: 't-ship' }))
-  assert.equal(view.find(cardSwitch('#42')), null)
+  assert.equal(view.find(startButton('#42')), null)
   assert.equal(view.find(runHereButton('#42')), null)
   assert.equal(view.find({ type: 'Switch' }), null)
 })
@@ -5120,7 +5129,7 @@ test('a Jira project shows the filter row above the search field: the filter sho
   assertProps(row, { direction: 'row', align: 'center' })
   const order = nodesIn(view.tree(), (node) => (node.type === 'Select' && node.props?.label === 'Filter') || (node.type === 'Input' && node.props?.label === 'Search tasks') || node.type === 'IconButton')
     .map((node) => node.props?.label)
-    .filter((label) => label !== 'Reload tasks' && label !== 'Prompt templates' && label !== 'Project settings' && !String(label).startsWith('Start'))
+    .filter((label) => label !== 'Reload tasks' && label !== 'Prompt templates' && label !== 'Project settings' && !/^(Start |Run .* here$)/.test(String(label)))
   assert.deepEqual(order, ['Filter', 'Edit filter', 'New filter', 'Search tasks'])
   assert.deepEqual(view.errors, [])
   assert.deepEqual(view.warnings, [])

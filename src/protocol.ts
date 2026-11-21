@@ -73,8 +73,8 @@ export type PromptTemplate = {
   name: string
   /** '': the prompt is the task URL. */
   text: string
-  /** The template's New worktree switch. false: its tasks get a Run here, in the worktree selected
-   *  in Orca; undefined, as every template stored before it: they get a Start. */
+  /** The template's New worktree switch. false: Run here, in the worktree selected in Orca, stands
+   *  out on its tasks' cards; undefined, as every template stored before it: Start does. */
   newWorktree?: false
 }
 
@@ -524,8 +524,8 @@ export type JiraSitesResult =
 
 export type ActionResult = { ok: true } | { ok: false; message: string }
 
-/** Why there is no Run here without an agent: the worker's refusal, and the card's note while the
- *  project's agent choice is "No agent". */
+/** Why there is no Run here without an agent: the worker's refusal while the project's agent
+ *  choice is "No agent". */
 export const RUN_HERE_NEEDS_AGENT = 'Run here needs an agent: choose one in Project settings.'
 
 /** A Start's answer. `underWay`: Orca is creating the worktree and `start.ended` follows;

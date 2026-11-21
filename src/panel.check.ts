@@ -215,8 +215,9 @@ export default defineCheck({
     },
     requests: answers(ready(web, 'github', githubTasks))
   },
-  // The default template has New worktree off, so the cards offer Run here, their switch off, beside
-  // the template Select. The Prompt templates view opens on it with its New worktree switch off.
+  // The default template has New worktree off, so the cards show Run here solid and Start ghost,
+  // beside the template Select. The Prompt templates view opens on it with its New worktree switch
+  // off.
   'run-here': {
     storage: {
       settings: {
