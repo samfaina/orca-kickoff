@@ -3814,6 +3814,87 @@ test('Delete turns back after a few seconds without the second click, and is dis
   assert.ok(two.view.find({ type: 'Button', text: 'Delete filter' }))
 })
 
+/** The panel on the web project with two stored filters, whose `tasks.load` lists the filter's task
+ *  until `answerLater` sets the answer every later load gives, or, with null, lists it again. */
+async function showAnsweringLater() {
+  let later: TaskList | null = null
+  const { view } = await showWith(
+    { 'tasks.load': (input: LoadInput) => later ?? twgReady([twgTask('WEB-1')], { filterId: input.filterId ?? 'tasks' }) },
+    filtersStored([tasksFilter, boardFilter])
+  )
+  return { view, answerLater: (answer: TaskList | null) => (later = answer) }
+}
+
+/** Renames the filter shown in its editor and saves it. */
+async function saveRenamedFilter(view: TestPanel) {
+  await view.press(editFilter)
+  await view.type({ type: 'Input', label: 'Name' }, 'Open tasks', { replace: true })
+  await view.press(saveButton)
+}
+
+test('after a filter Save, a load that fails for a reason naming no filter still opens Project settings by itself', async () => {
+  const { view, answerLater } = await showAnsweringLater()
+  await saveRenamedFilter(view)
+  assert.ok(view.find({ type: 'Link', text: 'WEB-1' }))
+  answerLater({ kind: 'error', project: web, message: 'twg failed.' })
+  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  assert.ok(view.find(settingsTitle))
+})
+
+test('after a filter Delete, a load that fails for a reason naming no filter still opens Project settings by itself', async () => {
+  const { view, answerLater } = await showAnsweringLater()
+  await view.press(editFilter)
+  await view.press({ type: 'Button', text: 'Delete filter' })
+  await view.press({ type: 'Button', text: 'Confirm delete' })
+  assert.ok(view.find({ type: 'Link', text: 'WEB-1' }))
+  answerLater({ kind: 'error', project: web, message: 'twg failed.' })
+  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  assert.ok(view.find(settingsTitle))
+})
+
+test('after a filter Save, a load answering that the project needs a tracker opens Project settings by itself', async () => {
+  const { view, answerLater } = await showAnsweringLater()
+  await saveRenamedFilter(view)
+  assert.ok(view.find({ type: 'Link', text: 'WEB-1' }))
+  answerLater({ kind: 'needs-config', project: web })
+  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  assert.ok(view.find(settingsTitle))
+})
+
+test('a load right after a filter Save that fails for a reason naming no filter opens Project settings by itself', async () => {
+  const { view, answerLater } = await showAnsweringLater()
+  await view.press(editFilter)
+  answerLater({ kind: 'error', project: web, message: 'twg failed.' })
+  await view.type({ type: 'Input', label: 'Name' }, 'Open tasks', { replace: true })
+  await view.press(saveButton)
+  assert.ok(view.find(settingsTitle))
+})
+
+test('Project settings closed with Done stay closed after a filter Save, also when a load fails', async () => {
+  const { view, answerLater } = await showAnsweringLater()
+  await view.press(gear)
+  await view.press(done)
+  await saveRenamedFilter(view)
+  answerLater({ kind: 'error', project: web, message: 'twg failed.' })
+  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  assert.equal(view.find(settingsTitle), null)
+  assert.ok(view.find({ type: 'Callout', text: /twg failed\./ }))
+})
+
+test('Save in the filter editor that a failed query opened over Project settings goes back to Project settings', async () => {
+  const { view, answerLater } = await showAnsweringLater()
+  await view.press(gear)
+  answerLater({ kind: 'error', project: web, message: 'Tasks: The JQL query is invalid.', filterId: 'tasks' })
+  await view.emit('workspace.changed', { context: { branch: 'main', displayName: 'web', terminals: [] } })
+  await view.settled()
+  assert.ok(view.find(filterTitle('Edit filter')))
+  answerLater(null)
+  await view.type({ type: 'Input', label: 'Name' }, 'Open tasks', { replace: true })
+  await view.press(saveButton)
+  assert.equal(view.find(filterTitle('Edit filter')), null)
+  assert.ok(view.find(settingsTitle))
+})
+
 test('a failed write of a filter keeps the editor open with the error and the draft', async () => {
   let failing = true
   let data: JsonValue = filtersStored([tasksFilter, boardFilter]).settings

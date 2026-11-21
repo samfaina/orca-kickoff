@@ -699,7 +699,8 @@ function closeFilter(): void {
 }
 
 /** Stores the draft's filter, among the global ones when Global is on, else among the project's
- *  own, unless its name can't be saved, then goes back to the list and loads the filter's tasks. */
+ *  own, unless its name can't be saved, then goes back to the view the editor replaced and loads
+ *  the filter's tasks. */
 async function saveFilter(): Promise<void> {
   const draft = read(filterDraft)
   const shown = read(shownSettings)
@@ -710,7 +711,7 @@ async function saveFilter(): Promise<void> {
 }
 
 /** The first click asks for a second within a few seconds; the second deletes the filter, then
- *  goes back to the list and loads the tasks of the filter it shows. */
+ *  goes back to the view the editor replaced and loads the tasks of the filter it shows. */
 async function deleteFilter(): Promise<void> {
   const draft = read(filterDraft)
   if (!draft || draft.saving || draft.isNew) return
@@ -752,9 +753,10 @@ function showWrittenFilters(projectId: string, written: FiltersWritten): void {
 }
 
 /** Writes a change to the draft project's filters and the global ones of its tracker, then shows
- *  them, goes back to the list and loads it. A failed write keeps the editor open with its error
- *  and the draft. Pending Project settings are saved first, so the change applies to what the
- *  person sees. */
+ *  them, goes back to the view the editor replaced and loads the list. That view is the list, or
+ *  Project settings when they were open, and Project settings still open by themselves when a load
+ *  needs them. A failed write keeps the editor open with its error and the draft. Pending Project
+ *  settings are saved first, so the change applies to what the person sees. */
 async function writeFilters(draft: FilterDraft, change: (project: ProjectSettings, global: Filter[]) => FilterWrite | null): Promise<void> {
   changeFilterDraft(draft, { saving: true, error: null, confirmingDelete: false, confirmingOwn: false })
   let written: FiltersWritten | null
@@ -770,7 +772,6 @@ async function writeFilters(draft: FilterDraft, change: (project: ProjectSetting
   if (!current || !isSameDraft(current, draft)) return
   set(filterDraft, null)
   if (!written) return
-  set(settingsChoice, 'closed')
   leaveTrackerSearch()
   await load()
 }
