@@ -1,6 +1,6 @@
 import { afterEach, assert, hostError, mockHost, mount as mountUntracked, test, type MockHost, type MockRequests, type TestPanel, type TestQuery, type TreeSnapshot } from 'orca/testing'
 import type { JsonValue } from 'orca'
-import type { Task, TaskList, TaskWorktree } from './protocol'
+import type { AgentsResult, Task, TaskList, TaskWorktree } from './protocol'
 import * as panel from './panel'
 import { SAVE_DELAY_MS } from './settings-save'
 
@@ -63,7 +63,7 @@ const ready = (tasks: Task[], fields: Partial<Extract<TaskList, { kind: 'ready' 
 })
 
 async function show(answer: TaskList | ((input: { cursor?: string }) => TaskList | Promise<TaskList>)) {
-  const host = mockHost({ capabilities: ['storage:own', 'workspace:read'], requests: { 'tasks.load': answer } })
+  const host = mockHost({ capabilities: ['storage:own', 'workspace:read'], requests: { 'tasks.load': answer, 'agents.load': availableAgents() } })
   return mount(panel, { host })
 }
 
@@ -1007,9 +1007,10 @@ test('withIntervals unmounts a view the body left mounted and puts the real time
   assert.equal(globalThis.clearInterval, realClear)
 })
 
-/** The panel with these worker answers and stored values, and its host. */
+/** The panel with these worker answers and stored values, and its host. Unless `requests` says
+ *  otherwise, Orca can start Claude, Codex and Gemini, Claude its default agent. */
 async function showWith(requests: MockRequests, storage: Record<string, JsonValue> = {}) {
-  const host = mockHost({ capabilities: ['storage:own', 'workspace:read'], requests, storage })
+  const host = mockHost({ capabilities: ['storage:own', 'workspace:read'], requests: { 'agents.load': availableAgents(), ...requests }, storage })
   return { view: await mount(panel, { host }), host }
 }
 
@@ -1064,6 +1065,93 @@ test("Project settings show the project's stored agent and default template", as
   assert.equal(view.valueOf({ type: 'Select', label: 'Agent' }), 'none')
   assert.equal(view.valueOf({ type: 'Select', label: 'Default template' }), 't-triage')
   assert.deepEqual(optionLabels(view, 'Default template'), ['Implement', 'Triage'])
+})
+
+/** `agents.load` with Claude, Codex and Gemini available, `defaultId` marked default. */
+const availableAgents = (defaultId: string | null = 'claude', ids: string[] = ['claude', 'codex', 'gemini']): AgentsResult => ({
+  kind: 'ready',
+  agents: ids.map((id) => ({ id, name: id[0].toUpperCase() + id.slice(1), default: id === defaultId }))
+})
+
+const agentSelect = { type: 'Select', label: 'Agent' }
+
+function agentOptions(view: TestPanel): { value: string; label: string }[] {
+  return (view.find(agentSelect)?.props.options as { value: string; label: string }[] | undefined) ?? []
+}
+
+const agentsNote = { type: 'Text', text: "Couldn't read Orca's agents." }
+
+test("Project settings' Agent offers Orca default named after Orca's default agent, each available agent by name, then No agent", async () => {
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]), 'agents.load': availableAgents('codex') })
+  await view.press(gear)
+  assert.deepEqual(agentOptions(view), [
+    { value: 'orca-default', label: 'Orca default (Codex)' },
+    { value: 'claude', label: 'Claude' },
+    { value: 'codex', label: 'Codex' },
+    { value: 'gemini', label: 'Gemini' },
+    { value: 'none', label: 'No agent' }
+  ])
+  assert.equal(view.find(agentsNote), null)
+})
+
+test('with no agent marked default, Orca default says it is not set', async () => {
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]), 'agents.load': availableAgents(null) })
+  await view.press(gear)
+  assert.equal(agentOptions(view)[0].label, 'Orca default (not set)')
+  assert.equal(view.valueOf(agentSelect), 'orca-default')
+})
+
+test("a stored agent that isn't available stays chosen, marked not available, and isn't changed", async () => {
+  const { view, host } = await showWith({ 'tasks.load': ready([task('#42')]), 'agents.load': availableAgents() }, stored({ agent: 'opencode' }))
+  await view.press(gear)
+  assert.equal(view.valueOf(agentSelect), 'opencode')
+  assert.deepEqual(agentOptions(view).map((option) => option.label), ['Orca default (Claude)', 'Claude', 'Codex', 'Gemini', 'No agent', 'opencode (not available)'])
+  await wait(800)
+  assert.deepEqual(storedProject(host), { providers: {}, agent: 'opencode' })
+})
+
+test("when Orca's agents can't be read, Agent offers only Orca default, No agent and the stored choice, with a note", async () => {
+  const failed = { kind: 'error', message: 'orca failed: Unknown command.' } as const
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]), 'agents.load': failed }, stored({ agent: 'codex' }))
+  await view.press(gear)
+  assert.deepEqual(agentOptions(view), [
+    { value: 'orca-default', label: 'Orca default' },
+    { value: 'none', label: 'No agent' },
+    { value: 'codex', label: 'codex' }
+  ])
+  assert.equal(view.valueOf(agentSelect), 'codex')
+  assert.equal(view.find(agentsNote)?.props.muted, true)
+  await view.unmount()
+
+  const silent = await showWith({
+    'tasks.load': ready([task('#42')]),
+    'agents.load': () => {
+      throw hostError('timeout', 'No answer.')
+    }
+  })
+  await silent.view.press(gear)
+  assert.deepEqual(agentOptions(silent.view).map((option) => option.label), ['Orca default', 'No agent'])
+  assert.ok(silent.view.find(agentsNote))
+})
+
+test("Orca's agents are read again each time Project settings opens and on Reload", async () => {
+  let answer = availableAgents('claude')
+  let asked = 0
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]), 'agents.load': () => (asked++, answer) })
+  const before = asked
+  answer = availableAgents('claude', ['claude', 'gemini'])
+  await view.press(gear)
+  assert.equal(asked, before + 1)
+  assert.deepEqual(agentOptions(view).map((option) => option.label), ['Orca default (Claude)', 'Claude', 'Gemini', 'No agent'])
+  await view.press(done)
+  await view.press(gear)
+  assert.equal(asked, before + 2)
+  await view.press(done)
+  answer = availableAgents(null, ['gemini'])
+  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  assert.equal(asked, before + 3)
+  await view.press(gear)
+  assert.deepEqual(agentOptions(view).map((option) => option.label), ['Orca default (not set)', 'Gemini', 'No agent'])
 })
 
 test('a project with a template stored before several templates shows it as "Default", unchanged', async () => {
@@ -2378,7 +2466,7 @@ test('a pending Project settings change survives a failed template write, and th
   let data: JsonValue = twoTemplates.settings
   const host = mockHost({
     capabilities: ['storage:own', 'workspace:read'],
-    requests: { 'tasks.load': ready([task('#42')]) },
+    requests: { 'tasks.load': ready([task('#42')]), 'agents.load': availableAgents() },
     results: {
       'storage.get': () => ({ value: data }),
       'storage.set': (params: { key: string; value: JsonValue }) => {
@@ -2402,14 +2490,14 @@ test('a pending Project settings change survives a failed template write, and th
   assert.deepEqual(project.templates.map((template) => template.name), ['Implement', 'Triage', 'Review'])
 })
 
-/** A host with the two templates stored and these worker answers. Each settings write calls
- *  `write` first and lands once it ends: a promise it answers holds the write, a throw fails it.
- *  `project()` gives the web project's stored settings. */
+/** A host with the two templates stored and these worker answers, and Orca's agents as `showWith`
+ *  gives them. Each settings write calls `write` first and lands once it ends: a promise it answers
+ *  holds the write, a throw fails it. `project()` gives the web project's stored settings. */
 function settingsHost(requests: MockRequests, write: () => void | Promise<void>) {
   let data: JsonValue = twoTemplates.settings
   const host = mockHost({
     capabilities: ['storage:own', 'workspace:read'],
-    requests,
+    requests: { 'agents.load': availableAgents(), ...requests },
     results: {
       'storage.get': () => ({ value: data }),
       'storage.set': (params: { key: string; value: JsonValue }) => {

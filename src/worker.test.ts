@@ -1,12 +1,21 @@
 import { assert, mockHost, mountWorker, test } from 'orca/testing'
 import type { JsonValue } from 'orca'
 import type { OrcaWorkerApi } from 'orca/worker'
-import { AGENT_UNREADABLE, type DefaultAgent } from './agent'
 import { CliError, cliFailureMessage, type RunCli } from './cli'
 import type { StartEnded, Task } from './protocol'
 import { activateWith } from './worker'
 
 const wrap = (result: unknown) => JSON.stringify({ id: 'req-1', ok: true, result, _meta: { runtimeId: 'rt-1' } })
+
+/** `orca agent installed` listing Claude, Codex and Gemini, with `defaultId` marked default. */
+const installedAgents = (defaultId: string | null = 'claude') =>
+  wrap({
+    agents: [
+      { id: 'claude', name: 'Claude', default: defaultId === 'claude' },
+      { id: 'codex', name: 'Codex', default: defaultId === 'codex' },
+      { id: 'gemini', name: 'Gemini', default: defaultId === 'gemini' }
+    ]
+  })
 
 const ORCA_OK = {
   'orca project list': wrap({
@@ -17,13 +26,14 @@ const ORCA_OK = {
   }),
   'orca worktree list': wrap({
     worktrees: [
-      { id: 'r1::/src/web', projectId: 'github:acme/web', displayName: 'web', isArchived: false, linkedIssue: null, linkedItems: [] },
-      { id: 'r2::/src/notes', projectId: 'repo:r2', displayName: 'notes', isArchived: false, linkedIssue: null, linkedItems: [] }
+      { id: 'r1::/src/web', projectId: 'github:acme/web', displayName: 'web', isArchived: false, isMainWorktree: true, linkedIssue: null, linkedItems: [] },
+      { id: 'r2::/src/notes', projectId: 'repo:r2', displayName: 'notes', isArchived: false, isMainWorktree: true, linkedIssue: null, linkedItems: [] }
     ],
     totalCount: 2,
     truncated: false
   }),
-  'orca worktree ps': wrap({ worktrees: [{ worktreeId: 'r1::/src/web', isActive: true, agents: [] }] })
+  'orca worktree ps': wrap({ worktrees: [{ worktreeId: 'r1::/src/web', isActive: true, agents: [] }] }),
+  'orca agent installed': installedAgents()
 }
 
 const GH_ISSUES = JSON.stringify([
@@ -48,7 +58,6 @@ function fakeRun(answers: Record<string, Answer>, calls: Call[]): RunCli {
 
 type StartOptions = {
   storage?: Record<string, JsonValue>
-  defaultAgent?: DefaultAgent
   now?: () => number
   /** Makes `orca.panels.post` throw this, as a post Orca refuses would. */
   postThrows?: Error
@@ -63,14 +72,13 @@ function withFailingPost(orca: OrcaWorkerApi, error: Error): OrcaWorkerApi {
 }
 
 async function start(answers: Record<string, Answer>, options: StartOptions = {}) {
-  const { storage = {}, defaultAgent = { kind: 'agent', agent: 'claude' }, now = Date.now, postThrows } = options
+  const { storage = {}, now = Date.now, postThrows } = options
   const host = mockHost({ capabilities: ['storage:own', 'workspace:read'], storage })
   const calls: Call[] = []
   let run = fakeRun(answers, calls)
   const worker = await mountWorker(
     {
-      default: (orca) =>
-        activateWith(postThrows ? withFailingPost(orca, postThrows) : orca, { run: (...args) => run(...args), readDefaultAgent: async () => defaultAgent, now })
+      default: (orca) => activateWith(postThrows ? withFailingPost(orca, postThrows) : orca, { run: (...args) => run(...args), now })
     },
     { host }
   )
@@ -95,7 +103,7 @@ const issue42: Task = {
 const worktreesWith = (...extra: object[]) =>
   wrap({
     worktrees: [
-      { id: 'r1::/src/web', projectId: 'github:acme/web', displayName: 'web', isArchived: false, linkedIssue: null, linkedItems: [] },
+      { id: 'r1::/src/web', projectId: 'github:acme/web', displayName: 'web', isArchived: false, isMainWorktree: true, linkedIssue: null, linkedItems: [] },
       ...extra
     ]
   })
@@ -812,10 +820,75 @@ test('Start of a project Orca no longer has fails in its answer, without creatin
   assert.deepEqual(worker.posts, [])
 })
 
-test("Start fails without creating anything when Orca's default agent can't be read", async () => {
-  const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED }, { defaultAgent: { kind: 'unreadable' } })
-  assert.deepEqual(await worker.request('task.start', startWeb42), { ok: false, message: AGENT_UNREADABLE })
+const agentChecks = (calls: Call[]) => calls.filter((call) => call.args[0] === 'agent' && call.args[1] === 'installed').map((call) => call.args)
+
+const withAgent = (agent: string) => ({ settings: { version: 1, projects: { 'github:acme/web': { providers: {}, agent } } } })
+
+test("agents.load answers the agents Orca can start on the active worktree's host", async () => {
+  const { worker, calls } = await start({ 'orca agent installed': installedAgents('codex') })
+  assert.deepEqual(await worker.request('agents.load', {}), {
+    kind: 'ready',
+    agents: [
+      { id: 'claude', name: 'Claude', default: false },
+      { id: 'codex', name: 'Codex', default: true },
+      { id: 'gemini', name: 'Gemini', default: false }
+    ]
+  })
+  assert.deepEqual(agentChecks(calls), [['agent', 'installed', '--worktree', 'active', '--json']])
+})
+
+test('agents.load answers a failure as data: a failed command, or an older Orca without it', async () => {
+  const failed = await start({ 'orca agent installed': new CliError('orca failed: Orca is not running.') })
+  assert.deepEqual(await failed.worker.request('agents.load', {}), { kind: 'error', message: 'orca failed: Orca is not running.' })
+  const older = await start({ 'orca agent installed': 'Unknown command: agent installed' })
+  assert.deepEqual(await older.worker.request('agents.load', {}), {
+    kind: 'error',
+    message: "orca returned output Kickoff couldn't read. Update orca and try again."
+  })
+})
+
+test("a Start checks the agent on the host of its project's main worktree, not the active one", async () => {
+  const otherWeb = { id: 'r1::/src/web-spike', projectId: 'github:acme/web', displayName: 'spike', isArchived: false, isMainWorktree: false, linkedIssue: null, linkedItems: [] }
+  const worktrees = wrap({
+    worktrees: [
+      otherWeb,
+      { id: 'r2::/src/notes', projectId: 'repo:r2', displayName: 'notes', isArchived: false, isMainWorktree: true, linkedIssue: null, linkedItems: [] },
+      { id: 'r1::/src/web', projectId: 'github:acme/web', displayName: 'web', isArchived: false, isMainWorktree: true, linkedIssue: null, linkedItems: [] }
+    ]
+  })
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree list': worktrees, 'orca agent installed': installedAgents('gemini'), 'orca worktree create': CREATED })
+  assert.deepEqual(await worker.request('task.start', startWeb42), { ok: true, underWay: true })
+  assert.deepEqual(agentChecks(calls), [['agent', 'installed', '--worktree', 'id:r1::/src/web', '--json']])
+  assert.equal(flagValue(creates(calls)[0].args, '--agent'), 'gemini')
+})
+
+test("a Start with an agent Orca can't start fails with a message naming it, creating nothing", async () => {
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED }, { storage: withAgent('opencode') })
+  assert.deepEqual(await worker.request('task.start', startWeb42), {
+    ok: false,
+    message: "opencode isn't available in Orca: choose another agent in Project settings."
+  })
   assert.equal(creates(calls).length, 0)
+})
+
+test('a Start with "Orca default" fails, creating nothing, when no agent is marked default or the agents can\'t be read', async () => {
+  const unmarked = await start({ ...ORCA_OK, 'orca agent installed': installedAgents(null), 'orca worktree create': CREATED })
+  assert.deepEqual(await unmarked.worker.request('task.start', startWeb42), { ok: false, message: 'Orca has no default agent: choose one in Project settings.' })
+  const failed = await start({ ...ORCA_OK, 'orca agent installed': new CliError('orca failed: ssh_host_not_served'), 'orca worktree create': CREATED })
+  assert.deepEqual(await failed.worker.request('task.start', startWeb42), {
+    ok: false,
+    message: "Couldn't read Orca's default agent: choose an agent in Project settings. orca failed: ssh_host_not_served"
+  })
+  for (const { calls } of [unmarked, failed]) assert.equal(creates(calls).length, 0)
+})
+
+test("a Start with a named agent passes it to Orca as it is when the agents can't be read", async () => {
+  const { worker, calls } = await start(
+    { ...ORCA_OK, 'orca agent installed': new CliError('orca failed: Orca is not running.'), 'orca worktree create': CREATED },
+    { storage: withAgent('opencode') }
+  )
+  assert.deepEqual(await worker.request('task.start', startWeb42), { ok: true, underWay: true })
+  assert.equal(flagValue(creates(calls)[0].args, '--agent'), 'opencode')
 })
 
 /** Waits until `done` holds, a millisecond at a time. */
@@ -1047,19 +1120,30 @@ test('Run here refuses, launching nothing, a task that already has a task worktr
   assert.equal(launches(calls).length, 0)
 })
 
-test('Run here refuses, launching nothing, with the agent choice "No agent" or an Orca default of no agent', async () => {
+test('Run here checks the agent on the host of the active worktree', async () => {
+  const { worker, calls } = await start(
+    { ...ORCA_OK, 'orca worktree ps': psWith('web'), 'orca agent installed': installedAgents('codex'), 'orca agent launch': LAUNCHED },
+    { storage: shipTemplate() }
+  )
+  assert.deepEqual(await worker.request('task.runHere', runWeb42), { ok: true })
+  assert.deepEqual(agentChecks(calls), [['agent', 'installed', '--worktree', 'active', '--json']])
+  assert.equal(flagValue(launches(calls)[0].args, '--agent'), 'codex')
+})
+
+test('Run here refuses, launching nothing, with the agent choice "No agent", an Orca default that is not set, or an agent Orca can\'t start', async () => {
   const cases = [
-    { storage: shipTemplate({ agent: 'none' }), defaultAgent: { kind: 'agent', agent: 'claude' } as const },
-    { storage: shipTemplate(), defaultAgent: { kind: 'none' } as const }
+    { agents: installedAgents(), storage: shipTemplate({ agent: 'none' }), message: 'Run here needs an agent: choose one in Project settings.' },
+    { agents: installedAgents(null), storage: shipTemplate(), message: 'Orca has no default agent: choose one in Project settings.' },
+    { agents: installedAgents(), storage: shipTemplate({ agent: 'opencode' }), message: "opencode isn't available in Orca: choose another agent in Project settings." }
   ]
-  for (const options of cases) {
-    const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree ps': psWith('web'), 'orca agent launch': LAUNCHED }, options)
-    assert.deepEqual(await worker.request('task.runHere', runWeb42), { ok: false, message: 'Run here needs an agent: choose one in Project settings.' })
+  for (const { agents, storage, message } of cases) {
+    const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree ps': psWith('web'), 'orca agent installed': agents, 'orca agent launch': LAUNCHED }, { storage })
+    assert.deepEqual(await worker.request('task.runHere', runWeb42), { ok: false, message })
     assert.equal(launches(calls).length, 0)
   }
 })
 
-test("Run here refuses, launching nothing, a template that no longer exists, a prompt over the limit, and an unreadable Orca default agent", async () => {
+test("Run here refuses, launching nothing, a template that no longer exists, a prompt over the limit, and an Orca default whose agents can't be read", async () => {
   const ORCA_HERE = { ...ORCA_OK, 'orca worktree ps': psWith('web'), 'orca agent launch': LAUNCHED }
   const gone = await start(ORCA_HERE, { storage: shipTemplate() })
   assert.deepEqual(await gone.worker.request('task.runHere', { ...runWeb42, templateId: 't-gone' }), {
@@ -1070,8 +1154,11 @@ test("Run here refuses, launching nothing, a template that no longer exists, a p
   const tooLong = await long.worker.request('task.runHere', { ...runWeb42, task: { ...issue42, description: 'x'.repeat(5000) } })
   assert.ok(!tooLong.ok)
   assert.match(tooLong.message, /30000/)
-  const unreadable = await start(ORCA_HERE, { storage: shipTemplate(), defaultAgent: { kind: 'unreadable' } })
-  assert.deepEqual(await unreadable.worker.request('task.runHere', runWeb42), { ok: false, message: AGENT_UNREADABLE })
+  const unreadable = await start({ ...ORCA_HERE, 'orca agent installed': new CliError('orca failed: Orca is not running.') }, { storage: shipTemplate() })
+  assert.deepEqual(await unreadable.worker.request('task.runHere', runWeb42), {
+    ok: false,
+    message: "Couldn't read Orca's default agent: choose an agent in Project settings. orca failed: Orca is not running."
+  })
   for (const { calls } of [gone, long, unreadable]) assert.equal(launches(calls).length, 0)
 })
 

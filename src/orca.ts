@@ -20,6 +20,8 @@ export type OrcaWorktree = {
   projectId: string
   name: string
   isArchived: boolean
+  /** The project's main checkout (`isMainWorktree`). */
+  isMain: boolean
   /** GitHub issue numbers linked through `linkedIssue` or `linkedItems`. */
   githubIssues: number[]
   /** Jira keys linked through `linkedItems`, upper-cased. */
@@ -62,6 +64,7 @@ export function parseWorktrees(stdout: string): OrcaWorktree[] {
         projectId: worktree.projectId,
         name: nonEmpty(worktree.displayName) ? worktree.displayName : '',
         isArchived: worktree.isArchived === true,
+        isMain: worktree.isMainWorktree === true,
         githubIssues,
         jiraKeys: items.flatMap((item) => (nonEmpty(item.jiraIdentifier) ? [item.jiraIdentifier.toUpperCase()] : []))
       }

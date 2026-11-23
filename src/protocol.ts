@@ -519,6 +519,15 @@ export type JiraSitesResult =
   | { kind: 'ready'; sites: { id: string; name: string }[] }
   | { kind: 'error'; message: string }
 
+/** An agent Orca can start on a host, as `orca agent installed` lists it: the id `--agent` takes,
+ *  Orca's display name, and whether it is Orca's default agent. */
+export type AvailableAgent = { id: string; name: string; default: boolean }
+
+/** The available agents, in Orca's order, or why they couldn't be read. */
+export type AgentsResult =
+  | { kind: 'ready'; agents: AvailableAgent[] }
+  | { kind: 'error'; message: string }
+
 export type ActionResult = { ok: true } | { ok: false; message: string }
 
 /** Why there is no Run here without an agent: the worker's refusal while the project's agent
@@ -543,6 +552,9 @@ declare module 'orca' {
     'worktrees.load': { input: { projectId: string }; output: WorktreesResult }
     'project.active': { input: {}; output: ActiveProjectResult }
     'jira.sites': { input: {}; output: JiraSitesResult }
+    /** The agents Orca can start on the active worktree's host, for Project settings' Agent: read
+     *  again on each request. */
+    'agents.load': { input: {}; output: AgentsResult }
     'task.start': { input: { projectId: string; task: Task; templateId: string }; output: StartResult }
     /** A Run here: a new agent in the worktree selected in Orca, with the template's prompt for
      *  the task, and no worktree created. It answers once Orca reports the launch. */

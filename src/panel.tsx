@@ -86,6 +86,7 @@ import {
   type JiraProviderId,
   type JiraSitesResult,
   type ActionResult,
+  type AgentsResult,
   type ProjectChanges,
   type ProjectSettings,
   type ProjectRef,
@@ -119,10 +120,11 @@ import {
 
 /** Orca queries and the tracker can take up to about 65 s together. */
 const LOAD_TIMEOUT_MS = 90_000
-/** `task.start` answers after its quick checks, two Orca queries of at most 20 s each; the create
- *  goes on in the worker, which posts `start.ended` when it ends. */
+/** `task.start` answers after its quick checks: two Orca queries run together, then `orca agent
+ *  installed`, at most 20 s each in a row. The create goes on in the worker, which posts
+ *  `start.ended` when it ends. */
 const START_TIMEOUT_MS = 60_000
-/** `task.runHere` waits for three Orca queries, run together, then the launch, which Orca answers
+/** `task.runHere` waits for four Orca queries, run together, then the launch, which Orca answers
  *  in under a second: two calls of at most 20 s each in a row. */
 const RUN_HERE_TIMEOUT_MS = 60_000
 /** How long Delete waits for its second click, as "Confirm delete". */
@@ -134,16 +136,6 @@ const POLL_MS = 3_000
 const AGENT_CHECK_MS = 5_000
 /** A burst of workspaces created or removed reads the worktrees once, this long after the last. */
 const WORKSPACE_REFRESH_MS = 300
-
-const AGENT_OPTIONS = [
-  { value: 'orca-default', label: 'Orca default' },
-  { value: 'claude', label: 'claude' },
-  { value: 'codex', label: 'codex' },
-  { value: 'gemini', label: 'gemini' },
-  { value: 'opencode', label: 'opencode' },
-  { value: 'copilot', label: 'copilot' },
-  { value: 'none', label: 'No agent' }
-]
 
 const PROVIDER_OPTIONS: { value: ProviderId; label: string }[] = [
   { value: 'github', label: 'GitHub' },
@@ -319,6 +311,11 @@ const loading = atom(false)
 const shownSettings = atom<ShownSettings | null>(null)
 /** The sites of Orca's Jira connection, asked for the first time they are needed. */
 const jiraSites = atom<JiraSitesResult | 'loading' | null>(null)
+/** The agents Orca can start on the active worktree's host, as last answered: asked on each load
+ *  of the list and each time Project settings opens. null until the first answer. */
+const availableAgents = atom<AgentsResult | null>(null)
+/** Rises with each `agents.load`, so an answer older than the last one asked is dropped. */
+let agentsAsked = 0
 /** Task keys with a Start under way: asked by this panel, or reported by the worker. */
 const starting = atom<Record<string, true>>({})
 /** Task keys whose `task.start` hasn't answered yet. */
@@ -921,7 +918,7 @@ function discardTemplateChanges(): void {
  *  by themselves when a load needs them. */
 function leaveTemplates(draft: TemplateDraft): void {
   closeTemplate()
-  if (draft.origin === 'settings') set(settingsChoice, 'open')
+  if (draft.origin === 'settings') openSettings()
 }
 
 /** Cancel: leaves the view without saving. */
@@ -1122,6 +1119,25 @@ async function loadJiraSites(): Promise<void> {
   }
 }
 
+/** Asks for the agents Orca can start, and keeps the last answer shown until the new one arrives.
+ *  A worker that doesn't answer counts as agents that can't be read. */
+async function loadAgents(): Promise<void> {
+  const mine = ++agentsAsked
+  let answer: AgentsResult
+  try {
+    answer = await plugin.request('agents.load', {})
+  } catch (error) {
+    answer = { kind: 'error', message: `Kickoff's worker didn't answer (${errorCode(error)}).` }
+  }
+  if (mine === agentsAsked) set(availableAgents, answer)
+}
+
+/** Opens Project settings, reading Orca's agents again: one may have been turned off in Orca. */
+function openSettings(): void {
+  set(settingsChoice, 'open')
+  void loadAgents()
+}
+
 /** Lists the active project's tasks, or runs the tracker search shown again. `poll` says the poll
  *  asked for it, so the poll's last answer stays the measure for the next one. */
 async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
@@ -1153,6 +1169,8 @@ async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
       // Storage unreadable: the settings stay hidden, and a Start reads them again for its template.
     }
     if (mine !== generation) return
+    // A load may open Project settings by itself, and its project may be on another host.
+    void loadAgents()
   }
   if (read(shownSettings)?.provider === 'jira-orca') void loadJiraSites()
   if (reason !== 'poll') lastPolledProjectId = undefined
@@ -1619,6 +1637,9 @@ export function setup(ctx: PanelContext): void {
   set(variablesOpen, false)
   set(filtersOpen, true)
   set(settingsChoice, 'auto')
+  // An answer still on its way to the panel closed before is dropped.
+  agentsAsked++
+  set(availableAgents, null)
   viewStateFor = undefined
   set(fieldText, '')
   set(trackerSearch, null)
@@ -1705,7 +1726,7 @@ function Header({ projectName, gear }: { projectName: string | null; gear: boole
           <IconButton icon="layers" label="Prompt templates" tooltip="Prompt templates" size="sm" variant="ghost" onPress={() => openTemplates('list')} />
         ) : null}
         {gear ? (
-          <IconButton icon="settings" label="Project settings" tooltip="Project settings" size="sm" variant="ghost" onPress={() => set(settingsChoice, 'open')} />
+          <IconButton icon="settings" label="Project settings" tooltip="Project settings" size="sm" variant="ghost" onPress={openSettings} />
         ) : null}
       </Row>
     </TitleRow>
@@ -2159,15 +2180,36 @@ function JiraTwgSettings({ providers }: { providers: ProviderConfigs }) {
   )
 }
 
+/** The agent choice's options: "Orca default", named after the agent Orca marks default, each
+ *  available agent by name, then "No agent". A stored agent that isn't available stays, marked so.
+ *  Until the agents are read, or when they can't be, only "Orca default", "No agent" and the stored
+ *  choice. */
+function agentOptions(agents: AgentsResult | null, stored: string): { value: string; label: string }[] {
+  const listed = agents?.kind === 'ready' ? agents.agents : null
+  const marked = listed?.find((agent) => agent.default)
+  const options = [
+    { value: 'orca-default', label: listed === null ? 'Orca default' : `Orca default (${marked?.name ?? 'not set'})` },
+    ...(listed ?? []).map((agent) => ({ value: agent.id, label: agent.name })),
+    { value: 'none', label: 'No agent' }
+  ]
+  if (!options.some((option) => option.value === stored)) {
+    options.push({ value: stored, label: listed === null ? stored : `${stored} (not available)` })
+  }
+  return options
+}
+
 /** The agent choice, and the default template with the button beside it that opens the Prompt
  *  templates view. */
 function StartFields({ shown }: { shown: ShownSettings }) {
-  const agentOptions = AGENT_OPTIONS.some((option) => option.value === shown.agent)
-    ? AGENT_OPTIONS
-    : [...AGENT_OPTIONS, { value: shown.agent, label: shown.agent }]
+  const agents = read(availableAgents)
   return (
     <Stack gap="sm">
-      <Select label="Agent" value={shown.agent} options={agentOptions} onChange={(agent) => changeSettings({ agent })} />
+      <Select label="Agent" value={shown.agent} options={agentOptions(agents, shown.agent)} onChange={(agent) => changeSettings({ agent })} />
+      {agents?.kind === 'error' ? (
+        <Text size="sm" muted>
+          Couldn't read Orca's agents.
+        </Text>
+      ) : null}
       <Box direction="row" align="end" gap="xs">
         <Box grow minWidth={0}>
           <Select
