@@ -93,7 +93,7 @@ The user action that creates a task worktree for a task and launches an agent in
 _Avoid_: Launch, kick off, run, Run here (that launches an agent without a task worktree)
 
 **Run here**:
-The user action that launches a new agent in the worktree selected in Orca's sidebar, as it is, with the prompt filled from the chosen prompt template and a task. It creates no worktree, no branch and no link, so the task is not started and can be run here again. Only a task that has not been started offers it, and only in a project whose agent choice names an agent.
+The user action that launches a new agent in the worktree selected in Orca's sidebar, as it is, with the prompt filled from the chosen prompt template and a task. It creates no worktree, no branch and no link, so the task is not started and can be run here again. Only a task that has not been started offers it, and only when the agent chosen for that task names an agent.
 _Avoid_: Start here, start without worktree, snippet
 
 **Task worktree**:
@@ -105,8 +105,12 @@ The association between a task and a task worktree, recorded by Orca on the work
 _Avoid_: Mapping, binding
 
 **Agent choice**:
-The per-project setting that says which agent a Start launches: Orca's default agent, a named agent, or none.
+The per-project setting that says which agent a Start or a Run here launches, unless the user chooses another one for that task on its card: Orca's default agent, a named agent, or none.
 _Avoid_: Default agent (that is Orca's own setting)
+
+**Available agent**:
+An agent Orca can start on the active project's host: Orca detects it there and it is not turned off in Orca's settings. The agent choice offers the available agents; a named agent that is no longer available stays chosen but can't be launched.
+_Avoid_: Installed agent (that includes the turned-off ones), configured agent
 
 **Project settings**:
 What Kickoff keeps for one project: its tracker and how the provider reads it, its Jira project key, its own filters, its agent choice, its own prompt templates with the default template, and whether it uses its own branch settings or the global ones, with its own when it has them. Global filters, prompt templates and branch settings are not part of any one project's settings.

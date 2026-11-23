@@ -153,7 +153,7 @@ Host methods **[Verified]**:
 - Worker: `workspace.readContext`, `workspace.list`, `workspace.open`, `terminal.sendText`, `terminal.create`, `terminal.read`, `agent.launch`, `agents.list`, `notifications.show`, `storage.*`, `secrets.*`, `settings.*`, `statusBar.update`, `editor.open`, `commands.run`.
 - Panel: `workspace.readContext`, `notifications.show`, `storage`, `secrets`, `settings`, `shell.openExternal`, `files.saveAs`, `plugin.request`, `agents.list`, `events.subscribe`.
 
-What the API does **not** offer **[Verified]**: listing projects, creating worktrees, reading Orca's settings, or knowing which workspace is focused by id.
+What the API does **not** offer **[Verified]**: listing projects, creating worktrees, reading Orca's settings, or knowing which workspace is focused by id. Nor, in Orca 1.4.271, listing the installed or available agents: no worker or panel method gives them, and `settings.get` reads only the plugin's own settings **[Verified]** (read in Orca 1.4.271's app bundle). `orca agent installed` does (see below).
 
 - `workspace.list` returns `{ workspaces: { id, kind: 'worktree' | 'folder', name, path, branch | null, hostId | null }[], truncated }`, with no project id and no focus flag.
 - `agent.launch({ workspaceId, agent, prompt? })` returns `{ terminalId }`. `agent` is required, and the workspace must already exist.
@@ -481,9 +481,21 @@ Shows the worktree in Orca **[Verified]** (help only, not run).
 - `list --worktree <selector>`, `add <url-or-key>... --worktree <selector>`, `remove`.
 - `find <url-or-key> [--worktree | --repo] [--include-archived] [--limit n]` searches stored metadata only. It returns `{ kind: 'reference_matches', matches: [{ reference, workspace: { id, name, repo, archived }, agents: [{ agent, liveness }] }] }`, and `matches: []` when nothing is linked.
 
+### `orca agent installed`
+
+`orca agent installed [--worktree <selector>] [--json]` lists the agents Orca detects on a host that can start, with the ids `--agent` takes **[Verified]** (`--help` and a run, Orca 1.4.271). Agents turned off in Orca's Settings → Agents are left out, and agents set up there with a custom command are included. Read in Orca 1.4.271's app bundle (`cli/agents/installed-agents.js` and the host's `preflight.installedAgents`) **[Verified]**:
+
+- **Success.** Exit 0, `{ id, ok: true, result: { agents: [{ id, name, default: boolean }] }, _meta: { runtimeId } }`. The list follows Orca's catalog order, then the custom-command agents. An empty list is `agents: []`.
+- **`name`.** Orca's short display name (`claude` → `Claude`, `codex` → `Codex`, `copilot` → `GitHub Copilot`), or the id when it has none.
+- **`default`.** True only for the agent whose id equals the saved `defaultTuiAgent`, after the turned-off agents are removed. So at most one agent is marked, and none when the default is `blank`, unset, turned off or not installed. It doesn't apply Orca's fallback to the first installed agent (`pickTuiAgent`, see [Orca's default agent](#orcas-default-agent)). Turning an agent off in Orca's settings also clears the default when it was that agent.
+- **Host.** Without `--worktree`, the local machine's `PATH` (on Windows, Windows and not WSL). With `--worktree`, the host of that workspace. For a paired runtime or a managed SSH host, the call is forwarded there: an Orca there too old to have the command gives `incompatible_runtime`, and an unmanaged SSH target gives `ssh_host_not_served`. For a WSL project, a shell probe runs in the distro, and a stopped distro is not started.
+- **Failure.** Exit 1 with `{ ok: false, error: { code, message, data? } }` on stdout. A local error has `id: 'local'` and `code: 'runtime_error'` unless the runtime gave one.
+- **Older hosts.** When the host has no `preflight.installedAgents`, the CLI falls back to older calls. If those can't read the settings, nothing is filtered or marked `default`.
+- **Oldest Orca.** Neither `--help` nor the bundle says which version added the command, and 1.4.271 is the oldest it was seen in. Whether an older Orca has it is not known **[Assumed]**.
+
 ### Orca's default agent
 
-No CLI command or plugin API exposes it; `orca settings` and `orca config` are unknown commands **[Verified]**. It is stored in Orca's private data:
+Until Orca 1.4.271's `orca agent installed` (above), no CLI command or plugin API exposed it; `orca settings` and `orca config` are unknown commands **[Verified]**. ADR-0004 moves Kickoff to reading it from there (issue #140); until then Kickoff reads the private data below. It is stored in Orca's private data:
 
 1. **Data folder** (`%APPDATA%\orca` on Windows **[Verified]**):
    - macOS: `~/Library/Application Support/orca` **[Original]**.
