@@ -8,6 +8,7 @@ import {
   INITIAL_FILTER_ID,
   INITIAL_FILTER_NAME,
   ownFilters,
+  type AgentsResult,
   type Filter,
   type JiraProviderId,
   type ProjectRef,
@@ -20,8 +21,19 @@ import { INITIAL_TEMPLATE_ID, INITIAL_TEMPLATE_NAME, INITIAL_TEMPLATE_TEXT } fro
 
 type ReadyList = Extract<TaskList, { kind: 'ready' }>
 
+/** The agents Orca can start, Claude its default agent. */
+const AVAILABLE_AGENTS: AgentsResult = {
+  kind: 'ready',
+  agents: [
+    { id: 'claude', name: 'Claude', default: true },
+    { id: 'codex', name: 'Codex', default: false },
+    { id: 'copilot', name: 'GitHub Copilot', default: false }
+  ]
+}
+
 /** The answers of a panel showing `tasks`, whose project is the active one. The worktrees and the
- *  Starts under way are the list's own. A Start, a Run here, or opening a worktree, does nothing. */
+ *  Starts under way are the list's own, and Orca can start `AVAILABLE_AGENTS`. A Start, a Run here,
+ *  or opening a worktree, does nothing. */
 function answers(tasks: TaskList): MockRequests {
   let worktrees: WorktreesResult = { kind: 'ready', worktrees: {} }
   let starting: string[] = []
@@ -38,6 +50,7 @@ function answers(tasks: TaskList): MockRequests {
     'project.active': { projectId: 'project' in tasks && tasks.project ? tasks.project.id : null },
     'starts.load': { starting },
     'jira.sites': { kind: 'ready', sites: [{ id: 'site-1', name: 'example.atlassian.net' }] },
+    'agents.load': AVAILABLE_AGENTS,
     'task.start': { ok: false, message: 'Starting is off in check scenarios.' },
     'task.runHere': { ok: false, message: 'Running here is off in check scenarios.' },
     'worktree.open': { ok: false, message: 'Opening a worktree is off in check scenarios.' }
@@ -195,6 +208,12 @@ export default defineCheck({
   'no-project': { requests: answers({ kind: 'no-project' }) },
   // Project settings opens by itself, with a tracker to choose.
   'needs-config': { requests: answers({ kind: 'needs-config', project: notes }) },
+  // Project settings, open by itself, with Codex chosen as the agent among Orca default, named
+  // after Claude, the three agents Orca can start by name, and No agent.
+  'available-agents': {
+    storage: { settings: { version: 1, projects: { [notes.id]: { providers: {}, agent: 'codex' } } } },
+    requests: answers({ kind: 'needs-config', project: notes })
+  },
   'github-ready': { requests: answers(ready(web, 'github', githubTasks)) },
   // One template of the project's own and two global ones: the cards' template Select lists the
   // project's first, then the global ones, marked Global; the default template is a global one.

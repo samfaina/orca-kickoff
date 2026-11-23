@@ -11,7 +11,7 @@
     "alt": "Kickoff with the line \"Your prompt templates, one click from any GitHub or Jira task.\" and an arrow to the open template menu in its panel."
   },
   "engines": {
-    "orca": ">=1.4.265"
+    "orca": ">=1.4.271"
   },
   "execution": "trusted-worker",
   "pluginApi": 1,

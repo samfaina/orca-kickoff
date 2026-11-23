@@ -34,6 +34,7 @@ const PANEL_REQUESTS = Object.keys({
   'worktrees.load': true,
   'project.active': true,
   'jira.sites': true,
+  'agents.load': true,
   'task.start': true,
   'task.runHere': true,
   'starts.load': true,
@@ -56,6 +57,15 @@ test('needs-config opens Project settings with a tracker to choose', async () =>
   const shown = await render('needs-config')
   assert.ok(shown.find({ type: 'Heading', text: 'Project settings' }))
   assert.equal(shown.valueOf({ label: 'Tracker' }), ':none')
+})
+
+test('available-agents opens Project settings with Codex chosen among Orca default named after Claude, the three available agents, and No agent', async () => {
+  const shown = await render('available-agents')
+  assert.ok(shown.find({ type: 'Heading', text: 'Project settings' }))
+  const options = shown.find({ type: 'Select', label: 'Agent' })?.props.options as { label: string }[]
+  assert.deepEqual(options.map((option) => option.label), ['Orca default (Claude)', 'Claude', 'Codex', 'GitHub Copilot', 'No agent'])
+  assert.equal(shown.valueOf({ type: 'Select', label: 'Agent' }), 'codex')
+  assert.equal(shown.find({ type: 'Text', text: "Couldn't read Orca's agents." }), null)
 })
 
 test('github-ready lists the issues of a GitHub project, each with Start, with one assignee, several or none', async () => {

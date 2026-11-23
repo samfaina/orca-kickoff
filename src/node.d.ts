@@ -22,14 +22,6 @@ declare module 'node:os' {
   export function homedir(): string
 }
 
-declare module 'node:fs/promises' {
-  export function readFile(path: string, encoding: 'utf8'): Promise<string>
-}
-
-declare module 'node:url' {
-  export function fileURLToPath(url: string): string
-}
-
 /** Tests yield an event-loop turn with it, the turn Orca's test runtime draws the panel on. */
 declare function setImmediate(callback: () => void): unknown
 

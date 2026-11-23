@@ -490,30 +490,32 @@ Shows the worktree in Orca **[Verified]** (help only, not run).
 - **`default`.** True only for the agent whose id equals the saved `defaultTuiAgent`, after the turned-off agents are removed. So at most one agent is marked, and none when the default is `blank`, unset, turned off or not installed. It doesn't apply Orca's fallback to the first installed agent (`pickTuiAgent`, see [Orca's default agent](#orcas-default-agent)). Turning an agent off in Orca's settings also clears the default when it was that agent.
 - **Host.** Without `--worktree`, the local machine's `PATH` (on Windows, Windows and not WSL). With `--worktree`, the host of that workspace. For a paired runtime or a managed SSH host, the call is forwarded there: an Orca there too old to have the command gives `incompatible_runtime`, and an unmanaged SSH target gives `ssh_host_not_served`. For a WSL project, a shell probe runs in the distro, and a stopped distro is not started.
 - **Failure.** Exit 1 with `{ ok: false, error: { code, message, data? } }` on stdout. A local error has `id: 'local'` and `code: 'runtime_error'` unless the runtime gave one.
+- **Selectors.** `--worktree active` answers the agents of the active worktree's host, and a selector that names no worktree, such as `id:does-not-exist`, exits 1 with `code` and `message` both `selector_not_found` **[Verified]** (run on Windows, Orca 1.4.271, issue #140).
+- **How Kickoff uses it** (issue #140, ADR-0004): Project settings asks with `active` each time it opens and on each load of the list; a Run here asks with `active`; a Start asks with `id:<main worktree id>` of its project, the `worktree list` row with `isMainWorktree: true`, since its worktree is created on that host. `src/agent.ts` parses the answer and resolves the agent choice against it.
 - **Older hosts.** When the host has no `preflight.installedAgents`, the CLI falls back to older calls. If those can't read the settings, nothing is filtered or marked `default`.
-- **Oldest Orca.** Neither `--help` nor the bundle says which version added the command, and 1.4.271 is the oldest it was seen in. Whether an older Orca has it is not known **[Assumed]**.
+- **Oldest Orca.** Neither `--help` nor the bundle says which version added the command, and 1.4.271 is the oldest it was seen in. Whether an older Orca has it is not known **[Assumed]**. So since issue #140 `engines.orca` is `>=1.4.271`.
 
 ### Orca's default agent
 
-Until Orca 1.4.271's `orca agent installed` (above), no CLI command or plugin API exposed it; `orca settings` and `orca config` are unknown commands **[Verified]**. ADR-0004 moves Kickoff to reading it from there (issue #140); until then Kickoff reads the private data below. It is stored in Orca's private data:
+Until Orca 1.4.271's `orca agent installed` (above), no CLI command or plugin API exposed it; `orca settings` and `orca config` are unknown commands **[Verified]**. Since issue #140 Kickoff reads it from there (ADR-0004), as the agent marked `default`. Before, it read the private data below, which is kept here as a record; no code reads it now. It is stored in Orca's private data:
 
 1. **Data folder** (`%APPDATA%\orca` on Windows **[Verified]**):
    - macOS: `~/Library/Application Support/orca` **[Original]**.
    - Linux: `$XDG_CONFIG_HOME/orca` or `~/.config/orca` **[Original]**.
    - Orca removes `APPDATA` from the worker environment on Windows **[Verified]** (see [Worker process](#worker-process)), and `XDG_CONFIG_HOME` on Linux **[Original]**.
    - So the original plugin derives the folder from its own install path, `<data>/plugins/<publisher>.<id>/<64 hex>/...` **[Verified]**. It checks that the plugin folder ends with `.<id>`.
-   - Each installed plugin folder holds the `<64 hex>` content folder (the `contentHash` in `plugins/plugins.lock.json`), a `current` file (not a link) and `.install-provenance` **[Verified]**. That the worker's `import.meta.url` points inside the content folder is **[Original]**; Kickoff falls back to the platform's default folder otherwise (`src/agent.ts`).
+   - Each installed plugin folder holds the `<64 hex>` content folder (the `contentHash` in `plugins/plugins.lock.json`), a `current` file (not a link) and `.install-provenance` **[Verified]**. That the worker's `import.meta.url` points inside the content folder is **[Original]**; Kickoff fell back to the platform's default folder otherwise (`src/agent.ts` before issue #140).
 2. **Active profile:** `activeProfileId` in `orca-profile-index.json` (keys `schemaVersion`, `activeProfileId`, `profiles[]`), with `orca-profile-index.json.bak` as a fallback and `local-default` as the default **[Verified]**. The original only accepts the id if it matches a pattern and is listed in `profiles[]` **[Original]**.
 3. **Settings:** `profiles/<profile>/profile-state.db`, table `profile_state_documents` (`domain`, `payload`, `domain_version`, `revision`, `updated_at`, `content_hash`). `SELECT payload FROM profile_state_documents WHERE domain = 'settings'` gives JSON with `defaultTuiAgent`, `disabledTuiAgents` and `agentDefaultSurface` **[Verified]**.
    - Read with Node's built-in `node:sqlite` (`DatabaseSync`, `readOnly: true`): the Node inside Orca 1.4.255 is v24.22.1 and has it **[Verified]**.
    - `disabledTuiAgents` is an array of agent ids, and can be long **[Verified]**.
-   - A `profile_state_document_parts` table also exists, so large documents may be split **[Assumed]**. A payload that isn't valid JSON is treated as unreadable, and Kickoff tries `orca-data.json` next.
+   - A `profile_state_document_parts` table also exists, so large documents may be split **[Assumed]**. Kickoff treated a payload that isn't valid JSON as unreadable, and tried `orca-data.json` next.
    - The older `profiles/<profile>/orca-data.json` still holds `settings.defaultTuiAgent` **[Verified]**.
 4. **Orca's own rule** (`pickTuiAgent`) **[Verified]**:
    - `blank` means no agent.
    - Otherwise it uses the preferred agent if it is installed and not in `disabledTuiAgents`.
    - Otherwise the first installed agent in a fixed order (`claude`, `claude-agent-teams`, `openclaude`, `codex`, ...).
-   - Kickoff cannot tell what is installed (see ADR-0003).
+   - From the private data alone Kickoff couldn't tell what is installed (ADR-0003); `orca agent installed` can, but marks no agent `default` when this fallback would pick one, and Kickoff doesn't reproduce it (ADR-0004).
 
 ### Orca's Jira support
 

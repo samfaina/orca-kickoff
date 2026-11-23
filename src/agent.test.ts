@@ -1,133 +1,90 @@
 import { assert, test } from 'orca/testing'
-import {
-  activeProfileId,
-  AGENT_UNREADABLE,
-  defaultAgentFromSettings,
-  orcaDataDir,
-  readDefaultAgent,
-  resolveAgent,
-  type DefaultAgent,
-  type OrcaStore
-} from './agent'
+import { agentInstalledArgs, parseAvailableAgents, resolveAgent } from './agent'
+import type { AgentsResult } from './protocol'
 
-const never = async (): Promise<DefaultAgent> => {
-  throw new Error('the default agent should not be read')
-}
+/** `orca agent installed --json` as Orca 1.4.271 answers (docs/reference.md). */
+const installed = (agents: unknown[]) => JSON.stringify({ id: 'req-1', ok: true, result: { agents }, _meta: { runtimeId: 'rt-1' } })
 
-test('"No agent" resolves to no agent without reading Orca', async () => {
-  assert.deepEqual(await resolveAgent('none', never), { ok: true, agent: null })
+test('orca agent installed asks for the agents of the host of the worktree the selector names', () => {
+  assert.deepEqual(agentInstalledArgs('active'), ['agent', 'installed', '--worktree', 'active', '--json'])
+  assert.deepEqual(agentInstalledArgs('id:r1::/src/web'), ['agent', 'installed', '--worktree', 'id:r1::/src/web', '--json'])
 })
 
-test('a named agent resolves to itself without reading Orca', async () => {
-  assert.deepEqual(await resolveAgent('codex', never), { ok: true, agent: 'codex' })
+test('the available agents are read from orca agent installed, in its order, with the one marked default', () => {
+  const stdout = installed([
+    { id: 'claude', name: 'Claude', default: true },
+    { id: 'codex', name: 'Codex', default: false },
+    { id: 'copilot', name: 'GitHub Copilot', default: false }
+  ])
+  assert.deepEqual(parseAvailableAgents(stdout), {
+    kind: 'ready',
+    agents: [
+      { id: 'claude', name: 'Claude', default: true },
+      { id: 'codex', name: 'Codex', default: false },
+      { id: 'copilot', name: 'GitHub Copilot', default: false }
+    ]
+  })
 })
 
-test("Orca default, also when unset, resolves through Orca's default agent", async () => {
-  const claude = async (): Promise<DefaultAgent> => ({ kind: 'agent', agent: 'claude' })
-  assert.deepEqual(await resolveAgent('orca-default', claude), { ok: true, agent: 'claude' })
-  assert.deepEqual(await resolveAgent(undefined, claude), { ok: true, agent: 'claude' })
-  assert.deepEqual(await resolveAgent(undefined, async () => ({ kind: 'none' })), { ok: true, agent: null })
+test('with no agent Orca can start, the list is empty', () => {
+  assert.deepEqual(parseAvailableAgents(installed([])), { kind: 'ready', agents: [] })
 })
 
-test("an unreadable default agent fails Start with a message to pick one, never 'claude'", async () => {
-  assert.deepEqual(await resolveAgent('orca-default', async () => ({ kind: 'unreadable' })), { ok: false, message: AGENT_UNREADABLE })
-  assert.deepEqual(await resolveAgent('orca-default', never), { ok: false, message: AGENT_UNREADABLE })
-  assert.equal(AGENT_UNREADABLE, "Couldn't read Orca's default agent — pick one in the panel.")
+test("an error answer is a failure with Orca's message", () => {
+  const stdout = JSON.stringify({ id: 'local', ok: false, error: { code: 'incompatible_runtime', message: 'The paired runtime is too old.' } })
+  assert.deepEqual(parseAvailableAgents(stdout), { kind: 'error', message: 'orca failed: The paired runtime is too old.' })
 })
 
-test('`blank` resolves to no agent', () => {
-  assert.deepEqual(defaultAgentFromSettings({ defaultTuiAgent: 'blank', disabledTuiAgents: [] }), { kind: 'none' })
+test('output that is not JSON, or not of the expected shape, is a failure', () => {
+  const unreadable = { kind: 'error', message: "orca returned output Kickoff couldn't read. Update orca and try again." }
+  assert.deepEqual(parseAvailableAgents('Unknown command: agent installed'), unreadable)
+  assert.deepEqual(parseAvailableAgents(JSON.stringify({ ok: true, result: {} })), unreadable)
 })
 
-test('a preferred agent resolves to itself', () => {
-  assert.deepEqual(defaultAgentFromSettings({ defaultTuiAgent: 'gemini', disabledTuiAgents: ['codex'] }), { kind: 'agent', agent: 'gemini' })
-  assert.deepEqual(defaultAgentFromSettings({ defaultTuiAgent: 'gemini' }), { kind: 'agent', agent: 'gemini' })
+const agents = (defaultId: string | null): AgentsResult => ({
+  kind: 'ready',
+  agents: [
+    { id: 'claude', name: 'Claude', default: defaultId === 'claude' },
+    { id: 'gemini', name: 'Gemini', default: defaultId === 'gemini' }
+  ]
 })
 
-test('a preferred agent listed in disabledTuiAgents is an error', () => {
-  assert.deepEqual(defaultAgentFromSettings({ defaultTuiAgent: 'codex', disabledTuiAgents: ['codex'] }), { kind: 'unreadable' })
+const unreadable: AgentsResult = { kind: 'error', message: 'orca failed: Orca is not running.' }
+
+test('"No agent" resolves to no agent, whatever the list says', () => {
+  assert.deepEqual(resolveAgent('none', agents('claude')), { ok: true, agent: null })
+  assert.deepEqual(resolveAgent('none', unreadable), { ok: true, agent: null })
 })
 
-test('settings without a preferred agent are unreadable', () => {
-  assert.deepEqual(defaultAgentFromSettings({}), { kind: 'unreadable' })
-  assert.deepEqual(defaultAgentFromSettings({ defaultTuiAgent: '' }), { kind: 'unreadable' })
-  assert.deepEqual(defaultAgentFromSettings(null), { kind: 'unreadable' })
+test('"Orca default", also when unset, resolves to the agent marked default', () => {
+  assert.deepEqual(resolveAgent('orca-default', agents('gemini')), { ok: true, agent: 'gemini' })
+  assert.deepEqual(resolveAgent(undefined, agents('claude')), { ok: true, agent: 'claude' })
 })
 
-test('the active profile comes from the index, then its backup, then local-default', () => {
-  const index = JSON.stringify({ schemaVersion: 1, activeProfileId: 'work', profiles: [{ id: 'local-default' }, { id: 'work' }] })
-  assert.equal(activeProfileId(index, null), 'work')
-  assert.equal(activeProfileId('{ torn', index), 'work')
-  assert.equal(activeProfileId(JSON.stringify({ activeProfileId: 'ghost', profiles: [{ id: 'work' }] }), null), 'local-default')
-  assert.equal(activeProfileId(JSON.stringify({ activeProfileId: '../etc', profiles: [{ id: '../etc' }] }), null), 'local-default')
-  assert.equal(activeProfileId(null, null), 'local-default')
+test('"Orca default" with no agent marked default fails with a message to choose one, never guessing', () => {
+  const failure = { ok: false, message: 'Orca has no default agent: choose one in Project settings.' }
+  assert.deepEqual(resolveAgent('orca-default', agents(null)), failure)
+  assert.deepEqual(resolveAgent(undefined, { kind: 'ready', agents: [] }), failure)
 })
 
-const hash = 'a'.repeat(64)
-
-test("Orca's data folder comes from the plugin's install path, which ends in .kickoff", () => {
-  const windows = { platform: 'win32', env: {}, home: 'C:\\Users\\someone' }
-  assert.equal(
-    orcaDataDir(windows, `D:\\Data\\orca\\plugins\\local.kickoff\\${hash}\\src\\agent.ts`),
-    'D:\\Data\\orca'
-  )
-  const linux = { platform: 'linux', env: {}, home: '/home/someone' }
-  assert.equal(orcaDataDir(linux, `/home/someone/.config/orca/plugins/acme.kickoff/${hash}/src/agent.ts`), '/home/someone/.config/orca')
+test('"Orca default" with a list that can\'t be read fails with a message and the reason', () => {
+  assert.deepEqual(resolveAgent('orca-default', unreadable), {
+    ok: false,
+    message: "Couldn't read Orca's default agent: choose an agent in Project settings. orca failed: Orca is not running."
+  })
 })
 
-test("outside an install, Orca's data folder is the platform's default", () => {
-  const dev = 'C:\\src\\orca-kickoff\\src\\agent.ts'
-  assert.equal(orcaDataDir({ platform: 'win32', env: {}, home: 'C:\\Users\\someone' }, dev), 'C:\\Users\\someone\\AppData\\Roaming\\orca')
-  assert.equal(orcaDataDir({ platform: 'win32', env: { APPDATA: 'E:\\Roaming' }, home: 'C:\\Users\\someone' }, null), 'E:\\Roaming\\orca')
-  assert.equal(
-    orcaDataDir({ platform: 'win32', env: {}, home: 'C:\\Users\\someone' }, `C:\\x\\plugins\\acme.other\\${hash}\\src\\agent.ts`),
-    'C:\\Users\\someone\\AppData\\Roaming\\orca'
-  )
-  assert.equal(orcaDataDir({ platform: 'darwin', env: {}, home: '/Users/someone' }, null), '/Users/someone/Library/Application Support/orca')
-  assert.equal(orcaDataDir({ platform: 'linux', env: { XDG_CONFIG_HOME: '/cfg' }, home: '/home/someone' }, null), '/cfg/orca')
-  assert.equal(orcaDataDir({ platform: 'linux', env: {}, home: '/home/someone' }, null), '/home/someone/.config/orca')
+test('an available agent resolves to itself', () => {
+  assert.deepEqual(resolveAgent('gemini', agents('claude')), { ok: true, agent: 'gemini' })
 })
 
-/** A store holding these files, and these `settings` payloads by database path. */
-function fakeStore(files: Record<string, string>, databases: Record<string, string | Error> = {}): OrcaStore & { reads: string[] } {
-  const reads: string[] = []
-  return {
-    reads,
-    async readText(path) {
-      reads.push(path)
-      return files[path] ?? null
-    },
-    async readSettingsPayload(path) {
-      reads.push(path)
-      const payload = databases[path]
-      if (payload instanceof Error) throw payload
-      return payload ?? null
-    }
-  }
-}
-
-const data = 'D:\\Data\\orca'
-const indexFile = `${data}\\orca-profile-index.json`
-const workIndex = JSON.stringify({ activeProfileId: 'work', profiles: [{ id: 'work' }] })
-
-test("the default agent is read from the active profile's profile-state.db", async () => {
-  const store = fakeStore(
-    { [indexFile]: workIndex },
-    { [`${data}\\profiles\\work\\profile-state.db`]: JSON.stringify({ defaultTuiAgent: 'codex', disabledTuiAgents: [] }) }
-  )
-  assert.deepEqual(await readDefaultAgent(data, store), { kind: 'agent', agent: 'codex' })
+test("an agent the list doesn't have fails with a message naming it", () => {
+  assert.deepEqual(resolveAgent('codex', agents('claude')), {
+    ok: false,
+    message: "codex isn't available in Orca: choose another agent in Project settings."
+  })
 })
 
-test('without a readable profile-state.db, the default agent comes from orca-data.json', async () => {
-  const store = fakeStore(
-    { [indexFile]: workIndex, [`${data}\\profiles\\work\\orca-data.json`]: JSON.stringify({ settings: { defaultTuiAgent: 'blank' } }) },
-    { [`${data}\\profiles\\work\\profile-state.db`]: new Error('SQLITE_CANTOPEN') }
-  )
-  assert.deepEqual(await readDefaultAgent(data, store), { kind: 'none' })
-})
-
-test('an unreadable store is an error, not claude', async () => {
-  assert.deepEqual(await readDefaultAgent(data, fakeStore({})), { kind: 'unreadable' })
-  const corrupt = fakeStore({ [`${data}\\profiles\\local-default\\orca-data.json`]: '{ not json' })
-  assert.deepEqual(await readDefaultAgent(data, corrupt), { kind: 'unreadable' })
+test("a named agent with a list that can't be read is passed to Orca as it is", () => {
+  assert.deepEqual(resolveAgent('codex', unreadable), { ok: true, agent: 'codex' })
 })

@@ -6,7 +6,7 @@ Inspired by [rr235/orca-task-launcher](https://github.com/rr235/orca-task-launch
 
 ## Requirements
 
-- **Orca 1.4.265 or later.**
+- **Orca 1.4.271 or later.**
 - For **GitHub** projects: the [GitHub CLI](https://cli.github.com) (`gh`), logged in with `gh auth login`.
 - For **Jira**, one of:
   - Orca's own Jira connection, set up in Orca's settings; or
@@ -57,7 +57,7 @@ Both buttons look the same, whichever template is chosen. With the agent choice 
 
 **Project settings** also hold, under **Start**:
 
-- **Agent**: Orca's default agent, a named one (`claude`, `codex`, `gemini`, `opencode`, `copilot`), or none. If Orca's default can't be read, Start and Run here say so and ask you to pick one.
+- **Agent**: **Orca default**, which shows the name of the agent Orca marks as its default, or "(not set)"; each agent Orca can start on the host of the worktree selected in Orca, by name; or **No agent**. Kickoff reads the list from `orca agent installed` each time Project settings opens and each time it loads the tasks, as on Reload, so an agent turned off in Orca's Settings → Agents leaves the list. A Start checks its agent on the host of the project's main worktree, where its worktree is created; a Run here on the selected worktree's. A chosen agent that is no longer available stays chosen, marked "(not available)". If Orca's agents can't be read, the choice offers only Orca default, No agent and the agent already chosen, and says so. A Start or a Run here with Orca default fails with a message when Orca has no default agent, and one with an agent that isn't available fails before asking Orca: choose another in Project settings.
 - **Default template**: the [prompt template](#prompt-templates) a Start or a Run here uses unless you choose another on a task's card. A change saves itself like the other settings. **Manage templates**, beside it, opens the [Prompt templates](#the-prompt-templates-view) view; **Cancel** and **Save** there come back to Project settings.
 
 Under **Branch**, they hold how a Start names its git branch, or say that the project uses the global branch settings (see [Branch](#branch)).
