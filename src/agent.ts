@@ -3,7 +3,7 @@
 import { unreadableOutput } from './cli'
 import { isRecord } from './json'
 import { orcaResult } from './orca'
-import type { AgentChoice, AgentsResult } from './protocol'
+import { orcaDefaultAgent, type AgentChoice, type AgentsResult } from './protocol'
 
 /** `orca agent installed`: the agents Orca can start on the host of the worktree `selector` names,
  *  such as `active` or `id:<worktree id>`. */
@@ -45,8 +45,8 @@ export function resolveAgent(choice: AgentChoice | undefined, available: AgentsR
     if (available.kind === 'error') {
       return { ok: false, message: `Couldn't read Orca's default agent: choose an agent in Project settings. ${available.message}` }
     }
-    const marked = available.agents.find((agent) => agent.default)
-    return marked ? { ok: true, agent: marked.id } : { ok: false, message: 'Orca has no default agent: choose one in Project settings.' }
+    const orcaDefault = orcaDefaultAgent(available.agents)
+    return orcaDefault ? { ok: true, agent: orcaDefault.id } : { ok: false, message: 'Orca has no default agent: choose one in Project settings.' }
   }
   if (available.kind === 'ready' && !available.agents.some((agent) => agent.id === choice)) {
     return { ok: false, message: `${choice} isn't available in Orca: choose another agent in Project settings.` }

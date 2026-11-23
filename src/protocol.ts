@@ -523,6 +523,11 @@ export type JiraSitesResult =
  *  Orca's display name, and whether it is Orca's default agent. */
 export type AvailableAgent = { id: string; name: string; default: boolean }
 
+/** The agent "Orca default" stands for: the one Orca marks default, if any. */
+export function orcaDefaultAgent(agents: readonly AvailableAgent[]): AvailableAgent | undefined {
+  return agents.find((agent) => agent.default)
+}
+
 /** The available agents, in Orca's order, or why they couldn't be read. */
 export type AgentsResult =
   | { kind: 'ready'; agents: AvailableAgent[] }

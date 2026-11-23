@@ -70,6 +70,7 @@ import {
   globalTemplates,
   jiraProjectKey,
   listedFilter,
+  orcaDefaultAgent,
   projectFilters,
   projectProvider,
   projectSettings,
@@ -1169,7 +1170,8 @@ async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
       // Storage unreadable: the settings stay hidden, and a Start reads them again for its template.
     }
     if (mine !== generation) return
-    // A load may open Project settings by itself, and its project may be on another host.
+    // A load may open Project settings by itself, and a load after the poll saw the active project
+    // change may find the active worktree on another host.
     void loadAgents()
   }
   if (read(shownSettings)?.provider === 'jira-orca') void loadJiraSites()
@@ -2186,9 +2188,8 @@ function JiraTwgSettings({ providers }: { providers: ProviderConfigs }) {
  *  choice. */
 function agentOptions(agents: AgentsResult | null, stored: string): { value: string; label: string }[] {
   const listed = agents?.kind === 'ready' ? agents.agents : null
-  const marked = listed?.find((agent) => agent.default)
   const options = [
-    { value: 'orca-default', label: listed === null ? 'Orca default' : `Orca default (${marked?.name ?? 'not set'})` },
+    { value: 'orca-default', label: listed === null ? 'Orca default' : `Orca default (${orcaDefaultAgent(listed)?.name ?? 'not set'})` },
     ...(listed ?? []).map((agent) => ({ value: agent.id, label: agent.name })),
     { value: 'none', label: 'No agent' }
   ]
