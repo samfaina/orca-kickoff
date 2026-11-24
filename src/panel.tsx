@@ -323,7 +323,7 @@ const availableAgents = atom<AgentsResult | null>(null)
 let agentsAsked = 0
 /** Kickoff's version, for the line under Project settings: `unasked` until Project settings first
  *  opens, `asking` until the worker answers, then its answer, null when it has none. */
-const aboutKickoff = atom<'unasked' | 'asking' | About | null>('about', 'unasked', { persist: 'memory' })
+const shownAbout = atom<'unasked' | 'asking' | About | null>('about', 'unasked', { persist: 'memory' })
 /** Task keys with a Start under way: asked by this panel, or reported by the worker. */
 const starting = atom<Record<string, true>>({})
 /** Task keys whose `task.start` hasn't answered yet. */
@@ -1181,23 +1181,23 @@ async function loadAgents(): Promise<void> {
 
 /** Asks for Kickoff's version the first time Project settings opens, and keeps the answer while
  *  the panel is open. A worker that doesn't answer counts as no version. */
-async function loadAbout(): Promise<void> {
-  if (read(aboutKickoff) !== 'unasked') return
-  set(aboutKickoff, 'asking')
+async function askAbout(): Promise<void> {
+  if (read(shownAbout) !== 'unasked') return
+  set(shownAbout, 'asking')
   let answer: About | null
   try {
     answer = await plugin.request('about.load', {})
   } catch {
     answer = null
   }
-  set(aboutKickoff, answer)
+  set(shownAbout, answer)
 }
 
 /** Opens Project settings, reading Orca's agents again: one may have been turned off in Orca. */
 function openSettings(): void {
   set(settingsChoice, 'open')
   void loadAgents()
-  void loadAbout()
+  void askAbout()
 }
 
 /** Lists the active project's tasks, or runs the tracker search shown again. `poll` says the poll
@@ -1245,8 +1245,8 @@ async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
   if (savedTrackerSettings !== null) listedTrackerSettingsVersion = savedTrackerSettings
   set(list, answer)
   set(loading, false)
-  // Project settings may open by itself with this answer.
-  if (read(settingsChoice) === 'auto' && needsSettings(answer)) void loadAbout()
+  // Project settings may open by itself with this answer: only one that names a project.
+  if ('project' in answer && answer.project && read(settingsChoice) === 'auto' && needsSettings(answer)) void askAbout()
   // A failed query opens the filter editor on its filter, unless a draft, or the choice of +, is
   // open already.
   if (answer.kind === 'error' && answer.filterId !== undefined && !read(templateDraft) && !read(filterDraft) && !read(newFilterChoice)) {
@@ -1883,7 +1883,7 @@ function SettingsBar({ shown }: { shown: ShownSettings }) {
 /** Kickoff's version, centred and muted, once the worker has answered with one; nothing before or
  *  without one. A development plugin says so, since its version can match a release's. */
 function VersionLine() {
-  const about = read(aboutKickoff)
+  const about = read(shownAbout)
   if (about === 'unasked' || about === 'asking' || about === null) return null
   return (
     <Box direction="row" justify="center">

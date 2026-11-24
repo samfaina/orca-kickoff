@@ -1,6 +1,7 @@
 // The panel <-> worker contract, the data model from the spec and the settings reader.
 // src/panel.tsx and src/worker.ts both read it, so it imports nothing from Node. Expected failures
-// are data (`kind: 'error'`, `ok: false`): no request throws for them.
+// are data (`kind: 'error'`, `ok: false`, or null where a request says so): no request throws for
+// them.
 import type { About } from './about'
 import { isRecord } from './json'
 import { fillTemplate, INITIAL_TEMPLATE_ID, INITIAL_TEMPLATE_NAME, JIRA_PROJECT_VARIABLE, sameTemplateName, usesVariable } from './template'

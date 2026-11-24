@@ -68,8 +68,8 @@ type StartOptions = {
 }
 
 /** Where a development plugin's worker runs in the tests, and its manifest. */
-const DEV_WORKER = 'file:///home/example/code/orca-kickoff/src/worker.ts'
-const DEV_MANIFEST = 'file:///home/example/code/orca-kickoff/orca-plugin.json'
+const DEVELOPMENT_WORKER = 'file:///home/example/code/orca-kickoff/src/worker.ts'
+const DEVELOPMENT_MANIFEST = 'file:///home/example/code/orca-kickoff/orca-plugin.json'
 
 /** Reads `files`, by URL, or fails as a missing file does. */
 function fakeReadFile(files: Record<string, string | Error>) {
@@ -90,7 +90,7 @@ function withFailingPost(orca: OrcaWorkerApi, error: Error): OrcaWorkerApi {
 }
 
 async function start(answers: Record<string, Answer>, options: StartOptions = {}) {
-  const { storage = {}, now = Date.now, postThrows, workerUrl = DEV_WORKER, files = {} } = options
+  const { storage = {}, now = Date.now, postThrows, workerUrl = DEVELOPMENT_WORKER, files = {} } = options
   const host = mockHost({ capabilities: ['storage:own', 'workspace:read'], storage })
   const calls: Call[] = []
   let run = fakeRun(answers, calls)
@@ -1290,9 +1290,9 @@ const HASH = 'a3f0c1d2e4b5968778695a4b3c2d1e0f1a2b3c4d5e6f708192a3b4c5d6e7f809'
 const manifestOf = (version: string) => JSON.stringify({ manifestVersion: 2, id: 'kickoff', name: 'Kickoff', version })
 
 test("about.load answers the version of the manifest next to the worker's src folder, a development plugin, and logs where the worker runs", async () => {
-  const { worker, calls } = await start({}, { files: { [DEV_MANIFEST]: manifestOf('0.7.0') } })
+  const { worker, calls } = await start({}, { files: { [DEVELOPMENT_MANIFEST]: manifestOf('0.7.0') } })
   assert.deepEqual(await worker.request('about.load', {}), { version: '0.7.0', development: true })
-  assert.deepEqual(worker.logs, [`about.load: the worker runs from ${DEV_WORKER}`])
+  assert.deepEqual(worker.logs, [`about.load: the worker runs from ${DEVELOPMENT_WORKER}`])
   assert.deepEqual(calls, [])
 })
 
@@ -1306,11 +1306,11 @@ test("about.load answers null and logs why when the manifest can't be read or ha
   const missing = await start({})
   assert.equal(await missing.worker.request('about.load', {}), null)
   assert.deepEqual(missing.worker.logs.slice(1), [
-    `Couldn't read Kickoff's version from ${DEV_MANIFEST}: ENOENT: no such file or directory, open '/home/example/code/orca-kickoff/orca-plugin.json'`
+    `Couldn't read Kickoff's version from ${DEVELOPMENT_MANIFEST}: ENOENT: no such file or directory, open '/home/example/code/orca-kickoff/orca-plugin.json'`
   ])
-  const broken = await start({}, { files: { [DEV_MANIFEST]: '{ "version": ' } })
+  const broken = await start({}, { files: { [DEVELOPMENT_MANIFEST]: '{ "version": ' } })
   assert.equal(await broken.worker.request('about.load', {}), null)
-  assert.deepEqual(broken.worker.logs.slice(1), [`Couldn't read Kickoff's version from ${DEV_MANIFEST}: it isn't JSON with a version.`])
+  assert.deepEqual(broken.worker.logs.slice(1), [`Couldn't read Kickoff's version from ${DEVELOPMENT_MANIFEST}: it isn't JSON with a version.`])
 })
 
 test('worktree.open answers a failure as data', async () => {

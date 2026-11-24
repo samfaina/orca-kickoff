@@ -5150,6 +5150,19 @@ test('Project settings that open by themselves ask for the version too', async (
   assert.equal(wordsOf(versionLine(view) ?? ''), 'Kickoff 0.6.0')
 })
 
+test('a failure with no project, which opens no Project settings, asks for no version', async () => {
+  let asked = 0
+  const { view } = await showWith({
+    'tasks.load': { kind: 'error', project: null, message: 'orca failed: not running.' },
+    'about.load': () => {
+      asked++
+      return installed
+    }
+  })
+  assert.equal(view.find({ type: 'Heading', text: 'Project settings' }), null)
+  assert.equal(asked, 0)
+})
+
 test('no version line shows while the worker is asked, nor when it answers null or not at all', async () => {
   const answer = held()
   const { view } = await showWith(

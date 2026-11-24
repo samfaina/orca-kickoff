@@ -369,14 +369,15 @@ export function activateWith(orca: OrcaWorkerApi, { run, now, workerUrl, readFil
    *  which Kickoff Orca loaded. */
   async function loadAbout(): Promise<About | null> {
     orca.log(`about.load: the worker runs from ${workerUrl}`)
-    let manifest = workerUrl
+    let manifest: URL | null = null
     try {
-      manifest = manifestUrl(workerUrl).href
-      const about = aboutKickoff(workerUrl, await readFile(new URL(manifest)))
-      if (about === null) orca.log(`Couldn't read Kickoff's version from ${manifest}: it isn't JSON with a version.`)
+      manifest = manifestUrl(workerUrl)
+      // readFile refuses a URL that isn't a file URL, so a null here is the manifest's.
+      const about = aboutKickoff(workerUrl, await readFile(manifest))
+      if (about === null) orca.log(`Couldn't read Kickoff's version from ${manifest.href}: it isn't JSON with a version.`)
       return about
     } catch (error) {
-      orca.log(`Couldn't read Kickoff's version from ${manifest}: ${messageOf(error)}`)
+      orca.log(`Couldn't read Kickoff's version from ${manifest?.href ?? workerUrl}: ${messageOf(error)}`)
       return null
     }
   }
