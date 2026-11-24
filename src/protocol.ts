@@ -535,9 +535,14 @@ export type AgentsResult =
 
 export type ActionResult = { ok: true } | { ok: false; message: string }
 
-/** Why there is no Run here without an agent: the worker's refusal while the project's agent
- *  choice is "No agent". */
-export const RUN_HERE_NEEDS_AGENT = 'Run here needs an agent: choose one in Project settings.'
+/** Why there is no Run here without an agent: the worker's refusal while the agent chosen for the
+ *  task, on its card or as the project's agent choice, is "No agent". The panel doesn't offer Run
+ *  here then, so only a request it didn't build gets it. */
+export const RUN_HERE_NEEDS_AGENT = "Run here needs an agent: choose one on the task's card or in Project settings."
+
+/** What a Start or a Run here of a task is asked with: the template chosen for it, and `agent`, the
+ *  agent chosen on its card. Without `agent`, the worker launches the project's agent choice. */
+export type LaunchRequest = { projectId: string; task: Task; templateId: string; agent?: AgentChoice }
 
 /** A Start's answer. `underWay`: Orca is creating the worktree and `start.ended` follows;
  *  otherwise the task already has its worktree. */
@@ -560,10 +565,10 @@ declare module 'orca' {
     /** The agents Orca can start on the active worktree's host, for Project settings' Agent: read
      *  again on each request. */
     'agents.load': { input: {}; output: AgentsResult }
-    'task.start': { input: { projectId: string; task: Task; templateId: string }; output: StartResult }
+    'task.start': { input: LaunchRequest; output: StartResult }
     /** A Run here: a new agent in the worktree selected in Orca, with the template's prompt for
      *  the task, and no worktree created. It answers once Orca reports the launch. */
-    'task.runHere': { input: { projectId: string; task: Task; templateId: string }; output: ActionResult }
+    'task.runHere': { input: LaunchRequest; output: ActionResult }
     'starts.load': { input: { projectId: string }; output: StartsResult }
     'worktree.open': { input: { worktreeId: string }; output: ActionResult }
   }

@@ -576,8 +576,10 @@ test('a card that can start ends its row with Run here, a terminal icon, then St
   assertProps(run, { variant: 'outline', tone: undefined })
   const [, startRow] = elementsIn(cardOf(view, '#42'))
   assertProps(startRow, { direction: 'row', align: 'center', justify: 'end', gap: 'xs' })
-  // With one template, Run here, then Start.
-  const [runHolder, startHolder, ...others] = elementsIn(startRow)
+  // With one template, the agent Select, 96 px wide, Run here, then Start, at the end of the row.
+  const [agentHolder, runHolder, startHolder, ...others] = elementsIn(startRow)
+  assertProps(agentHolder, { width: 96, shrink: false })
+  assert.deepEqual(nodesIn(agentHolder, (node) => node.type === 'Select').map((node) => node.props?.label), ['Agent for #42'])
   assertProps(runHolder, { shrink: false })
   assert.deepEqual(nodesIn(runHolder, (node) => node.type === 'IconButton').map((node) => node.key), ['run-here:#42'])
   assertProps(startHolder, { shrink: false })
@@ -1208,7 +1210,7 @@ test('Start starts the task, then shows its worktree and agent, keeping the load
     'worktrees.load': { kind: 'ready', worktrees: { '#42': started } }
   })
   await view.press({ testId: 'start:#42' })
-  assert.deepEqual(starts, [{ projectId: 'github:acme/web', task: task('#42'), templateId: 'default' }])
+  assert.deepEqual(starts, [{ projectId: 'github:acme/web', task: task('#42'), templateId: 'default', agent: 'orca-default' }])
   assert.ok(view.find({ type: 'Link', text: 'issue-42-add-dark-mode' }))
   assert.ok(view.find({ type: 'Text', text: /claude/ }))
   assert.equal(view.find({ testId: 'start:#42' }), null)
@@ -1240,12 +1242,14 @@ test('Start uses the template chosen on the card, or the default template when n
   assert.deepEqual(view.warnings, [])
 })
 
-test('with two templates, the template Select fills the Start row before Run here and Start', async () => {
+test('with two templates, the template Select fills the Start row before the agent Select, 96 px wide, Run here and Start', async () => {
   const { view } = await showWith({ 'tasks.load': ready([task('#42')]) }, twoTemplates)
   const [, startRow] = elementsIn(cardOf(view, '#42'))
-  const [select, run, start, ...rest] = elementsIn(startRow)
+  const [select, agent, run, start, ...rest] = elementsIn(startRow)
   assertProps(select, { grow: true, minWidth: 0 })
   assert.deepEqual(nodesIn(select, (node) => node.type === 'Select').map((node) => node.props?.label), ['Template for #42'])
+  assertProps(agent, { width: 96, shrink: false })
+  assert.deepEqual(nodesIn(agent, (node) => node.type === 'Select').map((node) => node.props?.label), ['Agent for #42'])
   assertProps(run, { shrink: false })
   assert.equal(nodesIn(run, (node) => node.key === 'run-here:#42').length, 1)
   assertProps(start, { shrink: false })
@@ -1261,12 +1265,143 @@ test('with one template, cards show no template Select', async () => {
   assert.ok(view.find({ testId: 'start:#42' }))
 })
 
-/** A template of the project's own, other than the initial one. */
-const ship = { id: 't-ship', name: 'Ship', text: '/ship-tickets {{task_key}}' }
-
 /** The card's Start and Run here buttons of a task. */
 const startButton = (key: string) => ({ testId: `start:${key}` })
 const runHereButton = (key: string) => ({ testId: `run-here:${key}` })
+
+/** The card's agent Select of a task. */
+const cardAgent = (key: string) => ({ type: 'Select', label: `Agent for ${key}` })
+
+test("with two or more available agents, the card offers an agent Select with short labels, starting at the project's agent choice", async () => {
+  const { view } = await showWith({ 'tasks.load': ready([task('#42')]), 'agents.load': availableAgents('codex') }, stored({ agent: 'gemini' }))
+  assert.deepEqual(view.find(cardAgent('#42'))?.props.options, [
+    { value: 'orca-default', label: 'Default' },
+    { value: 'claude', label: 'Claude' },
+    { value: 'codex', label: 'Codex' },
+    { value: 'gemini', label: 'Gemini' },
+    { value: 'none', label: 'None' }
+  ])
+  assert.equal(view.valueOf(cardAgent('#42')), 'gemini')
+  assertProps(view.find(cardAgent('#42'))!, { labelHidden: true })
+  await view.unmount()
+
+  const unset = await showWith({ 'tasks.load': ready([task('#42')]), 'agents.load': availableAgents('claude', ['claude', 'codex']) })
+  assert.equal(unset.view.valueOf(cardAgent('#42')), 'orca-default')
+  assert.deepEqual(optionLabels(unset.view, 'Agent for #42'), ['Default', 'Claude', 'Codex', 'None'])
+})
+
+test("with fewer than two available agents, or when Orca's agents can't be read, the card offers no agent Select", async () => {
+  const lists: MockRequests['agents.load'][] = [
+    availableAgents('claude', ['claude']),
+    availableAgents(null, []),
+    { kind: 'error', message: 'orca failed: Unknown command.' },
+    () => {
+      throw hostError('timeout', 'No answer.')
+    }
+  ]
+  for (const agents of lists) {
+    const { view } = await showWith({ 'tasks.load': ready([task('#42')]), 'agents.load': agents }, stored({ agent: 'codex' }))
+    assert.ok(view.find(startButton('#42')))
+    assert.equal(view.find(cardAgent('#42')), null)
+    await view.unmount()
+  }
+})
+
+test("a project agent that isn't available gives the card's Select an option labelled by its id, where it starts; another can be chosen", async () => {
+  const starts: { agent?: string }[] = []
+  const { view } = await showWith(
+    { 'tasks.load': ready([task('#42')]), 'task.start': (input) => (starts.push(input), { ok: true, underWay: true }) },
+    stored({ agent: 'opencode' })
+  )
+  assert.deepEqual(optionLabels(view, 'Agent for #42'), ['Default', 'Claude', 'Codex', 'Gemini', 'None', 'opencode'])
+  assert.equal(view.valueOf(cardAgent('#42')), 'opencode')
+  await view.select(cardAgent('#42'), 'codex')
+  assert.equal(view.valueOf(cardAgent('#42')), 'codex')
+  await view.press(startButton('#42'))
+  assert.equal(starts[0].agent, 'codex')
+})
+
+test("Start and Run here launch the agent chosen on the card, other cards the project's agent choice, and Project settings don't change", async () => {
+  const starts: { agent?: string }[] = []
+  const runs: { agent?: string }[] = []
+  const { view, host } = await showWith(
+    {
+      'tasks.load': ready([task('#42'), task('#7')]),
+      'task.start': (input) => (starts.push(input), { ok: true, underWay: true }),
+      'task.runHere': (input) => (runs.push(input), { ok: true })
+    },
+    stored({ agent: 'claude' })
+  )
+  await view.select(cardAgent('#42'), 'gemini')
+  await view.press(runHereButton('#42'))
+  await view.press(runHereButton('#7'))
+  await view.press(startButton('#42'))
+  await view.press(startButton('#7'))
+  assert.deepEqual(runs.map((run) => run.agent), ['gemini', 'claude'])
+  assert.deepEqual(starts.map((start) => start.agent), ['gemini', 'claude'])
+  await wait(800)
+  assert.deepEqual(storedProject(host), { providers: {}, agent: 'claude' })
+  await view.press(gear)
+  assert.equal(view.valueOf(agentSelect), 'claude')
+})
+
+test("the card's agent stays after a Run here, and falls back to the project's agent choice when it stops being available or the panel opens again", async () => {
+  let agents = availableAgents()
+  const runs: { agent?: string }[] = []
+  const requests: MockRequests = {
+    'tasks.load': ready([task('#42')]),
+    'agents.load': () => agents,
+    'task.runHere': (input) => (runs.push(input), { ok: true })
+  }
+  const { view } = await showWith(requests, stored({ agent: 'claude' }))
+  await view.select(cardAgent('#42'), 'codex')
+  await view.press(runHereButton('#42'))
+  assert.equal(view.valueOf(cardAgent('#42')), 'codex')
+  await view.press(runHereButton('#42'))
+  assert.deepEqual(runs.map((run) => run.agent), ['codex', 'codex'])
+  // A load of the list keeps it while Orca can still start it.
+  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  assert.equal(view.valueOf(cardAgent('#42')), 'codex')
+
+  // Codex turned off in Orca: the next load of the list no longer offers it.
+  agents = availableAgents('claude', ['claude', 'gemini'])
+  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  assert.equal(view.valueOf(cardAgent('#42')), 'claude')
+  await view.press(runHereButton('#42'))
+  assert.equal(runs[2].agent, 'claude')
+
+  await view.select(cardAgent('#42'), 'gemini')
+  await view.unmount()
+  const again = await showWith(requests, stored({ agent: 'claude' }))
+  assert.equal(again.view.valueOf(cardAgent('#42')), 'claude')
+})
+
+test('Run here follows the agent chosen on the card: "None" removes it, and an agent in a project set to No agent offers it', async () => {
+  const offered = await showWith({ 'tasks.load': ready([task('#42'), task('#7')]) })
+  await offered.view.select(cardAgent('#42'), 'none')
+  assert.equal(offered.view.find(runHereButton('#42')), null)
+  assert.ok(offered.view.find(startButton('#42')))
+  assert.ok(offered.view.find(runHereButton('#7')))
+  await offered.view.select(cardAgent('#42'), 'codex')
+  assert.ok(offered.view.find(runHereButton('#42')))
+  await offered.view.unmount()
+
+  const runs: { agent?: string }[] = []
+  const { view } = await showWith(
+    { 'tasks.load': ready([task('#42'), task('#7')]), 'task.runHere': (input) => (runs.push(input), { ok: true }) },
+    stored({ agent: 'none' })
+  )
+  assert.equal(view.valueOf(cardAgent('#42')), 'none')
+  assert.equal(view.find(runHereButton('#42')), null)
+  await view.select(cardAgent('#42'), 'codex')
+  assert.ok(view.find(runHereButton('#42')))
+  assert.equal(view.find(runHereButton('#7')), null)
+  await view.press(runHereButton('#42'))
+  assert.deepEqual(runs.map((run) => run.agent), ['codex'])
+})
+
+/** A template of the project's own, other than the initial one. */
+const ship = { id: 't-ship', name: 'Ship', text: '/ship-tickets {{task_key}}' }
 
 /** How the card's Start and Run here look: their variant and tone. */
 function looksOf(view: TestPanel, key: string): { start: unknown[]; runHere: unknown[] } {
@@ -1303,7 +1438,7 @@ test('pressing Run here runs the task here with its template; the card keeps its
   })
   const before = storedProject(host)
   await view.press(runHereButton('#42'))
-  assert.deepEqual(runs, [{ projectId: 'github:acme/web', task: task('#42'), templateId: 'default' }])
+  assert.deepEqual(runs, [{ projectId: 'github:acme/web', task: task('#42'), templateId: 'default', agent: 'orca-default' }])
   assert.deepEqual(starts, [])
   assert.deepEqual(looksOf(view, '#42'), bothOutline)
   assert.deepEqual(storedProject(host), before)
@@ -1321,7 +1456,7 @@ test("pressing Start starts the task with the card's template; nothing is stored
     stored({ templates: [ship], defaultTemplateId: 't-ship' })
   )
   await view.press(startButton('#42'))
-  assert.deepEqual(starts, [{ projectId: 'github:acme/web', task: task('#42'), templateId: 't-ship' }])
+  assert.deepEqual(starts, [{ projectId: 'github:acme/web', task: task('#42'), templateId: 't-ship', agent: 'orca-default' }])
   assert.deepEqual(runs, [])
   assert.deepEqual((storedProject(host) as { templates: unknown[] }).templates, [ship])
 })
@@ -1435,7 +1570,7 @@ test("a Run here the worker doesn't answer says so on the card", async () => {
   assert.ok(view.find({ type: 'Text', text: "Kickoff's worker didn't answer (timeout). Look in Orca whether an agent started for #42." }))
 })
 
-test('with the agent choice "No agent", a card shows only Start, outline, and no note', async () => {
+test('with the agent choice "No agent", a card has no Run here, only Start, outline, and no note', async () => {
   const starts: unknown[] = []
   const { view } = await showWith(
     { 'tasks.load': ready([task('#42')]), 'task.start': (input) => (starts.push(input), { ok: true, underWay: true }) },
@@ -1448,7 +1583,7 @@ test('with the agent choice "No agent", a card shows only Start, outline, and no
   assert.deepEqual(rest, [])
   assert.equal(view.find({ type: 'Text', text: /needs an agent/ }), null)
   await view.press(startButton('#42'))
-  assert.deepEqual(starts, [{ projectId: 'github:acme/web', task: task('#42'), templateId: 't-ship' }])
+  assert.deepEqual(starts, [{ projectId: 'github:acme/web', task: task('#42'), templateId: 't-ship', agent: 'none' }])
 })
 
 test("a started task's card has neither Start nor Run here", async () => {
@@ -2149,7 +2284,7 @@ test('a template made global in one project is listed, marked Global, in another
   assert.deepEqual(optionLabels(view, 'Template for #9'), ['Triage', 'Implement (Global)'])
   await view.select(cardTemplate('#9'), 't-impl')
   await view.press({ testId: 'start:#9' })
-  assert.deepEqual(starts, [{ projectId: api.id, task: task('#9'), templateId: 't-impl' }])
+  assert.deepEqual(starts, [{ projectId: api.id, task: task('#9'), templateId: 't-impl', agent: 'orca-default' }])
 
   await view.press(gear)
   await view.select({ type: 'Select', label: 'Default template' }, 't-impl')

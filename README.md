@@ -44,20 +44,22 @@ Each task shows as a card with its key and title, then its labels, after its sta
 
 1. creates a worktree named after the task's key and up to four words of its title, without bracketed tags such as `[FE]` (see [Branch](#branch)), such as `web-12-add-dark-mode` for Jira's `WEB-12` "[FE] Add dark mode", or `issue-42-add-dark-mode` for GitHub's `#42`; its git branch comes from the [branch template](#branch) of the branch settings the project uses, its own or the [global](#global-branch-settings) ones, or, without one, Orca names it;
 2. links it to the task in Orca, so Orca shows the task on the worktree;
-3. launches the project's agent in it, with the prompt filled from the chosen template.
+3. launches the agent chosen for the task in it, with the prompt filled from the chosen template.
 
 Creating the worktree can take a minute. Once it exists, the card shows the worktree, as a link that opens it, the assignees, and the agent running in it, and the task can't be started again.
 
-A card that can start has, in its last row, the template `Select` (with two templates or more) and two buttons:
+A card that can start has, in its last row, the template `Select` (with two templates or more), the agent `Select` (with two available agents or more) and two buttons:
 
+- The template `Select` takes the space the rest of the row leaves.
+- The agent `Select` is narrow and starts at the project's **Agent**: **Default** for Orca default, each available agent by the name Orca gives it (a long one may be cut off), **None** for No agent, and, when the project's agent isn't available, that agent by its id. The agent you choose there is the one a Start or a Run here of that task launches. It stays while the panel is open, also after a Run here, so the task can be run here again with it, and it is never saved to Project settings: when the panel opens again, or when that agent is no longer available, the card is back on the project's Agent. Without the `Select`, as when Orca's agents can't be read, the task launches the project's Agent.
 - **Run here** (the terminal button) launches the agent in the worktree you selected in Orca, without a new worktree (see [Run here](#run-here)).
 - **Start** (the play button), at the end of the row, as above.
 
-Both buttons look the same, whichever template is chosen. With the agent choice **No agent**, the card has no Run here, only Start.
+Both buttons look the same, whichever template is chosen. While the agent chosen for the task is **No agent**, the card has no Run here, only Start: choosing an agent on the card of a project set to No agent offers Run here for that task, and choosing **None** on a card takes it away.
 
 **Project settings** also hold, under **Start**:
 
-- **Agent**: **Orca default**, which shows the name of the agent Orca marks as its default, or "(not set)"; each agent Orca can start on the host of the worktree selected in Orca, by name; or **No agent**. Kickoff reads the list from `orca agent installed` each time Project settings opens and each time it loads the tasks, as on Reload, so an agent turned off in Orca's Settings → Agents leaves the list. A Start checks its agent on the host of the project's main worktree, where its worktree is created; a Run here on the selected worktree's. A chosen agent that is no longer available stays chosen, marked "(not available)". If Orca's agents can't be read, the choice offers only Orca default, No agent and the agent already chosen, and says so. A Start or a Run here with Orca default fails with a message when Orca has no default agent, and one with an agent that isn't available fails before asking Orca: choose another in Project settings.
+- **Agent**: the agent a Start or a Run here launches unless you choose another on a task's card. **Orca default**, which shows the name of the agent Orca marks as its default, or "(not set)"; each agent Orca can start on the host of the worktree selected in Orca, by name; or **No agent**. Kickoff reads the list from `orca agent installed` each time Project settings opens and each time it loads the tasks, as on Reload, so an agent turned off in Orca's Settings → Agents leaves the list. A Start checks its agent on the host of the project's main worktree, where its worktree is created; a Run here on the selected worktree's. A chosen agent that is no longer available stays chosen, marked "(not available)". If Orca's agents can't be read, the choice offers only Orca default, No agent and the agent already chosen, and says so. A Start or a Run here with Orca default fails with a message when Orca has no default agent, and one with an agent that isn't available fails before asking Orca: choose another on the task's card or in Project settings.
 - **Default template**: the [prompt template](#prompt-templates) a Start or a Run here uses unless you choose another on a task's card. A change saves itself like the other settings. **Manage templates**, beside it, opens the [Prompt templates](#the-prompt-templates-view) view; **Cancel** and **Save** there come back to Project settings.
 
 Under **Branch**, they hold how a Start names its git branch, or say that the project uses the global branch settings (see [Branch](#branch)).
@@ -70,9 +72,9 @@ GitHub lists up to 100 tasks per query, and Orca's Jira connection up to 100 per
 
 Some templates run a skill that creates its own linked worktree, such as one that ships tickets with Orca workers and runs `orca worktree create --issue <n>` itself. A Start would create a worktree first, so the task would get two, and the agent would run in the first for nothing. **Run here**, the terminal button before Start on the card, hands the filled prompt to a new agent in the worktree selected in Orca's sidebar, as it is:
 
-1. it checks that a worktree is selected, that it belongs to the listed project, that the task has no worktree yet, and that the project's agent choice gives an agent;
+1. it checks that a worktree is selected, that it belongs to the listed project, that the task has no worktree yet, and that the agent chosen for the task gives an agent;
 2. it fills the prompt from the chosen template, with `{{branch}}` the selected worktree's current branch, only as text;
-3. it launches the project's agent there, in a new tab that Orca shows.
+3. it launches the agent chosen for the task there, in a new tab that Orca shows.
 
 While it runs, the card says *Running … here*. A failure shows on the card, as a failed Start does. It creates no worktree, no branch and no link, and Kickoff keeps no record of it, so the task can be run here again, or started. When the launched skill creates a worktree linked to the task, the card shows it as started.
 

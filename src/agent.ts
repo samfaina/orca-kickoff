@@ -1,5 +1,6 @@
-// The agent a Start or a Run here launches: the project's agent choice, checked against the agents
-// Orca can start, which `orca agent installed` lists (ADR-0004). Pure: the worker runs the command.
+// The agent a Start or a Run here launches: the one chosen on the task's card, else the project's
+// agent choice, checked against the agents Orca can start, which `orca agent installed` lists
+// (ADR-0004). Pure: the worker runs the command.
 import { unreadableOutput } from './cli'
 import { isRecord } from './json'
 import { orcaResult } from './orca'
@@ -34,11 +35,13 @@ export function parseAvailableAgents(stdout: string): AgentsResult {
 /** The agent to launch, `null` for none. */
 export type AgentResolution = { ok: true; agent: string | null } | { ok: false; message: string }
 
-/** The project's agent choice as an agent id, given the available agents or why they couldn't be
- *  read. "No agent" is none. "Orca default", also when unset, is the agent marked default, and
- *  fails when none is or the list can't be read: Kickoff doesn't guess Orca's fallback. A named
- *  agent the list doesn't have fails before Orca is asked; with no list it goes to Orca as it is,
- *  which refuses an unknown id itself. */
+/** The agent chosen for a task, on its card or as the project's agent choice, as an agent id,
+ *  given the available agents or why they couldn't be read. "No agent" is none. "Orca default",
+ *  also when unset, is the agent marked default, and fails when none is or the list can't be read:
+ *  Kickoff doesn't guess Orca's fallback. A named agent the list doesn't have fails before Orca is
+ *  asked; with no list it goes to Orca as it is, which refuses an unknown id itself. The messages
+ *  name both places an agent is chosen, except when the list can't be read: the card then offers
+ *  no agent `Select`. */
 export function resolveAgent(choice: AgentChoice | undefined, available: AgentsResult): AgentResolution {
   if (choice === 'none') return { ok: true, agent: null }
   if (choice === undefined || choice === 'orca-default') {
@@ -46,10 +49,10 @@ export function resolveAgent(choice: AgentChoice | undefined, available: AgentsR
       return { ok: false, message: `Couldn't read Orca's default agent: choose an agent in Project settings. ${available.message}` }
     }
     const orcaDefault = orcaDefaultAgent(available.agents)
-    return orcaDefault ? { ok: true, agent: orcaDefault.id } : { ok: false, message: 'Orca has no default agent: choose one in Project settings.' }
+    return orcaDefault ? { ok: true, agent: orcaDefault.id } : { ok: false, message: "Orca has no default agent: choose one on the task's card or in Project settings." }
   }
   if (available.kind === 'ready' && !available.agents.some((agent) => agent.id === choice)) {
-    return { ok: false, message: `${choice} isn't available in Orca: choose another agent in Project settings.` }
+    return { ok: false, message: `${choice} isn't available in Orca: choose another agent on the task's card or in Project settings.` }
   }
   return { ok: true, agent: choice }
 }

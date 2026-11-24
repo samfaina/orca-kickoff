@@ -10,7 +10,7 @@ export type RunHere = {
   projects: ProjectRef[]
   worktrees: OrcaWorktree[]
   statuses: OrcaWorktreeStatus[]
-  /** The agent the project's agent choice resolves to, null for none. */
+  /** The agent the agent chosen for the task resolves to, null for none. */
   agent: string | null
   /** The template chosen for the task, undefined when the project no longer lists it. */
   template: PromptTemplate | undefined

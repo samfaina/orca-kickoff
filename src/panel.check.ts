@@ -234,7 +234,8 @@ export default defineCheck({
     },
     requests: answers(ready(web, 'github', githubTasks))
   },
-  // Two templates: the cards show Run here and Start, both outline, beside the template Select.
+  // Two templates: the cards show Run here and Start, both outline, beside the template and agent
+  // Selects.
   // The Prompt templates view has no New worktree switch.
   'run-here': {
     storage: {
@@ -243,6 +244,28 @@ export default defineCheck({
         projects: {
           [web.id]: {
             providers: {},
+            templates: [
+              { id: 'ship', name: 'Ship', text: '/ship-tickets {{task_key}}' },
+              { id: 'fix', name: 'Fix', text: 'Fix {{task_key}}' }
+            ],
+            defaultTemplateId: 'ship'
+          }
+        }
+      }
+    },
+    requests: answers(ready(web, 'github', githubTasks.slice(0, 3)))
+  },
+  // A project set to No agent, with two templates: each card shows the template Select, the agent
+  // Select on None, and Start, with no Run here. A card set to another agent on its Select, such as
+  // Codex on #41, shows Run here too; Project settings keep No agent.
+  'card-agent': {
+    storage: {
+      settings: {
+        version: 1,
+        projects: {
+          [web.id]: {
+            providers: {},
+            agent: 'none',
             templates: [
               { id: 'ship', name: 'Ship', text: '/ship-tickets {{task_key}}' },
               { id: 'fix', name: 'Fix', text: 'Fix {{task_key}}' }
