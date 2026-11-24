@@ -5047,12 +5047,26 @@ test('with no task loaded, the preview shows an invented Story, WEB-12', async (
   assert.deepEqual(previewShown(view), ['Preview for WEB-12 (an example)', 'Branch: feature/WEB-12__add-dark-mode--AB', 'Worktree: web-12-add-dark-mode'])
 })
 
+/** Whether a part of the bar under Project settings is the line with Kickoff's version. */
+const isVersionLine = (part: TreeSnapshot) => part.props?.justify === 'center'
+
 /** What each part of the bar under Project settings is, top to bottom. */
 function barParts(view: TestPanel): string[] {
   const bar = settingsBar(view)
   assert.ok(bar)
-  return elementsIn(bar).map((part) => (part.type === 'Callout' ? `${part.props?.tone} callout` : part.props?.border === true ? 'preview' : 'ask'))
+  return elementsIn(bar).map((part) =>
+    part.type === 'Callout' ? `${part.props?.tone} callout` : part.props?.border === true ? 'preview' : isVersionLine(part) ? 'version' : 'ask'
+  )
 }
+
+/** The line with Kickoff's version at the bottom of the bar under Project settings, or null. */
+function versionLine(view: TestPanel): TreeSnapshot | null {
+  const bar = settingsBar(view)
+  assert.ok(bar)
+  return elementsIn(bar).find(isVersionLine) ?? null
+}
+
+const installed = { version: '0.6.0', development: false }
 
 /** The preview in the bar under Project settings. */
 function barPreview(view: TestPanel): TreeSnapshot {
@@ -5072,6 +5086,97 @@ test("the preview stays in view in the bar under Project settings, in a box betw
   await view.type(branchTemplateField, 'a b')
   await view.toggle(branchGlobalSwitch)
   assert.deepEqual(barParts(view), ['danger callout', 'preview', 'ask'])
+})
+
+test("Project settings ends with Kickoff's version, in one centred, muted line under everything in the bar", async () => {
+  const { view } = await showWith({ 'tasks.load': twgReady([web12Tagged()]), 'about.load': installed }, twgStored({ site: '', profile: '' }))
+  await view.press(gear)
+  assert.deepEqual(barParts(view), ['preview', 'version'])
+  const line = versionLine(view)
+  assert.ok(line)
+  assertProps(line, { direction: 'row', justify: 'center' })
+  assert.deepEqual(elementsIn(line).map((part) => ({ type: part.type, size: part.props?.size, muted: part.props?.muted, words: wordsOf(part) })), [
+    { type: 'Text', size: 'xs', muted: true, words: 'Kickoff 0.6.0' }
+  ])
+  await view.type(branchTemplateField, 'a b')
+  await view.toggle(branchGlobalSwitch)
+  assert.deepEqual(barParts(view), ['danger callout', 'preview', 'ask', 'version'])
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.warnings, [])
+  assert.deepEqual(view.refusals, [])
+})
+
+test('the version line says when Kickoff is a development plugin', async () => {
+  const { view } = await showWith({ 'tasks.load': twgReady([]), 'about.load': { version: '0.7.0', development: true } }, twgStored({ site: '', profile: '' }))
+  await view.press(gear)
+  const line = versionLine(view)
+  assert.ok(line)
+  assert.equal(wordsOf(line), 'Kickoff 0.7.0 · development')
+})
+
+test('the version is asked for once, the first time Project settings opens, and kept while the panel is open', async () => {
+  let asked = 0
+  const { view } = await showWith(
+    {
+      'tasks.load': twgReady([]),
+      'about.load': () => {
+        asked++
+        return installed
+      }
+    },
+    twgStored({ site: '', profile: '' })
+  )
+  assert.equal(asked, 0)
+  await view.press(gear)
+  assert.equal(asked, 1)
+  await view.press({ type: 'Button', text: 'Done' })
+  await view.press({ type: 'IconButton', label: 'Reload tasks' })
+  await view.press(gear)
+  assert.equal(asked, 1)
+  assert.equal(wordsOf(versionLine(view) ?? ''), 'Kickoff 0.6.0')
+})
+
+test('Project settings that open by themselves ask for the version too', async () => {
+  let asked = 0
+  const { view } = await showWith({
+    'tasks.load': { kind: 'needs-config', project: notes },
+    'about.load': () => {
+      asked++
+      return installed
+    }
+  })
+  assert.ok(view.find({ type: 'Heading', text: 'Project settings' }))
+  assert.equal(asked, 1)
+  assert.equal(wordsOf(versionLine(view) ?? ''), 'Kickoff 0.6.0')
+})
+
+test('no version line shows while the worker is asked, nor when it answers null or not at all', async () => {
+  const answer = held()
+  const { view } = await showWith(
+    {
+      'tasks.load': twgReady([]),
+      'about.load': async () => {
+        await answer.released
+        return installed
+      }
+    },
+    twgStored({ site: '', profile: '' })
+  )
+  const opening = view.press(gear)
+  await drawn(view, { type: 'Heading', text: 'Project settings' })
+  assert.equal(versionLine(view), null)
+  answer.release()
+  await opening
+  assert.ok(versionLine(view))
+  await view.unmount()
+  for (const about of [() => null, () => Promise.reject(hostError('timeout', 'No answer.'))]) {
+    const next = await showWith({ 'tasks.load': twgReady([]), 'about.load': about }, twgStored({ site: '', profile: '' }))
+    await next.view.press(gear)
+    assert.equal(versionLine(next.view), null)
+    assert.equal(next.view.find({ type: 'Text', text: /^Kickoff \d/ }), null)
+    assert.deepEqual(next.view.errors, [])
+    await next.view.unmount()
+  }
 })
 
 test("the preview says, under a separator, when a Start of the task would be refused for its branch, unless the section's own problem already says why", async () => {
@@ -5122,7 +5227,9 @@ function settingsBar(view: TestPanel): TreeSnapshot | null {
 function barGlobalPart(view: TestPanel): TreeSnapshot | null {
   const bar = settingsBar(view)
   assert.ok(bar)
-  return elementsIn(bar).find((part) => part.props?.border !== true && !(part.type === 'Callout' && part.props?.tone === 'danger')) ?? null
+  return (
+    elementsIn(bar).find((part) => part.props?.border !== true && !(part.type === 'Callout' && part.props?.tone === 'danger') && !isVersionLine(part)) ?? null
+  )
 }
 
 /** The warning in the bar under Project settings that the section edits the global branch settings,
