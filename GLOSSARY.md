@@ -123,3 +123,7 @@ _Avoid_: Current repo, selected workspace
 **Login**:
 Credentials held outside the plugin that a provider relies on: a CLI login (`gh auth login`, `twg login`) or the Jira connection in Orca's settings. The plugin never holds credentials itself.
 _Avoid_: Session, auth, token
+
+**Development plugin**:
+Kickoff loaded into Orca straight from a folder being worked on, rather than installed. Its version is the one that folder's manifest says, so it can differ from the release with the same number. Kickoff installed from a folder is a fixed copy, not a development plugin.
+_Avoid_: Local plugin (`local` is also the publisher of a plugin installed from a folder), dev build
