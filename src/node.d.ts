@@ -18,6 +18,10 @@ declare module 'node:child_process' {
   ): unknown
 }
 
+declare module 'node:fs/promises' {
+  export function readFile(path: URL, encoding: 'utf8'): Promise<string>
+}
+
 declare module 'node:os' {
   export function homedir(): string
 }

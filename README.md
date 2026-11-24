@@ -64,6 +64,8 @@ Both buttons look the same, whichever template is chosen. While the agent chosen
 
 Under **Branch**, they hold how a Start names its git branch, or say that the project uses the global branch settings (see [Branch](#branch)).
 
+At the very bottom, Project settings show which Kickoff runs: `Kickoff 0.6.0`, or `Kickoff 0.6.0 · development` for Kickoff loaded with `orca plugin dev load` straight from a folder you are working on, whose version can match a release's. Say it when you report a problem.
+
 **Filters**, above the list and open at first, holds the filter row and the **Search tasks** field; closed, it says the filter listed and the words typed. The field narrows the loaded tasks as you type, by key, title or label. **Enter** (or **Search in GitHub** / **Search in Jira**) asks the tracker instead, for the tasks of the same list that match your words, including those not loaded yet. **Clear search** goes back to the list.
 
 GitHub lists up to 100 tasks per query, and Orca's Jira connection up to 100 per JQL query, and both say so when there are more. With `twg`, a page holds up to 50 tasks, filled from each query in turn, and **Load more** reads the next one.

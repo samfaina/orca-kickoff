@@ -53,7 +53,8 @@ function answers(tasks: TaskList): MockRequests {
     'agents.load': AVAILABLE_AGENTS,
     'task.start': { ok: false, message: 'Starting is off in check scenarios.' },
     'task.runHere': { ok: false, message: 'Running here is off in check scenarios.' },
-    'worktree.open': { ok: false, message: 'Opening a worktree is off in check scenarios.' }
+    'worktree.open': { ok: false, message: 'Opening a worktree is off in check scenarios.' },
+    'about.load': { version: '0.6.0', development: true }
   }
 }
 

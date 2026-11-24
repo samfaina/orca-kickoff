@@ -38,7 +38,8 @@ const PANEL_REQUESTS = Object.keys({
   'task.start': true,
   'task.runHere': true,
   'starts.load': true,
-  'worktree.open': true
+  'worktree.open': true,
+  'about.load': true
 } satisfies Record<keyof PluginRequests, true>)
 
 test('every scenario answers every panel request, so none reaches the real worker', () => {

@@ -61,6 +61,24 @@ type StartOptions = {
   now?: () => number
   /** Makes `orca.panels.post` throw this, as a post Orca refuses would. */
   postThrows?: Error
+  /** The file URL of the worker, as `import.meta.url` gives it. */
+  workerUrl?: string
+  /** The text of each file the worker reads, by file URL, or the error reading it gives. */
+  files?: Record<string, string | Error>
+}
+
+/** Where a development plugin's worker runs in the tests, and its manifest. */
+const DEVELOPMENT_WORKER = 'file:///home/example/code/orca-kickoff/src/worker.ts'
+const DEVELOPMENT_MANIFEST = 'file:///home/example/code/orca-kickoff/orca-plugin.json'
+
+/** Reads `files`, by URL, or fails as a missing file does. */
+function fakeReadFile(files: Record<string, string | Error>) {
+  return async (url: URL) => {
+    const file = files[url.href]
+    if (file === undefined) throw new Error(`ENOENT: no such file or directory, open '${url.pathname}'`)
+    if (file instanceof Error) throw file
+    return file
+  }
 }
 
 /** `orca` with a `panels.post` that throws `error`. */
@@ -72,13 +90,19 @@ function withFailingPost(orca: OrcaWorkerApi, error: Error): OrcaWorkerApi {
 }
 
 async function start(answers: Record<string, Answer>, options: StartOptions = {}) {
-  const { storage = {}, now = Date.now, postThrows } = options
+  const { storage = {}, now = Date.now, postThrows, workerUrl = DEVELOPMENT_WORKER, files = {} } = options
   const host = mockHost({ capabilities: ['storage:own', 'workspace:read'], storage })
   const calls: Call[] = []
   let run = fakeRun(answers, calls)
   const worker = await mountWorker(
     {
-      default: (orca) => activateWith(postThrows ? withFailingPost(orca, postThrows) : orca, { run: (...args) => run(...args), now })
+      default: (orca) =>
+        activateWith(postThrows ? withFailingPost(orca, postThrows) : orca, {
+          run: (...args) => run(...args),
+          now,
+          workerUrl,
+          readFile: fakeReadFile(files)
+        })
     },
     { host }
   )
@@ -1260,6 +1284,33 @@ test('worktree.open activates the worktree in Orca', async () => {
   const { worker, calls } = await start({ 'orca worktree activate': wrap({ worktree: { id: 'r1::/src/web-42' } }) })
   assert.deepEqual(await worker.request('worktree.open', { worktreeId: 'r1::/src/web-42' }), { ok: true })
   assert.deepEqual(calls.map((call) => call.args), [['worktree', 'activate', '--worktree', 'id:r1::/src/web-42', '--json']])
+})
+
+const HASH = 'a3f0c1d2e4b5968778695a4b3c2d1e0f1a2b3c4d5e6f708192a3b4c5d6e7f809'
+const manifestOf = (version: string) => JSON.stringify({ manifestVersion: 2, id: 'kickoff', name: 'Kickoff', version })
+
+test("about.load answers the version of the manifest next to the worker's src folder, a development plugin, and logs where the worker runs", async () => {
+  const { worker, calls } = await start({}, { files: { [DEVELOPMENT_MANIFEST]: manifestOf('0.7.0') } })
+  assert.deepEqual(await worker.request('about.load', {}), { version: '0.7.0', development: true })
+  assert.deepEqual(worker.logs, [`about.load: the worker runs from ${DEVELOPMENT_WORKER}`])
+  assert.deepEqual(calls, [])
+})
+
+test('about.load answers an installed Kickoff as not a development plugin', async () => {
+  const folder = `file:///C:/Users/example/AppData/Roaming/orca/plugins/acme.kickoff/${HASH}`
+  const { worker } = await start({}, { workerUrl: `${folder}/src/worker.ts`, files: { [`${folder}/orca-plugin.json`]: manifestOf('0.6.0') } })
+  assert.deepEqual(await worker.request('about.load', {}), { version: '0.6.0', development: false })
+})
+
+test("about.load answers null and logs why when the manifest can't be read or has no version", async () => {
+  const missing = await start({})
+  assert.equal(await missing.worker.request('about.load', {}), null)
+  assert.deepEqual(missing.worker.logs.slice(1), [
+    `Couldn't read Kickoff's version from ${DEVELOPMENT_MANIFEST}: ENOENT: no such file or directory, open '/home/example/code/orca-kickoff/orca-plugin.json'`
+  ])
+  const broken = await start({}, { files: { [DEVELOPMENT_MANIFEST]: '{ "version": ' } })
+  assert.equal(await broken.worker.request('about.load', {}), null)
+  assert.deepEqual(broken.worker.logs.slice(1), [`Couldn't read Kickoff's version from ${DEVELOPMENT_MANIFEST}: it isn't JSON with a version.`])
 })
 
 test('worktree.open answers a failure as data', async () => {

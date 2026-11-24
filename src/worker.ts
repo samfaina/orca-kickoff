@@ -1,7 +1,9 @@
 // Kickoff's worker. Orca transpiles this file when it loads. It only runs commands and wires the
 // pure parts together; every expected failure is answered as data, so the panel never depends on
 // a thrown message.
+import { readFile } from 'node:fs/promises'
 import type { OrcaWorkerApi } from 'orca/worker'
+import { aboutKickoff, manifestUrl, type About } from './about'
 import { agentInstalledArgs, parseAvailableAgents, resolveAgent } from './agent'
 import { projectBranchSettings } from './branch-settings'
 import { CliError, cleanMessage, systemRunCli, type RunCli } from './cli'
@@ -67,16 +69,20 @@ const NO_ACTIVE_WORKTREE = "No worktree is selected in Orca, so Kickoff can't re
 export type WorkerDependencies = {
   run: RunCli
   now: () => number
+  /** The file URL of this file, where Orca loaded it from: inside the installed content folder,
+   *  or the folder of a development plugin. */
+  workerUrl: string
+  readFile: (url: URL) => Promise<string>
 }
 
 export default function activate(orca: OrcaWorkerApi): void {
-  activateWith(orca, { run: systemRunCli(), now: Date.now })
+  activateWith(orca, { run: systemRunCli(), now: Date.now, workerUrl: import.meta.url, readFile: (url) => readFile(url, 'utf8') })
 }
 
 type OrcaState = { projects: ProjectRef[]; worktrees: OrcaWorktree[]; statuses: OrcaWorktreeStatus[] }
 
 /** `activate` with its dependencies passed in, so tests can answer for the CLIs. */
-export function activateWith(orca: OrcaWorkerApi, { run, now }: WorkerDependencies): void {
+export function activateWith(orca: OrcaWorkerApi, { run, now, workerUrl, readFile }: WorkerDependencies): void {
   /** The project of the last successful lookup, used when Orca can't answer. */
   let lastProject: ProjectRef | null = null
   /** Starts running their quick checks, by project and task, so a second Start joins the first. */
@@ -358,6 +364,24 @@ export function activateWith(orca: OrcaWorkerApi, { run, now }: WorkerDependenci
     }
   }
 
+  /** Kickoff's version from the manifest next to the worker's `src/` folder, or null, logging why,
+   *  when it can't be read or has none. It logs where the worker runs too, for whoever checks
+   *  which Kickoff Orca loaded. */
+  async function loadAbout(): Promise<About | null> {
+    orca.log(`about.load: the worker runs from ${workerUrl}`)
+    let manifest: URL | null = null
+    try {
+      manifest = manifestUrl(workerUrl)
+      // readFile refuses a URL that isn't a file URL, so a null here is the manifest's.
+      const about = aboutKickoff(workerUrl, await readFile(manifest))
+      if (about === null) orca.log(`Couldn't read Kickoff's version from ${manifest.href}: it isn't JSON with a version.`)
+      return about
+    } catch (error) {
+      orca.log(`Couldn't read Kickoff's version from ${manifest?.href ?? workerUrl}: ${messageOf(error)}`)
+      return null
+    }
+  }
+
   orca.panels.handle('tasks.load', ({ filterId, cursor, query }) => loadTasks({ filterId, cursor, query }))
   orca.panels.handle('worktrees.load', ({ projectId }) => loadWorktrees(projectId))
   orca.panels.handle('project.active', () => activeProjectId())
@@ -367,6 +391,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, now }: WorkerDependenci
   orca.panels.handle('task.runHere', runHere)
   orca.panels.handle('starts.load', ({ projectId }) => ({ starting: startsUnderWay(projectId) }))
   orca.panels.handle('worktree.open', ({ worktreeId }) => openWorktree(worktreeId))
+  orca.panels.handle('about.load', () => loadAbout())
 }
 
 /** A CliError's message is ready to show; anything else is cleaned first. */
