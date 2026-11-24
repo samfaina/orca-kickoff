@@ -6,10 +6,11 @@ import { isRecord } from './json'
 import { orcaResult } from './orca'
 import { orcaDefaultAgent, type AgentChoice, type AgentsResult } from './protocol'
 
-/** `orca agent installed`: the agents Orca can start on the host of the worktree `selector` names,
- *  such as `active` or `id:<worktree id>`. */
-export function agentInstalledArgs(selector: string): string[] {
-  return ['agent', 'installed', '--worktree', selector, '--json']
+/** `orca agent installed`: the agents Orca can start on the host of the worktree `worktreeId`.
+ *  Always an `id:` selector: `active` resolves from the caller's own folder, not from the worktree
+ *  focused in Orca (docs/reference.md). */
+export function agentInstalledArgs(worktreeId: string): string[] {
+  return ['agent', 'installed', '--worktree', `id:${worktreeId}`, '--json']
 }
 
 /** The available agents from `orca agent installed --json`, or the failure an error answer or

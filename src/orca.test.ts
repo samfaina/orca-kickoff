@@ -4,6 +4,7 @@ import {
   agentLaunchArgs,
   checkOrcaAnswer,
   findActiveProject,
+  findActiveWorktreeId,
   findTaskWorktrees,
   parseProjects,
   parseWorktreePs,
@@ -83,6 +84,11 @@ test('with no active worktree there is no active project', () => {
   const projects = parseProjects(projectList)
   const worktrees = parseWorktrees(worktreeList)
   assert.equal(findActiveProject(projects, worktrees, parseWorktreePs(ps(null))), null)
+})
+
+test('the active worktree is the worktree ps row marked active, by its id, and none when no row is', () => {
+  assert.equal(findActiveWorktreeId(parseWorktreePs(ps('repo-3::C:/src/notes'))), 'repo-3::C:/src/notes')
+  assert.equal(findActiveWorktreeId(parseWorktreePs(ps(null))), null)
 })
 
 test('an error answer from Orca throws its message, with its code', () => {

@@ -109,7 +109,7 @@ The per-project setting that says which agent a Start or a Run here launches, un
 _Avoid_: Default agent (that is Orca's own setting)
 
 **Available agent**:
-An agent Orca can start on the active project's host: Orca detects it there and it is not turned off in Orca's settings. The agent choice offers the available agents; a named agent that is no longer available stays chosen but can't be launched.
+An agent Orca can start on the host of the worktree an agent is launched in, the active worktree's for the agent choice: Orca detects it there and it is not turned off in Orca's settings. The agent choice offers the available agents; a named agent that is no longer available stays chosen but can't be launched.
 _Avoid_: Installed agent (that includes the turned-off ones), configured agent
 
 **Project settings**:

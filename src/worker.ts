@@ -10,6 +10,7 @@ import {
   checkOrcaAnswer,
   findActiveProject,
   findActiveProjectId,
+  findActiveWorktreeId,
   findTaskWorktrees,
   parseProjects,
   parseWorktreePs,
@@ -60,6 +61,9 @@ import { buildPrompt, findTemplate, TEMPLATE_GONE } from './template'
  *  this long, so it doesn't make a second worktree. */
 const TIMEOUT_GUARD_MS = 5 * 60_000
 
+/** Why the agents of the active worktree's host can't be read when no worktree is active. */
+const NO_ACTIVE_WORKTREE = "No worktree is selected in Orca, so Kickoff can't read the agents of its host."
+
 export type WorkerDependencies = {
   run: RunCli
   now: () => number
@@ -94,11 +98,22 @@ export function activateWith(orca: OrcaWorkerApi, { run, now }: WorkerDependenci
     return { projects: parseProjects(projects), ...state }
   }
 
-  /** The agents Orca can start on the host of the worktree `selector` names, read each time it is
-   *  asked: turning an agent off in Orca shows at once. A failure is data. */
-  async function readAgents(selector: string): Promise<AgentsResult> {
+  /** The agents Orca can start on the host of the worktree `worktreeId`, read each time they are
+   *  asked for: turning an agent off in Orca shows at once. A failure is data. */
+  async function readAgents(worktreeId: string): Promise<AgentsResult> {
     try {
-      return parseAvailableAgents(await run('orca', agentInstalledArgs(selector)))
+      return parseAvailableAgents(await run('orca', agentInstalledArgs(worktreeId)))
+    } catch (error) {
+      return { kind: 'error', message: messageOf(error) }
+    }
+  }
+
+  /** The agents of the active worktree's host, for Project settings and the task's card. A failure
+   *  is data. */
+  async function loadAgents(): Promise<AgentsResult> {
+    try {
+      const worktreeId = findActiveWorktreeId(parseWorktreePs(await run('orca', WORKTREE_PS_ARGS)))
+      return worktreeId === null ? { kind: 'error', message: NO_ACTIVE_WORKTREE } : await readAgents(worktreeId)
     } catch (error) {
       return { kind: 'error', message: messageOf(error) }
     }
@@ -219,7 +234,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, now }: WorkerDependenci
       // active one's: the person may have switched projects since the list loaded.
       const main = worktrees.find((worktree) => worktree.projectId === projectId && worktree.isMain)
       const agents: AgentsResult = main
-        ? await readAgents(`id:${main.id}`)
+        ? await readAgents(main.id)
         : { kind: 'error', message: `Orca lists no main worktree of ${project.name}.` }
       // The agent chosen on the task's card, else the project's agent choice.
       const agent = resolveAgent(choice ?? settings.agent, agents)
@@ -292,17 +307,18 @@ export function activateWith(orca: OrcaWorkerApi, { run, now }: WorkerDependenci
       // The task is about to have a task worktree. The other way round needs no check: a Run here
       // creates nothing a Start would collide with.
       if (creating.has(id) || checking.has(id)) return { ok: false, message: `${task.key} is being started. Wait for its worktree.` }
-      // The launch runs in the active worktree, so its host's agents are the ones to check.
-      const [state, stored, agents] = await Promise.all([readOrca(), readStoredSettings(), readAgents('active')])
+      const [state, stored] = await Promise.all([readOrca(), readStoredSettings()])
       const settings = projectSettings(stored, projectId)
-      // The agent chosen on the task's card, else the project's agent choice.
-      const agent = resolveAgent(choice ?? settings.agent, agents)
-      if (!agent.ok) return agent
+      // The launch runs in the active worktree, so its host's agents are the ones to check. With none
+      // active, runHereLaunch refuses before it looks at the agent.
+      const activeId = findActiveWorktreeId(state.statuses)
+      const agents: AgentsResult = activeId === null ? { kind: 'error', message: NO_ACTIVE_WORKTREE } : await readAgents(activeId)
       const launch = runHereLaunch({
         projectId,
         task,
         ...state,
-        agent: agent.agent,
+        // The agent chosen on the task's card, else the project's agent choice.
+        agent: resolveAgent(choice ?? settings.agent, agents),
         template: findTemplate(settings, globalTemplates(stored), templateId),
         jiraProjectKey: settings.jiraProjectKey ?? ''
       })
@@ -346,7 +362,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, now }: WorkerDependenci
   orca.panels.handle('worktrees.load', ({ projectId }) => loadWorktrees(projectId))
   orca.panels.handle('project.active', () => activeProjectId())
   orca.panels.handle('jira.sites', () => jiraSites())
-  orca.panels.handle('agents.load', () => readAgents('active'))
+  orca.panels.handle('agents.load', () => loadAgents())
   orca.panels.handle('task.start', startTask)
   orca.panels.handle('task.runHere', runHere)
   orca.panels.handle('starts.load', ({ projectId }) => ({ starting: startsUnderWay(projectId) }))

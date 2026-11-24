@@ -824,8 +824,8 @@ const agentChecks = (calls: Call[]) => calls.filter((call) => call.args[0] === '
 
 const withAgent = (agent: string) => ({ settings: { version: 1, projects: { 'github:acme/web': { providers: {}, agent } } } })
 
-test("agents.load answers the agents Orca can start on the active worktree's host", async () => {
-  const { worker, calls } = await start({ 'orca agent installed': installedAgents('codex') })
+test("agents.load answers the agents Orca can start on the active worktree's host, named by its id", async () => {
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree ps': psWith('notes'), 'orca agent installed': installedAgents('codex') })
   assert.deepEqual(await worker.request('agents.load', {}), {
     kind: 'ready',
     agents: [
@@ -834,13 +834,22 @@ test("agents.load answers the agents Orca can start on the active worktree's hos
       { id: 'gemini', name: 'Gemini', default: false }
     ]
   })
-  assert.deepEqual(agentChecks(calls), [['agent', 'installed', '--worktree', 'active', '--json']])
+  assert.deepEqual(agentChecks(calls), [['agent', 'installed', '--worktree', 'id:r2::/src/notes', '--json']])
+})
+
+test('with no worktree selected in Orca, agents.load answers an error that says so and reads no agents', async () => {
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree ps': psWith(null) })
+  assert.deepEqual(await worker.request('agents.load', {}), {
+    kind: 'error',
+    message: "No worktree is selected in Orca, so Kickoff can't read the agents of its host."
+  })
+  assert.deepEqual(agentChecks(calls), [])
 })
 
 test('agents.load answers a failure as data: a failed command, or an older Orca without it', async () => {
-  const failed = await start({ 'orca agent installed': new CliError('orca failed: Orca is not running.') })
+  const failed = await start({ ...ORCA_OK, 'orca agent installed': new CliError('orca failed: Orca is not running.') })
   assert.deepEqual(await failed.worker.request('agents.load', {}), { kind: 'error', message: 'orca failed: Orca is not running.' })
-  const older = await start({ 'orca agent installed': 'Unknown command: agent installed' })
+  const older = await start({ ...ORCA_OK, 'orca agent installed': 'Unknown command: agent installed' })
   assert.deepEqual(await older.worker.request('agents.load', {}), {
     kind: 'error',
     message: "orca returned output Kickoff couldn't read. Update orca and try again."
@@ -1125,7 +1134,7 @@ test('Run here in a worktree with no branch fills {{branch}} with nothing', asyn
   assert.equal(flagValue(launches(calls)[0].args, '--prompt'), '/ship-tickets #42 on  in acme/web')
 })
 
-test('Run here refuses, launching nothing, when no worktree is active or the active one is in another project', async () => {
+test('Run here refuses, launching nothing, when no worktree is active, reading no agents then, or the active one is in another project', async () => {
   const cases = [
     { active: null, message: 'No worktree is selected in Orca. Select a worktree of web to run #42 here.' },
     { active: 'notes' as const, message: "The worktree selected in Orca isn't one of web. Select a worktree of web to run #42 here." }
@@ -1134,6 +1143,7 @@ test('Run here refuses, launching nothing, when no worktree is active or the act
     const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree ps': psWith(active), 'orca agent launch': LAUNCHED }, { storage: shipTemplate() })
     assert.deepEqual(await worker.request('task.runHere', runWeb42), { ok: false, message })
     assert.equal(launches(calls).length, 0)
+    if (active === null) assert.deepEqual(agentChecks(calls), [])
   }
 })
 
@@ -1146,13 +1156,13 @@ test('Run here refuses, launching nothing, a task that already has a task worktr
   assert.equal(launches(calls).length, 0)
 })
 
-test('Run here checks the agent on the host of the active worktree', async () => {
+test('Run here checks the agent on the host of the active worktree, named by its id', async () => {
   const { worker, calls } = await start(
     { ...ORCA_OK, 'orca worktree ps': psWith('web'), 'orca agent installed': installedAgents('codex'), 'orca agent launch': LAUNCHED },
     { storage: shipTemplate() }
   )
   assert.deepEqual(await worker.request('task.runHere', runWeb42), { ok: true })
-  assert.deepEqual(agentChecks(calls), [['agent', 'installed', '--worktree', 'active', '--json']])
+  assert.deepEqual(agentChecks(calls), [['agent', 'installed', '--worktree', 'id:r1::/src/web', '--json']])
   assert.equal(flagValue(launches(calls)[0].args, '--agent'), 'codex')
 })
 

@@ -562,8 +562,8 @@ declare module 'orca' {
     'worktrees.load': { input: { projectId: string }; output: WorktreesResult }
     'project.active': { input: {}; output: ActiveProjectResult }
     'jira.sites': { input: {}; output: JiraSitesResult }
-    /** The agents Orca can start on the active worktree's host, for Project settings' Agent: read
-     *  again on each request. */
+    /** The agents Orca can start on the active worktree's host, for Project settings' Agent and the
+     *  task's card: read again on each request. An error with no active worktree. */
     'agents.load': { input: {}; output: AgentsResult }
     'task.start': { input: LaunchRequest; output: StartResult }
     /** A Run here: a new agent in the worktree selected in Orca, with the template's prompt for

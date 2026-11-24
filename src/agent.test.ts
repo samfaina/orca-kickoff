@@ -5,9 +5,8 @@ import type { AgentsResult } from './protocol'
 /** `orca agent installed --json` as Orca 1.4.271 answers (docs/reference.md). */
 const installed = (agents: unknown[]) => JSON.stringify({ id: 'req-1', ok: true, result: { agents }, _meta: { runtimeId: 'rt-1' } })
 
-test('orca agent installed asks for the agents of the host of the worktree the selector names', () => {
-  assert.deepEqual(agentInstalledArgs('active'), ['agent', 'installed', '--worktree', 'active', '--json'])
-  assert.deepEqual(agentInstalledArgs('id:r1::/src/web'), ['agent', 'installed', '--worktree', 'id:r1::/src/web', '--json'])
+test('orca agent installed asks for the agents of the host of the worktree named by its id', () => {
+  assert.deepEqual(agentInstalledArgs('r1::/src/web'), ['agent', 'installed', '--worktree', 'id:r1::/src/web', '--json'])
 })
 
 test('the available agents are read from orca agent installed, in its order, with the one marked default', () => {

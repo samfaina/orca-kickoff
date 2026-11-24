@@ -92,10 +92,16 @@ function runningAgent(agents: unknown): string | null {
   return main ? (main.agentType as string) : null
 }
 
+/** The id of the active worktree, the `worktree ps` row with `isActive: true`, or null when no
+ *  worktree is active. */
+export function findActiveWorktreeId(statuses: OrcaWorktreeStatus[]): string | null {
+  return statuses.find((row) => row.isActive)?.worktreeId ?? null
+}
+
 /** The project id of the active worktree, or null when no worktree is active. */
 export function findActiveProjectId(worktrees: OrcaWorktree[], statuses: OrcaWorktreeStatus[]): string | null {
-  const active = statuses.find((row) => row.isActive)
-  return (active && worktrees.find((candidate) => candidate.id === active.worktreeId)?.projectId) ?? null
+  const id = findActiveWorktreeId(statuses)
+  return worktrees.find((candidate) => candidate.id === id)?.projectId ?? null
 }
 
 /** The project of the active worktree, or null when no worktree is active. */
