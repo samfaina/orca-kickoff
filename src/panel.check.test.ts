@@ -128,6 +128,20 @@ test('run-here shows Run here and Start on every card, both outline with no tone
   assert.equal(shown.find({ type: 'Switch', label: 'New worktree' }), null)
 })
 
+test('card-agent offers each card the agent Select on None with only Start; a card set to Codex offers Run here, and Project settings keep No agent', async () => {
+  const shown = await render('card-agent')
+  const options = shown.find({ type: 'Select', label: 'Agent for #41' })?.props.options as { label: string }[]
+  assert.deepEqual(options.map((option) => option.label), ['Default', 'Claude', 'Codex', 'GitHub Copilot', 'None'])
+  assert.deepEqual(shown.findAll({ type: 'Select', label: /^Agent for #/ }).map((select) => select.props.value), ['none', 'none', 'none'])
+  assert.deepEqual(shown.findAll({ role: 'button', label: /^Run #\d+ here$/ }), [])
+  await shown.select({ type: 'Select', label: 'Agent for #41' }, 'codex')
+  assert.deepEqual(shown.findAll({ role: 'button', label: /^Run #\d+ here$/ }).map((button) => button.label), ['Run #41 here'])
+  await shown.press({ type: 'IconButton', label: 'Project settings' })
+  assert.equal(shown.valueOf({ type: 'Select', label: 'Agent' }), 'none')
+  assert.deepEqual(shown.errors, [])
+  assert.deepEqual(shown.warnings, [])
+})
+
 test('jira-started shows started tasks with their worktree and agent, one starting, and Load more', async () => {
   const shown = await render('jira-started')
   assert.ok(shown.find({ text: 'Agent: claude' }))

@@ -87,7 +87,10 @@ import {
   type JiraProviderId,
   type JiraSitesResult,
   type ActionResult,
+  type AgentChoice,
   type AgentsResult,
+  type AvailableAgent,
+  type LaunchRequest,
   type ProjectChanges,
   type ProjectSettings,
   type ProjectRef,
@@ -349,6 +352,10 @@ const taskErrors = atom<Record<string, string>>({})
  *  stored; a card whose template no longer exists shows the default template again. */
 const cardTemplates = atom<Record<string, string>>({})
 
+/** The agent chosen on each card, by project and task key, while the panel is open. Never stored;
+ *  a card that no longer offers it shows the project's agent choice again. */
+const cardAgents = atom<Record<string, AgentChoice>>({})
+
 /** Cards whose Run here hasn't answered yet, by project and task key. */
 const runningHere = atom<Record<string, true>>({})
 /** The Run here of each card in `runningHere`, so a second press joins it. */
@@ -361,7 +368,7 @@ const variablesOpen = atom(false)
  *  open. */
 const filtersOpen = atom(true)
 
-/** The key of a task's card in `cardTemplates`. */
+/** The key of a task's card in `cardTemplates` and `cardAgents`. */
 const cardKey = (projectId: string, taskKey: string) => `${projectId}\n${taskKey}`
 
 /** The template a Start or a Run here of the task uses: the one chosen on its card while the
@@ -369,6 +376,41 @@ const cardKey = (projectId: string, taskKey: string) => `${projectId}\n${taskKey
 function chosenTemplateId(shown: ShownSettings, taskKey: string): string {
   const chosen = read(cardTemplates)[cardKey(shown.projectId, taskKey)]
   return shown.templates.some((template) => template.id === chosen) ? chosen : shown.defaultTemplateId
+}
+
+/** The options of a card's agent `Select`, those of Project settings' Agent with labels short
+ *  enough for 96 px: "Default", each available agent by name, then "None", and `projectAgent`, the
+ *  project's agent choice, by its id when it isn't available. Null, and no `Select`, with fewer than
+ *  two available agents or none read. */
+function cardAgentOptions(agents: AgentsResult | null, projectAgent: AgentChoice): AgentOption[] | null {
+  if (agents?.kind !== 'ready' || agents.agents.length < 2) return null
+  return agentChoiceOptions(agents.agents, projectAgent, { orcaDefault: 'Default', none: 'None', unavailable: (id) => id })
+}
+
+type AgentOption = { value: AgentChoice; label: string }
+
+/** The options of an agent `Select`, Project settings' Agent or a card's, labelled by `labels`:
+ *  Orca default, each of `listed` by name, No agent, then `chosen` when it is none of them. */
+function agentChoiceOptions(
+  listed: readonly AvailableAgent[],
+  chosen: AgentChoice,
+  labels: { orcaDefault: string; none: string; unavailable: (id: string) => string }
+): AgentOption[] {
+  const options = [
+    { value: 'orca-default', label: labels.orcaDefault },
+    ...listed.map((agent) => ({ value: agent.id, label: agent.name })),
+    { value: 'none', label: labels.none }
+  ]
+  if (!options.some((option) => option.value === chosen)) options.push({ value: chosen, label: labels.unavailable(chosen) })
+  return options
+}
+
+/** The agent a Start or a Run here of the task launches, given `available`, the agents Orca can
+ *  start: the one chosen on its card while the card offers it, else the project's agent choice. */
+function chosenAgent(shown: ShownSettings, taskKey: string, available: AgentsResult | null): AgentChoice {
+  const chosen = read(cardAgents)[cardKey(shown.projectId, taskKey)]
+  const offered = cardAgentOptions(available, shown.agent)?.some((option) => option.value === chosen) ?? false
+  return offered ? chosen : shown.agent
 }
 
 /** The project's templates as `Select` options, the global ones marked. */
@@ -1433,8 +1475,14 @@ async function startTask(task: Task): Promise<void> {
   await finishStart(projectId, task.key, answer.ok ? null : answer.message, null)
 }
 
-/** Saves pending settings, then asks the worker to start the task with its chosen template. A
- *  failed save asks the worker nothing, so the task didn't start. */
+/** What a Start or a Run here of the task asks the worker: what its card shows, the template and
+ *  the agent chosen for it. */
+function launchOf(shown: ShownSettings, task: Task): LaunchRequest {
+  return { projectId: shown.projectId, task, templateId: chosenTemplateId(shown, task.key), agent: chosenAgent(shown, task.key, read(availableAgents)) }
+}
+
+/** Saves pending settings, then asks the worker to start the task with the template and agent
+ *  chosen for it. A failed save asks the worker nothing, so the task didn't start. */
 async function askStart(projectId: string, task: Task): Promise<StartResult> {
   try {
     await settingsSave.saveNow()
@@ -1444,7 +1492,7 @@ async function askStart(projectId: string, task: Task): Promise<StartResult> {
   try {
     const shown = await settingsShownFor(projectId)
     if (!shown.ok) return shown
-    return await plugin.request('task.start', { projectId, task, templateId: chosenTemplateId(shown.settings, task.key) }, { timeoutMs: START_TIMEOUT_MS })
+    return await plugin.request('task.start', launchOf(shown.settings, task), { timeoutMs: START_TIMEOUT_MS })
   } catch (error) {
     return { ok: false, message: `Kickoff's worker didn't answer (${errorCode(error)}). Reload the tasks to see whether ${task.key} started.` }
   }
@@ -1473,8 +1521,8 @@ function runTaskHere(task: Task): Promise<void> {
   return run
 }
 
-/** Saves pending settings, then asks the worker to run the task here with its chosen template. A
- *  failed save asks the worker nothing. Never rejects. */
+/** Saves pending settings, then asks the worker to run the task here with the template and agent
+ *  chosen for it. A failed save asks the worker nothing. Never rejects. */
 async function askRunHere(projectId: string, task: Task): Promise<ActionResult> {
   try {
     await settingsSave.saveNow()
@@ -1484,7 +1532,7 @@ async function askRunHere(projectId: string, task: Task): Promise<ActionResult> 
   try {
     const shown = await settingsShownFor(projectId)
     if (!shown.ok) return shown
-    return await plugin.request('task.runHere', { projectId, task, templateId: chosenTemplateId(shown.settings, task.key) }, { timeoutMs: RUN_HERE_TIMEOUT_MS })
+    return await plugin.request('task.runHere', launchOf(shown.settings, task), { timeoutMs: RUN_HERE_TIMEOUT_MS })
   } catch (error) {
     return { ok: false, message: `Kickoff's worker didn't answer (${errorCode(error)}). Look in Orca whether an agent started for ${task.key}.` }
   }
@@ -1631,6 +1679,7 @@ export function setup(ctx: PanelContext): void {
   lastPolledProjectId = undefined
   set(agentStarting, {})
   set(cardTemplates, {})
+  set(cardAgents, {})
   set(runningHere, {})
   hereRuns.clear()
   set(templateDraft, null)
@@ -2186,17 +2235,13 @@ function JiraTwgSettings({ providers }: { providers: ProviderConfigs }) {
  *  available agent by name, then "No agent". A stored agent that isn't available stays, marked so.
  *  Until the agents are read, or when they can't be, only "Orca default", "No agent" and the stored
  *  choice. */
-function agentOptions(agents: AgentsResult | null, stored: string): { value: string; label: string }[] {
+function agentOptions(agents: AgentsResult | null, stored: string): AgentOption[] {
   const listed = agents?.kind === 'ready' ? agents.agents : null
-  const options = [
-    { value: 'orca-default', label: listed === null ? 'Orca default' : `Orca default (${orcaDefaultAgent(listed)?.name ?? 'not set'})` },
-    ...(listed ?? []).map((agent) => ({ value: agent.id, label: agent.name })),
-    { value: 'none', label: 'No agent' }
-  ]
-  if (!options.some((option) => option.value === stored)) {
-    options.push({ value: stored, label: listed === null ? stored : `${stored} (not available)` })
-  }
-  return options
+  return agentChoiceOptions(listed ?? [], stored, {
+    orcaDefault: listed === null ? 'Orca default' : `Orca default (${orcaDefaultAgent(listed)?.name ?? 'not set'})`,
+    none: 'No agent',
+    unavailable: (id) => (listed === null ? id : `${id} (not available)`)
+  })
 }
 
 /** The agent choice, and the default template with the button beside it that opens the Prompt
@@ -2509,8 +2554,8 @@ function assigneeLine(task: Task): string | null {
 }
 
 /** One row per part: the key and the whole title; the worktree, or the status and labels; the
- *  assignees; the agent; the template, Run here and Start, while there is no worktree. Without an
- *  agent the row has no Run here. */
+ *  assignees; the agent; the template, the agent chosen for the task, Run here and Start, while
+ *  there is no worktree. While that agent is "No agent" the row has no Run here. */
 function TaskCard({ task, projectId, worktrees }: { task: Task; projectId: string; worktrees: Record<string, TaskWorktree> | null }) {
   // Every GitHub task is open, so its status says nothing.
   const status = task.tracker !== 'github' ? task.status : null
@@ -2520,7 +2565,7 @@ function TaskCard({ task, projectId, worktrees }: { task: Task; projectId: strin
   const shown = read(shownSettings)
   const settings = shown?.projectId === projectId ? shown : null
   // Until the project's settings show, the agent choice is unknown, so the card offers only Start.
-  const offersRunHere = settings !== null && settings.agent !== 'none'
+  const offersRunHere = settings !== null && chosenAgent(settings, task.key, read(availableAgents)) !== 'none'
   const error = read(taskErrors)[task.key]
   const assignees = assigneeLine(task)
   const agent = worktree ? agentLine(worktree, read(agentStarting)[task.key] === projectId) : null
@@ -2558,6 +2603,7 @@ function TaskCard({ task, projectId, worktrees }: { task: Task; projectId: strin
       ) : (
         <Box direction="row" align="center" justify="end" gap="xs">
           <CardTemplate task={task} projectId={projectId} />
+          <CardAgent task={task} projectId={projectId} />
           {offersRunHere ? (
             <Box shrink={false}>
               <IconButton
@@ -2598,8 +2644,8 @@ function TaskCard({ task, projectId, worktrees }: { task: Task; projectId: strin
   )
 }
 
-/** The card's template `Select`, filling the Start row before Run here and Start; only when the
- *  project has two or more templates. */
+/** The card's template `Select`, filling the Start row before the agent `Select`, Run here and
+ *  Start; only when the project has two or more templates. */
 function CardTemplate({ task, projectId }: { task: Task; projectId: string }) {
   const shown = read(shownSettings)
   if (shown?.projectId !== projectId || shown.templates.length < 2) return null
@@ -2611,6 +2657,27 @@ function CardTemplate({ task, projectId }: { task: Task; projectId: string }) {
         value={chosenTemplateId(shown, task.key)}
         options={templateOptions(shown.templates)}
         onChange={(id) => update(cardTemplates, (chosen) => ({ ...chosen, [cardKey(projectId, task.key)]: id }))}
+      />
+    </Box>
+  )
+}
+
+/** The card's agent `Select`, 96 px wide after the template `Select`, so that one keeps the space
+ *  the buttons leave; only when the project has two or more available agents. A choice here is
+ *  never written to Project settings. */
+function CardAgent({ task, projectId }: { task: Task; projectId: string }) {
+  const shown = read(shownSettings)
+  const agents = read(availableAgents)
+  const options = shown?.projectId === projectId ? cardAgentOptions(agents, shown.agent) : null
+  if (shown === null || options === null) return null
+  return (
+    <Box width={96} shrink={false}>
+      <Select
+        label={`Agent for ${task.key}`}
+        labelHidden
+        value={chosenAgent(shown, task.key, agents)}
+        options={options}
+        onChange={(agent) => update(cardAgents, (chosen) => ({ ...chosen, [cardKey(projectId, task.key)]: agent }))}
       />
     </Box>
   )

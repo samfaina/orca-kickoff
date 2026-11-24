@@ -62,7 +62,7 @@ test('"Orca default", also when unset, resolves to the agent marked default', ()
 })
 
 test('"Orca default" with no agent marked default fails with a message to choose one, never guessing', () => {
-  const failure = { ok: false, message: 'Orca has no default agent: choose one in Project settings.' }
+  const failure = { ok: false, message: "Orca has no default agent: choose one on the task's card or in Project settings." }
   assert.deepEqual(resolveAgent('orca-default', agents(null)), failure)
   assert.deepEqual(resolveAgent(undefined, { kind: 'ready', agents: [] }), failure)
 })
@@ -81,7 +81,7 @@ test('an available agent resolves to itself', () => {
 test("an agent the list doesn't have fails with a message naming it", () => {
   assert.deepEqual(resolveAgent('codex', agents('claude')), {
     ok: false,
-    message: "codex isn't available in Orca: choose another agent in Project settings."
+    message: "codex isn't available in Orca: choose another agent on the task's card or in Project settings."
   })
 })
 
