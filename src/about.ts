@@ -1,10 +1,15 @@
-// Which Kickoff runs: its manifest's version, and whether it is a development plugin. No Node
-// imports, so the panel can use it too.
+// Which Kickoff runs: its manifest's version, and whether it is a development plugin; and where
+// its repository is. No Node imports, so the panel can use it too.
 import { isRecord, parseJson } from './json'
 
 /** The version Kickoff's manifest says, and whether Kickoff is a development plugin: loaded
  *  straight from a folder being worked on rather than installed. */
 export type About = { version: string; development: boolean }
+
+/** Kickoff's repository on GitHub, where its Star button is: GitHub has no URL that stars a
+ *  repository directly. A constant, so the panel can link to it before the worker has read the
+ *  manifest, and whatever the manifest says. */
+export const KICKOFF_REPOSITORY_URL = 'https://github.com/samfaina/orca-kickoff'
 
 /** The `orca-plugin.json` next to the `src/` folder that holds the worker at `workerUrl`. Throws
  *  when `workerUrl` isn't a URL. */

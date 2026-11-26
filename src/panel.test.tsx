@@ -5059,12 +5059,26 @@ function barParts(view: TestPanel): string[] {
   )
 }
 
-/** The line with Kickoff's version at the bottom of the bar under Project settings, or null. */
+/** The line at the bottom of the bar under Project settings, with Kickoff's version once known and
+ *  the link to star Kickoff, or null when the bar has none. */
 function versionLine(view: TestPanel): TreeSnapshot | null {
   const bar = settingsBar(view)
   assert.ok(bar)
   return elementsIn(bar).find(isVersionLine) ?? null
 }
+
+/** The words of the line at the bottom of the bar under Project settings, and where its one link
+ *  goes, or null when the bar has no such line. */
+function versionLineShown(view: TestPanel): { words: string; href: unknown } | null {
+  const line = versionLine(view)
+  if (line === null) return null
+  const links = nodesIn(line, (node) => node.type === 'Link')
+  assert.equal(links.length, 1, 'the line holds one link')
+  return { words: wordsOf(line), href: links[0]?.props?.href }
+}
+
+/** The line when it shows no version: the link to Kickoff's repository alone. */
+const starLink = { words: '★ Star on GitHub', href: 'https://github.com/samfaina/orca-kickoff' }
 
 const installed = { version: '0.6.0', development: false }
 
@@ -5080,15 +5094,15 @@ function barPreview(view: TestPanel): TreeSnapshot {
 test("the preview stays in view in the bar under Project settings, in a box between why the section isn't saved and the Global switch's ask", async () => {
   const { view } = await showWith({ 'tasks.load': twgReady([web12Tagged()]) }, twgStored({ site: '', profile: '' }))
   await view.press(gear)
-  assert.deepEqual(barParts(view), ['preview'])
+  assert.deepEqual(barParts(view), ['preview', 'version'])
   assertProps(barPreview(view), { border: true, radius: 'md', padding: 'sm' })
   assert.deepEqual(elementsIn(barPreview(view)).map(wordsOf), ['Preview for WEB-12', 'Branch: named by Orca', 'Worktree: web-12-add-dark-mode'])
   await view.type(branchTemplateField, 'a b')
   await view.toggle(branchGlobalSwitch)
-  assert.deepEqual(barParts(view), ['danger callout', 'preview', 'ask'])
+  assert.deepEqual(barParts(view), ['danger callout', 'preview', 'ask', 'version'])
 })
 
-test("Project settings ends with Kickoff's version, in one centred, muted line under everything in the bar", async () => {
+test("Project settings ends with Kickoff's version and a link to star it, in one centred, muted line under everything in the bar", async () => {
   const { view } = await showWith({ 'tasks.load': twgReady([web12Tagged()]), 'about.load': installed }, twgStored({ site: '', profile: '' }))
   await view.press(gear)
   assert.deepEqual(barParts(view), ['preview', 'version'])
@@ -5096,8 +5110,10 @@ test("Project settings ends with Kickoff's version, in one centred, muted line u
   assert.ok(line)
   assertProps(line, { direction: 'row', justify: 'center' })
   assert.deepEqual(elementsIn(line).map((part) => ({ type: part.type, size: part.props?.size, muted: part.props?.muted, words: wordsOf(part) })), [
-    { type: 'Text', size: 'xs', muted: true, words: 'Kickoff 0.6.0' }
+    { type: 'Text', size: 'xs', muted: true, words: 'Kickoff 0.6.0 · ★ Star on GitHub' }
   ])
+  assert.deepEqual(versionLineShown(view), { ...starLink, words: 'Kickoff 0.6.0 · ★ Star on GitHub' })
+  assert.equal(view.findAll({ type: 'Link', text: '★ Star on GitHub' }).length, 1)
   await view.type(branchTemplateField, 'a b')
   await view.toggle(branchGlobalSwitch)
   assert.deepEqual(barParts(view), ['danger callout', 'preview', 'ask', 'version'])
@@ -5106,12 +5122,10 @@ test("Project settings ends with Kickoff's version, in one centred, muted line u
   assert.deepEqual(view.refusals, [])
 })
 
-test('the version line says when Kickoff is a development plugin', async () => {
+test('the version line says when Kickoff is a development plugin, before the link to star it', async () => {
   const { view } = await showWith({ 'tasks.load': twgReady([]), 'about.load': { version: '0.7.0', development: true } }, twgStored({ site: '', profile: '' }))
   await view.press(gear)
-  const line = versionLine(view)
-  assert.ok(line)
-  assert.equal(wordsOf(line), 'Kickoff 0.7.0 · development')
+  assert.deepEqual(versionLineShown(view), { ...starLink, words: 'Kickoff 0.7.0 · development · ★ Star on GitHub' })
 })
 
 test('the version is asked for once, the first time Project settings opens, and kept while the panel is open', async () => {
@@ -5133,7 +5147,7 @@ test('the version is asked for once, the first time Project settings opens, and 
   await view.press({ type: 'IconButton', label: 'Reload tasks' })
   await view.press(gear)
   assert.equal(asked, 1)
-  assert.equal(wordsOf(versionLine(view) ?? ''), 'Kickoff 0.6.0')
+  assert.deepEqual(versionLineShown(view), { ...starLink, words: 'Kickoff 0.6.0 · ★ Star on GitHub' })
 })
 
 test('Project settings that open by themselves ask for the version too', async () => {
@@ -5147,7 +5161,7 @@ test('Project settings that open by themselves ask for the version too', async (
   })
   assert.ok(view.find({ type: 'Heading', text: 'Project settings' }))
   assert.equal(asked, 1)
-  assert.equal(wordsOf(versionLine(view) ?? ''), 'Kickoff 0.6.0')
+  assert.deepEqual(versionLineShown(view), { ...starLink, words: 'Kickoff 0.6.0 · ★ Star on GitHub' })
 })
 
 test('a failure with no project, which opens no Project settings, asks for no version', async () => {
@@ -5163,7 +5177,7 @@ test('a failure with no project, which opens no Project settings, asks for no ve
   assert.equal(asked, 0)
 })
 
-test('no version line shows while the worker is asked, nor when it answers null or not at all', async () => {
+test('the line links to Star on GitHub, alone, while the worker is asked, and when it answers null or not at all', async () => {
   const answer = held()
   const { view } = await showWith(
     {
@@ -5177,16 +5191,16 @@ test('no version line shows while the worker is asked, nor when it answers null 
   )
   const opening = view.press(gear)
   await drawn(view, { type: 'Heading', text: 'Project settings' })
-  assert.equal(versionLine(view), null)
+  assert.deepEqual(versionLineShown(view), starLink)
   answer.release()
   await opening
-  assert.ok(versionLine(view))
+  assert.deepEqual(versionLineShown(view), { ...starLink, words: 'Kickoff 0.6.0 · ★ Star on GitHub' })
   await view.unmount()
   for (const about of [() => null, () => Promise.reject(hostError('timeout', 'No answer.'))]) {
     const next = await showWith({ 'tasks.load': twgReady([]), 'about.load': about }, twgStored({ site: '', profile: '' }))
     await next.view.press(gear)
-    assert.equal(versionLine(next.view), null)
-    assert.equal(next.view.find({ type: 'Text', text: /^Kickoff \d/ }), null)
+    assert.deepEqual(versionLineShown(next.view), starLink)
+    assert.equal(next.view.find({ type: 'Text', text: /Kickoff \d/ }), null)
     assert.deepEqual(next.view.errors, [])
     await next.view.unmount()
   }
