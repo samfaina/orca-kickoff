@@ -5059,7 +5059,8 @@ function barParts(view: TestPanel): string[] {
   )
 }
 
-/** The line with Kickoff's version at the bottom of the bar under Project settings, or null. */
+/** The line at the bottom of the bar under Project settings, with Kickoff's version once known and
+ *  the link to star Kickoff, or null when the bar has none. */
 function versionLine(view: TestPanel): TreeSnapshot | null {
   const bar = settingsBar(view)
   assert.ok(bar)
@@ -5067,7 +5068,7 @@ function versionLine(view: TestPanel): TreeSnapshot | null {
 }
 
 /** The words of the line at the bottom of the bar under Project settings, and where its one link
- *  goes, or null when there is no line. */
+ *  goes, or null when the bar has no such line. */
 function versionLineShown(view: TestPanel): { words: string; href: unknown } | null {
   const line = versionLine(view)
   if (line === null) return null
@@ -5146,7 +5147,7 @@ test('the version is asked for once, the first time Project settings opens, and 
   await view.press({ type: 'IconButton', label: 'Reload tasks' })
   await view.press(gear)
   assert.equal(asked, 1)
-  assert.equal(wordsOf(versionLine(view) ?? ''), 'Kickoff 0.6.0 · ★ Star on GitHub')
+  assert.deepEqual(versionLineShown(view), { ...starLink, words: 'Kickoff 0.6.0 · ★ Star on GitHub' })
 })
 
 test('Project settings that open by themselves ask for the version too', async () => {
@@ -5160,7 +5161,7 @@ test('Project settings that open by themselves ask for the version too', async (
   })
   assert.ok(view.find({ type: 'Heading', text: 'Project settings' }))
   assert.equal(asked, 1)
-  assert.equal(wordsOf(versionLine(view) ?? ''), 'Kickoff 0.6.0 · ★ Star on GitHub')
+  assert.deepEqual(versionLineShown(view), { ...starLink, words: 'Kickoff 0.6.0 · ★ Star on GitHub' })
 })
 
 test('a failure with no project, which opens no Project settings, asks for no version', async () => {
