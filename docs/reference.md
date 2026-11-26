@@ -2,7 +2,7 @@
 
 Facts about the environment Kickoff runs in. Each fact carries its source:
 
-- **[Verified]**: checked by running the command or reading Orca's generated types or installed code, on Windows with Orca 1.4.255.
+- **[Verified]**: checked by running the command or reading Orca's generated types or installed code, on Windows with Orca 1.4.255 unless the fact names another version, or by reading Orca's public source ([stablyai/orca](https://github.com/stablyai/orca)) at the tag of the release it names.
 - **[Original]**: read in [rr235/orca-task-launcher](https://github.com/rr235/orca-task-launcher) (MIT, v0.1.2 and later commits) but not run here.
 - **[Assumed]**: an inference that has not been checked. Check it before depending on it.
 
@@ -20,16 +20,19 @@ Update this file when a fact is confirmed or disproved. All example data is inve
 
 ### Manifest
 
+Kickoff's manifest is `orca-plugin.json`. Its shape, with the version and the texts left out, since each release changes the version (see [Releases](#releases)):
+
 ```json
 {
   "manifestVersion": 2,
   "id": "kickoff",
   "name": "Kickoff",
-  "version": "0.1.0",
+  "version": "...",
   "description": "...",
   "license": "MIT",
   "icon": "assets/icon.png",
-  "engines": { "orca": ">=1.4.255" },
+  "cover": { "path": "assets/cover.png", "alt": "..." },
+  "engines": { "orca": ">=1.4.271" },
   "execution": "trusted-worker",
   "pluginApi": 1,
   "main": "src/worker.ts",
@@ -63,6 +66,13 @@ Capabilities and the Orca version they need **[Verified]**:
 | `storage:own` | 1.4.245 |
 | `secrets:own` (system keychain) | 1.4.245 |
 | `settings:own` | 1.4.160 |
+| `appearance:write` | 1.4.251 |
+| `workspace:create` | 1.4.259 |
+| `automation:read` | 1.4.259 |
+| `automation:write` | 1.4.259 |
+| `history:read` (past agent sessions) | 1.4.259 |
+
+The last five come from `orca skills get orca-plugin-authoring --reference host-api`, Orca 1.4.277 (issue #155). Which host method needs which capability is under [Worker API](#worker-api). Kickoff asks for `storage:own` and `workspace:read` only.
 
 ### Plugin icon
 
@@ -149,18 +159,83 @@ declare module 'orca' {
 }
 ```
 
-Host methods **[Verified]**:
+#### Host methods
 
-- Worker: `workspace.readContext`, `workspace.list`, `workspace.open`, `terminal.sendText`, `terminal.create`, `terminal.read`, `agent.launch`, `agents.list`, `notifications.show`, `storage.*`, `secrets.*`, `settings.*`, `statusBar.update`, `editor.open`, `commands.run`.
-- Panel: `workspace.readContext`, `notifications.show`, `storage`, `secrets`, `settings`, `shell.openExternal`, `files.saveAs`, `plugin.request`, `agents.list`, `events.subscribe`.
+Orca 1.4.277 offers host API 1.10 (issue #155). The facts below are **[Verified]** from these sources, named in each row:
 
-What the API does **not** offer **[Verified]**: listing projects, creating worktrees, reading Orca's settings, or knowing which workspace is focused by id. Nor, in Orca 1.4.271, listing the installed or available agents: no worker or panel method gives them, and `settings.get` reads only the plugin's own settings **[Verified]** (read in Orca 1.4.271's app bundle). `orca agent installed` does (see below).
+- **T**: the generated types of Orca 1.4.277 (`HostMethods` in `.orca/types/orca-host/index.d.ts`, from `orca plugin types .`): the params, the result, the surfaces and the "Since host API x.y" note of each method.
+- **R**: `orca skills get orca-plugin-authoring --reference host-api`, Orca 1.4.277: the capability each method needs, and the same method lists per surface as T.
+- **S**: Orca's method table in its public source, `src/shared/plugins/workers/plugin-host-api*.ts` of `stablyai/orca` at the tags `v1.4.271` and `v1.4.277`. Each method has a `capability`, which the host checks on every call (`capability_denied` when the manifest doesn't declare it), and `paramCapabilities` for a second capability that one param needs. Both tags give each method the same capability as R.
 
-- `workspace.list` returns `{ workspaces: { id, kind: 'worktree' | 'folder', name, path, branch | null, hostId | null }[], truncated }`, with no project id and no focus flag.
-- `agent.launch({ workspaceId, agent, prompt? })` returns `{ terminalId }`. `agent` is required, and the workspace must already exist.
-- `agents.list` returns `{ agents: { terminalId, title, agent, state: 'working' | 'blocked' | 'waiting' | 'done', stateStartedAt }[] }` for the focused workspace only, and does not say which agent is the default.
+R and S are used because the routes the generated types leave give no answer per method: T names a capability only for `agent.resume`, and the manifest schema (`orca skills get orca-plugin-authoring --reference manifest`) lists the capability kinds but not which method needs which. No capability was checked by a host call answering `capability_denied`: that needs a plugin the user approves in Orca. `orca plugin validate` doesn't check capabilities against the calls a worker makes: a scratch plugin that calls `workspace.create` with only `workspace:read` validates with no warning **[Verified]** (Orca 1.4.277).
 
-That is why Kickoff uses the Orca CLI for projects, worktrees and creation.
+Worker methods, with the host API minor each appeared in (T) and its capability (R and S):
+
+| Method | Since | Capability | Params → result |
+| --- | --- | --- | --- |
+| `workspace.readContext` | 1.0 | `workspace:read` | none → `{ workspaceId?, branch, displayName, terminals: { id, title? }[] } \| null`. `workspaceId` (1.7) is the focused workspace's `workspace.list` id (S). |
+| `terminal.sendText` | 1.0 | `terminal:send` | `{ terminalId, text, enter? }` → `{ accepted }` |
+| `notifications.show` | 1.0 | `notifications:show` | `{ title, body? }` → `{ delivered }` |
+| `storage.get`, `.set`, `.delete`, `.keys` | 1.0 | `storage:own` | `{ key }` → `{ value }`; `{ key, value }` → `{ ok }`; `{ key }` → `{ ok }`; none → `{ keys }` |
+| `secrets.get`, `.set`, `.delete` | 1.0 | `secrets:own` | as `storage`, with string values |
+| `secrets.protection` | 1.1 | `secrets:own` | none → `{ status: 'os-keyring' \| 'unavailable' }` |
+| `settings.get`, `.set` | 1.0 | `settings:own` | the plugin's own settings only: none → `{ settings }`; `{ key, value }` → `{ ok }` |
+| `agents.list` | 1.2 | `agent:read` | `{ workspaceId? }` (1.10) → `{ agents: { terminalId, title, agent, state, stateStartedAt, sessionId?, task? }[] }`, the running agents of the focused workspace or of the one named |
+| `statusBar.update` | 1.2 | none | `{ id, text?, icon?, tone?, tooltip?, visible? }` → `{ ok }`, for the plugin's `contributes.statusBarItems` |
+| `workspace.list` | 1.3 | `workspace:read` | `{ includeStatus? }` (1.7) → `{ workspaces, truncated, statusTruncated? }`, rows below |
+| `workspace.open` | 1.3 | `workspace:write` | `{ workspaceId }` → `{ opened }` |
+| `terminal.create` | 1.3 | `terminal:send` | `{ workspaceId, title?, command? }` → `{ terminalId }` |
+| `terminal.read` | 1.3 | `terminal:read` | `{ terminalId, maxLines? }` → `{ lines, truncated }` |
+| `agent.launch` | 1.3 | `agent:launch` | `{ workspaceId, agent, prompt? }` → `{ terminalId }`, in an existing workspace |
+| `editor.open` | 1.3 | `workspace:write` | `{ workspaceId, path }` → `{ opened }` |
+| `commands.run` | 1.3 | `workspace:write` | `{ action }` (one of Orca's built-in actions) → `{ ran }` |
+| `appearance.read` | 1.4 | `appearance:write` | none → `{ revision }` |
+| `appearance.apply` | 1.4 | `appearance:write` | `{ expectedRevision, app, terminal }` → `{ revision, themeId, mode, delivery }` |
+| `workspace.rename` | 1.5 | `workspace:write` | `{ workspaceId, name }` → `{ name }` |
+| `editor.readTypography` | 1.6 | none | none → the editor's font, size, line height, ligatures, word wrap and minimap |
+| `project.list` | 1.7 | `workspace:read` | none → `{ projects: { id, name, kind: 'git' \| 'folder', hostId, path, hidden? }[], truncated }`, at most 500 (S) |
+| `terminal.list` | 1.7 | `workspace:read` | `{ workspaceId }` → `{ terminals: { id, title? }[], truncated }` |
+| `terminal.focus` | 1.7 | `workspace:write` | `{ terminalId }` → `{ focused }` |
+| `terminal.close` | 1.7 | `terminal:send` | `{ terminalId }` → `{ closed }`, for a terminal of the focused workspace or one the plugin opened |
+| `workspace.create` | 1.8 | `workspace:create`, and `agent:launch` when `agent` is given (`paramCapabilities`, S) | `{ projectId, hostId?, name?, baseBranch?, agent?, prompt?, setup?: 'skip', open? }` → `{ workspaceId, terminalId? }`: a new branch and worktree in a Git project, then the agent once setup has run |
+| `agent.resume` | 1.8 | `agent:launch` | `{ workspaceId, agent, sessionId }` → `{ terminalId, started }`; `agent` is one of the agents that resume by id |
+| `automation.list` | 1.8 | `automation:read` | none → `{ automations, truncated }` |
+| `automation.create` | 1.8 | `automation:write` | `{ name, prompt, agent, projectId?, hostId?, workspaceId?, schedule, timezone?, enabled?, creationKey? }` → `{ automationId }` |
+| `automation.update` | 1.8 | `automation:write` | `{ automationId, name?, prompt?, schedule?, timezone?, enabled? }` → `{ updated, reason? }` |
+| `automation.delete` | 1.8 | `automation:write` | `{ automationId }` → `{ deleted, reason? }` |
+| `project.setHidden` | 1.9 | `workspace:write` | `{ projectId, hostId?, hidden }` → `{ hostId, hidden }` |
+| `agent.listSessions` | 1.9 | `history:read` | `{ workspaceId?, limit? }` → `{ sessions: { sessionId, agent, title, workspaceId, hostId, branch, createdAt, updatedAt, messageCount, totalTokens, running }[], truncated }` |
+
+Panel methods (T and R): `workspace.readContext`, `notifications.show`, `storage.get`, `storage.set`, `storage.delete`, `storage.keys`, `secrets.get`, `secrets.set`, `secrets.delete`, `secrets.protection`, `settings.get`, `settings.set`, `shell.openExternal` (1.1, no capability, needs a click or key press), `files.saveAs` (1.1, the same), `plugin.request` (1.2, no capability), `agents.list`, `events.subscribe` (1.2, no capability; the event's own capability) and `editor.readTypography`. A custom editor gets the same list. Panels got `storage`, `secrets` and `settings` in 1.2.
+
+Rules for every call **[Verified]** (R): params are strict, so a field this Orca doesn't know is refused with `invalid_params`, and a method a surface isn't offered answers `not_permitted`. Text params (`prompt` of `agent.launch` and `workspace.create`, `command` of `terminal.create`) take at most 4096 characters, and `name` of `workspace.create` and `workspace.rename` is one line of at most 200 (S).
+
+#### Host API by Orca release
+
+The Orca release floor of each host API minor, the one `orca plugin validate` checks `engines.orca` against, from `PLUGIN_HOST_API_MINOR_SINCE` in `plugin-host-api-releases.ts` (S) **[Verified]**:
+
+| Minor | 1.1, 1.2 | 1.3 | 1.4 | 1.5 | 1.6 | 1.7, 1.8, 1.9 | 1.10 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Orca | 1.4.246 | 1.4.247 | 1.4.251 | 1.4.256 | 1.4.257 | 1.4.259 | 1.4.260 |
+
+- So **Orca 1.4.271**, the oldest Kickoff accepts (`engines.orca` `>=1.4.271`), has **host API 1.10**: the method table at the `v1.4.271` tag holds every worker method above, with the same capabilities. Between that tag and `v1.4.277`, `src/shared/plugins/workers` changes in only two source files: how `automation.*` checks a time zone, and how `commands.register` disposes a replaced handler **[Verified]** (S, comparing the folder's files at both tags). Kickoff could call any of them without raising `engines.orca`. That a worker on 1.4.271 reads `orca.api.minor` as 10 is **[Assumed]**: it follows from the source, but nobody read it there.
+- Orca's code calls the 1.7, 1.8 and 1.9 floors "provisional … not a stock-release claim" (`PLUGIN_HOST_API_1_7_SINCE`, `_1_8_SINCE` and `_1_9_SINCE`, S), so that 1.4.259 is the first release with these minors is **[Assumed]**. Minors 0 to 6 come from the release tags, as the table's own comment says. `orca plugin validate` uses these floors: a scratch plugin whose worker calls `project.list`, `workspace.create`, `agent.resume`, `agent.listSessions`, `terminal.list`, `project.setHidden` and `automation.list` warns for each one, with `engines.orca` `>=1.4.258`, that it "needs Orca 1.4.259; or guard the call with orca.host.has(…)", and validates with no warning with `>=1.4.271` **[Verified]** (Orca 1.4.277). It doesn't warn for a param newer than its method, such as `agents.list({ workspaceId })` or `includeStatus`: the table's `paramsSince` "cannot be seen statically" (S).
+- The capabilities the new methods need, and the Orca that first knows them, are in the table under [Manifest](#manifest).
+
+#### What the host methods give, next to the CLI
+
+- `workspace.list` rows are `{ id, kind: 'worktree' | 'folder', name, project?, projectId?, path, branch, hostId, status? }` **[Verified]** (T). `project` (the project's name, since 1.5) and `projectId` (as `project.list` gives it, since 1.7) are null for a folder of a project group. `status` (with `includeStatus`, 1.7) is `{ state: 'working' | 'permission' | 'done' | 'active' | 'inactive', unread, terminalCount, lastActivityAt }`. There is no focus flag: `workspace.readContext` names the focused workspace.
+- A row's `id` is `identity:<key>` when the workspace has an identity, else Orca's raw id (`pluginWorkspaceId`, S) **[Verified]**. So it is not always the `id` of `orca worktree list`, and the two lists don't join by id. Events carry both: `workspaceId`, and `workspaceListId` (1.7), the `workspace.list` id. Whether a `project.list` id is the `id` of `orca project list` (`github:acme/web`) was not checked **[Assumed]**.
+- Against what Kickoff reads from the CLI (`ProjectRef` and `OrcaWorktree` in `src/orca.ts` and `src/protocol.ts`) **[Verified]** (T and S):
+  - `project.list` has no `providerIdentity`, so it can't give a project's GitHub `owner/repo`, nor a git remote.
+  - `workspace.list` has no `linkedIssue` or `linkedItems` (so no GitHub issue numbers or Jira keys), no `isArchived`, no `isMainWorktree` and no `baseRef`. Whether it lists archived worktrees is not known **[Assumed]**.
+  - `workspace.create` has no `--branch`, `--issue`, `--reference`, `--reference-site` or `--no-parent`: with strict params, such a field is refused with `invalid_params`. Its `name` gives the branch too; whether Orca puts its branch prefix in front, as with `--name`, was not checked **[Assumed]**. No host method links a workspace to an issue or a Jira key afterwards, as `orca reference add` does.
+  - The 4096-character `prompt` of `workspace.create` and `agent.launch` is below Kickoff's own limit, `MAX_PROMPT` (30 000) in `src/template.ts`.
+  - `agent.launch` has no `--focus` or `--surface`; `terminal.focus` focuses its terminal afterwards, with `workspace:write`.
+
+What the API still does **not** offer, as of Orca 1.4.277 **[Verified]** (T and R): reading Orca's settings (`settings.get` reads only the plugin's own), listing the available agents or saying which is Orca's default (`agents.list` lists the running ones; `orca agent installed` does, see below), a project's tracker identity, a workspace's linked issues and references, and linking a workspace to an issue or a Jira key. Listing projects, creating worktrees and naming the focused workspace by id, which earlier Orca lacked, it now offers.
+
+That is why Kickoff still uses the Orca CLI for projects, worktrees, creation and agents; whether to move any of it to host methods is weighed in a comment on issue #155.
 
 ### Worker process
 
