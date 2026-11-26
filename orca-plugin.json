@@ -3,7 +3,7 @@
   "id": "kickoff",
   "name": "Kickoff",
   "version": "0.6.0",
-  "description": "Lists open tasks from Jira or GitHub and starts each one in its own linked worktree, with an agent and per-project prompt templates.",
+  "description": "Stop pasting tickets into your agent. Pick a GitHub or Jira task and Kickoff starts it in a fresh worktree, with a prompt filled from your template.",
   "license": "MIT",
   "icon": "assets/icon.png",
   "cover": {
