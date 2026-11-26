@@ -64,7 +64,7 @@ Both buttons look the same, whichever template is chosen. While the agent chosen
 
 Under **Branch**, they hold how a Start names its git branch, or say that the project uses the global branch settings (see [Branch](#branch)).
 
-At the very bottom, Project settings show which Kickoff runs: `Kickoff 0.6.0`, or `Kickoff 0.6.0 · development` for Kickoff loaded with `orca plugin dev load` straight from a folder you are working on, whose version can match a release's. Say it when you report a problem.
+At the very bottom, Project settings show which Kickoff runs: `Kickoff 0.6.0`, or `Kickoff 0.6.0 · development` for Kickoff loaded with `orca plugin dev load` straight from a folder you are working on, whose version can match a release's. Say it when you report a problem. After it, **★ Star on GitHub** opens Kickoff's repository in your browser, where you can star it; it shows alone while the version isn't known.
 
 **Filters**, above the list and open at first, holds the filter row and the **Search tasks** field; closed, it says the filter listed and the words typed. The field narrows the loaded tasks as you type, by key, title or label. **Enter** (or **Search in GitHub** / **Search in Jira**) asks the tracker instead, for the tasks of the same list that match your words, including those not loaded yet. **Clear search** goes back to the list.
 

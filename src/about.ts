@@ -6,6 +6,10 @@ import { isRecord, parseJson } from './json'
  *  straight from a folder being worked on rather than installed. */
 export type About = { version: string; development: boolean }
 
+/** Kickoff's repository on GitHub, where its Star button is: GitHub has no URL that stars a
+ *  repository directly. A constant, since the manifest has no field for it. */
+export const KICKOFF_REPOSITORY_URL = 'https://github.com/samfaina/orca-kickoff'
+
 /** The `orca-plugin.json` next to the `src/` folder that holds the worker at `workerUrl`. Throws
  *  when `workerUrl` isn't a URL. */
 export function manifestUrl(workerUrl: string): URL {

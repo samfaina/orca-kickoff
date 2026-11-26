@@ -34,7 +34,7 @@ import {
   type OrcaNode,
   type PanelContext
 } from 'orca'
-import type { About } from './about'
+import { KICKOFF_REPOSITORY_URL, type About } from './about'
 import {
   filterNameProblem,
   filterRecipes,
@@ -1880,15 +1880,19 @@ function SettingsBar({ shown }: { shown: ShownSettings }) {
   )
 }
 
-/** Kickoff's version, centred and muted, once the worker has answered with one; nothing before or
- *  without one. A development plugin says so, since its version can match a release's. */
+/** One centred, muted line: Kickoff's version, once the worker has answered with one, then a link
+ *  to Kickoff's repository so a user can star it. The link shows from the start, also while the
+ *  worker hasn't answered and when it answers with no version. A development plugin says so,
+ *  since its version can match a release's. */
 function VersionLine() {
   const about = read(shownAbout)
-  if (about === 'unasked' || about === 'asking' || about === null) return null
+  const known = about !== 'unasked' && about !== 'asking' && about !== null
+  const version = known ? (about.development ? `Kickoff ${about.version} · development` : `Kickoff ${about.version}`) : null
   return (
     <Box direction="row" justify="center">
       <Text size="xs" muted>
-        {about.development ? `Kickoff ${about.version} · development` : `Kickoff ${about.version}`}
+        {version !== null ? `${version} · ` : null}
+        <Link href={KICKOFF_REPOSITORY_URL}>★ Star on GitHub</Link>
       </Text>
     </Box>
   )
