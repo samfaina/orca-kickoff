@@ -20,16 +20,19 @@ Update this file when a fact is confirmed or disproved. All example data is inve
 
 ### Manifest
 
+Kickoff's manifest is `orca-plugin.json`. Its shape, with the version and the texts left out, since each release changes the version (see [Releases](#releases)):
+
 ```json
 {
   "manifestVersion": 2,
   "id": "kickoff",
   "name": "Kickoff",
-  "version": "0.1.0",
+  "version": "...",
   "description": "...",
   "license": "MIT",
   "icon": "assets/icon.png",
-  "engines": { "orca": ">=1.4.255" },
+  "cover": { "path": "assets/cover.png", "alt": "..." },
+  "engines": { "orca": ">=1.4.271" },
   "execution": "trusted-worker",
   "pluginApi": 1,
   "main": "src/worker.ts",
