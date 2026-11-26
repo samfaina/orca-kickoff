@@ -2,7 +2,7 @@
 
 Facts about the environment Kickoff runs in. Each fact carries its source:
 
-- **[Verified]**: checked by running the command or reading Orca's generated types or installed code, on Windows with Orca 1.4.255.
+- **[Verified]**: checked by running the command or reading Orca's generated types or installed code, on Windows with Orca 1.4.255 unless the fact names another version, or by reading Orca's public source ([stablyai/orca](https://github.com/stablyai/orca)) at the tag of the release it names.
 - **[Original]**: read in [rr235/orca-task-launcher](https://github.com/rr235/orca-task-launcher) (MIT, v0.1.2 and later commits) but not run here.
 - **[Assumed]**: an inference that has not been checked. Check it before depending on it.
 
@@ -164,7 +164,7 @@ Orca 1.4.277 offers host API 1.10 (issue #155). The facts below are **[Verified]
 - **R**: `orca skills get orca-plugin-authoring --reference host-api`, Orca 1.4.277: the capability each method needs, and the same method lists per surface as T.
 - **S**: Orca's method table in its public source, `src/shared/plugins/workers/plugin-host-api*.ts` of `stablyai/orca` at the tags `v1.4.271` and `v1.4.277`. Each method has a `capability`, which the host checks on every call (`capability_denied` when the manifest doesn't declare it), and `paramCapabilities` for a second capability that one param needs. Both tags give each method the same capability as R.
 
-No capability was checked by a host call answering `capability_denied`: that needs a plugin the user approves in Orca. `orca plugin validate` doesn't check capabilities against the calls a worker makes: a scratch plugin that calls `workspace.create` with only `workspace:read` validates with no warning **[Verified]** (Orca 1.4.277).
+R and S are used because the routes the generated types leave give no answer per method: T names a capability only for `agent.resume`, and the manifest schema (`orca skills get orca-plugin-authoring --reference manifest`) lists the capability kinds but not which method needs which. No capability was checked by a host call answering `capability_denied`: that needs a plugin the user approves in Orca. `orca plugin validate` doesn't check capabilities against the calls a worker makes: a scratch plugin that calls `workspace.create` with only `workspace:read` validates with no warning **[Verified]** (Orca 1.4.277).
 
 Worker methods, with the host API minor each appeared in (T) and its capability (R and S):
 
@@ -209,14 +209,14 @@ Rules for every call **[Verified]** (R): params are strict, so a field this Orca
 
 #### Host API by Orca release
 
-The first Orca release of each host API minor, from `PLUGIN_HOST_API_MINOR_SINCE` in `plugin-host-api-releases.ts` (S) **[Verified]**:
+The Orca release floor of each host API minor, the one `orca plugin validate` checks `engines.orca` against, from `PLUGIN_HOST_API_MINOR_SINCE` in `plugin-host-api-releases.ts` (S) **[Verified]**:
 
 | Minor | 1.1, 1.2 | 1.3 | 1.4 | 1.5 | 1.6 | 1.7, 1.8, 1.9 | 1.10 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Orca | 1.4.246 | 1.4.247 | 1.4.251 | 1.4.256 | 1.4.257 | 1.4.259 | 1.4.260 |
 
-- So **Orca 1.4.271**, the oldest Kickoff accepts (`engines.orca` `>=1.4.271`), has **host API 1.10**: the method table at the `v1.4.271` tag holds every worker method above, with the same capabilities. Between that tag and `v1.4.277`, `src/shared/plugins/workers` changes in only two source files: how `automation.*` checks a time zone, and how `commands.register` disposes a replaced handler **[Verified]** (S, comparing the folder's files at both tags). Kickoff could call any of them without raising `engines.orca`. Nobody read `orca.api.minor` from a worker on 1.4.271 **[Assumed]**.
-- Orca's code calls the 1.7 floor "provisional … not a stock-release claim" (`PLUGIN_HOST_API_1_7_SINCE`), but `orca plugin validate` uses these floors: a scratch plugin whose worker calls `project.list`, `workspace.create`, `agent.resume`, `agent.listSessions`, `terminal.list`, `project.setHidden` and `automation.list` warns for each one, with `engines.orca` `>=1.4.258`, that it "needs Orca 1.4.259; or guard the call with orca.host.has(…)", and validates with no warning with `>=1.4.271` **[Verified]** (Orca 1.4.277). It doesn't warn for a param newer than its method, such as `agents.list({ workspaceId })` or `includeStatus`: the table's `paramsSince` "cannot be seen statically" (S).
+- So **Orca 1.4.271**, the oldest Kickoff accepts (`engines.orca` `>=1.4.271`), has **host API 1.10**: the method table at the `v1.4.271` tag holds every worker method above, with the same capabilities. Between that tag and `v1.4.277`, `src/shared/plugins/workers` changes in only two source files: how `automation.*` checks a time zone, and how `commands.register` disposes a replaced handler **[Verified]** (S, comparing the folder's files at both tags). Kickoff could call any of them without raising `engines.orca`. That a worker on 1.4.271 reads `orca.api.minor` as 10 is **[Assumed]**: it follows from the source, but nobody read it there.
+- Orca's code calls the 1.7, 1.8 and 1.9 floors "provisional … not a stock-release claim" (`PLUGIN_HOST_API_1_7_SINCE`, `_1_8_SINCE` and `_1_9_SINCE`, S), so that 1.4.259 is the first release with these minors is **[Assumed]**. Minors 0 to 6 come from the release tags, as the table's own comment says. `orca plugin validate` uses these floors: a scratch plugin whose worker calls `project.list`, `workspace.create`, `agent.resume`, `agent.listSessions`, `terminal.list`, `project.setHidden` and `automation.list` warns for each one, with `engines.orca` `>=1.4.258`, that it "needs Orca 1.4.259; or guard the call with orca.host.has(…)", and validates with no warning with `>=1.4.271` **[Verified]** (Orca 1.4.277). It doesn't warn for a param newer than its method, such as `agents.list({ workspaceId })` or `includeStatus`: the table's `paramsSince` "cannot be seen statically" (S).
 - The capabilities the new methods need, and the Orca that first knows them, are in the table under [Manifest](#manifest).
 
 #### What the host methods give, next to the CLI
@@ -230,7 +230,7 @@ The first Orca release of each host API minor, from `PLUGIN_HOST_API_MINOR_SINCE
   - The 4096-character `prompt` of `workspace.create` and `agent.launch` is below Kickoff's own limit, `MAX_PROMPT` (30 000) in `src/template.ts`.
   - `agent.launch` has no `--focus` or `--surface`; `terminal.focus` focuses its terminal afterwards, with `workspace:write`.
 
-What the API still does **not** offer, as of Orca 1.4.277 **[Verified]** (T and R): reading Orca's settings (`settings.get` reads only the plugin's own), listing the installed agents or saying which is Orca's default (`agents.list` lists the running ones; `orca agent installed` does, see below), a project's tracker identity, a workspace's linked issues and references, and linking a workspace to an issue or a Jira key. Listing projects, creating worktrees and naming the focused workspace by id, which earlier Orca lacked, it now offers.
+What the API still does **not** offer, as of Orca 1.4.277 **[Verified]** (T and R): reading Orca's settings (`settings.get` reads only the plugin's own), listing the available agents or saying which is Orca's default (`agents.list` lists the running ones; `orca agent installed` does, see below), a project's tracker identity, a workspace's linked issues and references, and linking a workspace to an issue or a Jira key. Listing projects, creating worktrees and naming the focused workspace by id, which earlier Orca lacked, it now offers.
 
 That is why Kickoff still uses the Orca CLI for projects, worktrees, creation and agents; whether to move any of it to host methods is weighed in a comment on issue #155.
 
