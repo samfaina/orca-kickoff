@@ -568,6 +568,59 @@ Until Orca 1.4.271's `orca agent installed` (above), no CLI command or plugin AP
   - Lucene special characters inside the quoted words (`: - ( ) ! ? [ ] ^ ~ / { } && ||`) give no error with `orca jira search`. Inside a JQL string, `"` and `\` still have to be escaped with `\`: an unescaped trailing `\` would escape the closing quote.
   - The JQL a Kickoff tracker search sends, `(<conditions>) AND (text ~ "dark* mode*" OR key = "<KEY>") ORDER BY updated DESC`, with several prefixed words in one string, is accepted by `orca jira search` with no error **[Verified]** (Orca 1.4.261, Jira Cloud). Whether a task must match every word or any one of them was not checked.
 
+### Orca's Linear support
+
+Kickoff has no Linear provider yet. These facts back the viability study (issue #154). Seen with Orca 1.4.277 on Windows, connected to a test Linear workspace with invented issues, unless tagged otherwise.
+
+`orca linear` uses the Linear connection saved in Orca **[Verified]**.
+
+- The connection is a personal API key (Settings › Integrations › Linear, or `orca linear connect` with the key on stdin) or an OAuth token from Orca's bot connectors. Keys are sealed with the OS keyring, one per Linear workspace. Several Linear workspaces can be connected at once **[Verified]** (read in Orca's app bundle).
+- Read-only subcommands: `list`, `list-issues`, `search <query>`, `issue [<id>|--current]`, `team list|members|states|labels`, `project list`. Most take `--workspace <id>` (some also `all`) and `--json`. The rest write: `create`, `save-issue`, `status set`, `assignee`, `priority`, `estimate`, `due-date`, `label`, `comment`, `attach`, `relation`.
+- There is no read-only command that reports the connection, like `orca jira connection`. The runtime has a `linear.status` method, but no CLI command calls it **[Verified]** (read in the app bundle).
+- Without a connection, `list-issues`, `search` and `issue` exit 1 with `{ ok: false, error: { code: 'linear_not_connected', message: 'Linear is not signed in on this computer.' } }`. `list` and `team list` instead answer `ok: true` with an empty list, so they can't tell "not connected" from "nothing to show".
+- Privacy: every issue row and every team carries `workspace.name`, the Linear organisation's name, and the `url` carries its URL key. The connect and status answers carry the user's email. Read only the fields needed and never log raw output.
+- The Orca version that first had `list-issues` is not known **[Assumed]**: 1.4.277 is the oldest seen.
+
+`orca linear list-issues --json` → `result: { issues: Issue[], truncated, meta: { limit, returned, hasMore, nextCursor?, orderBy, workspaceId, partial, workspaceErrors } }`:
+
+```json
+{ "id": "<uuid>", "identifier": "ENG-12", "title": "Add dark mode to settings",
+  "url": "https://linear.app/acme/issue/ENG-12/add-dark-mode-to-settings", "description": "Markdown text",
+  "state": { "id": "...", "name": "Todo", "type": "unstarted", "color": "#..." },
+  "team": { "id": "...", "name": "Engineering", "key": "ENG", "color": "#..." },
+  "project": null, "cycle": null, "assignee": { "id": "...", "displayName": "Ana Example", "avatarUrl": null },
+  "labels": [{ "id": "...", "name": "Feature", "color": "#..." }], "priority": 2, "priorityLabel": "High",
+  "estimate": null, "dueDate": null, "branchName": "eng-12-add-dark-mode-to-settings",
+  "createdAt": "...", "updatedAt": "...", "workspace": { "id": "...", "name": "Acme" } }
+```
+
+- `description` is Linear Markdown, or `null` when the issue has none.
+- An unassigned issue has `assignee: null`; on Jira the key is missing instead. `project` and `cycle` are `null` when unset.
+- `state.type` is Linear's own value and does not change with the workspace's language or state names. Seen: `backlog`, `unstarted`, `started`, `completed`, `canceled` and `duplicate`. Linear also has `triage` **[Verified]** (read in the app bundle).
+- Linear has no issue type.
+- Filters, one value each: `--state`, `--assignee user|me|null`, `--team`, `--project`, `--cycle`, `--label`, `--priority 0-4`, `--query`, `--parent-id`, `--created-at`, `--updated-at`, `--include-archived`. There is no query language like JQL.
+  - `--state open` lists `backlog`, `unstarted` and `started`, and leaves out `completed` and `canceled`. `--state` also takes a state name (`Todo`) or a type (`started`).
+  - `--team` takes the team's key, name or id, ignoring case. `--label` takes the label's name, ignoring case.
+  - An unknown team, state or label is not an error: it gives `ok: true` with no issues.
+  - `--query` matches the whole text as one substring of the title or the description, not word by word: `pagin` finds "Fix pagination", but `dark settings` doesn't find "Add dark mode to settings". It does not match the identifier.
+- Order: `--order-by updatedAt` (the default) or `createdAt`, newest first. There is no board or manual order.
+- Pagination: `meta.nextCursor` is an opaque token, given while `meta.hasMore` is true, that `--cursor` takes to read the next page. With `--workspace all`, a cursor is refused with `linear_invalid_workspace`. Without `--limit`, Orca reads every match until a 20 s deadline **[Verified]** (read in the app bundle).
+- With `--workspace all`, a workspace that fails does not fail the call: it shows up in `meta.workspaceErrors[]` with `partial: true` **[Verified]** (read in the app bundle).
+
+Other reads:
+
+- `orca linear search <query>` uses Linear's full-text search. It has no state filter, so done and canceled issues come back too. Its limit is 20 by default, 50 at most **[Verified]** (limit read in the app bundle).
+- `orca linear list --filter assigned|created|all|completed|open` gives Orca's own presets. Its rows have no `description`, `labels` or `cycle`, and it has no cursor **[Verified]** (read in the app bundle).
+- `orca linear team states --team <key>` → `result: { team, states: [{ id, name, type, ... }], meta }`. `team labels` → `result: { team, labels: [{ id, name, color }], meta }`. `team list` → `result: { teams: [{ id, name, key, url, workspace: { id, name } }], meta }`.
+- Orca's own UI also lists the issues of a Linear custom view (a filter saved in Linear). The CLI doesn't offer custom views **[Verified]** (read in the app bundle).
+
+Linking a worktree to a Linear issue:
+
+- `orca worktree create --reference <issue URL>` links the worktree to the issue with no lookup and no title. `worktree list --json` then shows `linkedLinearIssue: "ENG-12"` and a `linkedItems` entry `{ provider: 'linear', type: 'issue', number: 0, identifier: 'ENG-12', linearIdentifier: 'ENG-12', linearOrganizationUrlKey: 'acme', url }`, and `linkedWorkItem` stays `null`.
+- `--linear-issue <identifier|URL>` (on `worktree create` and `worktree set`) links the same way. It can't be combined with `--reference`. A bare `ENG-12` given to `--reference` is read as a Jira key.
+- `orca linear issue --current` run inside a worktree linked either way finds its issue. It resolves the worktree from `ORCA_TERMINAL_HANDLE` first, then from the folder it runs in. So run from a terminal of another worktree, it reads that worktree's link and fails with `linear_no_linked_issue`.
+- The plugin API has nothing for Linear **[Verified]** (read in Orca 1.4.277's plugin host).
+
 ## Executable paths
 
 On Windows all three tools are `.exe` and on PATH **[Verified]**:
