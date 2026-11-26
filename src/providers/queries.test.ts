@@ -115,6 +115,22 @@ test('a task that several queries list is on the page once, where it first appea
   assert.deepEqual(keys(result), ['WEB-1', 'WEB-2', 'UI-1'])
 })
 
+test('a query with no tasks adds nothing, and the load goes on with the next one', async () => {
+  const { page, asked } = tool({ web: answer([task('WEB-1')]), api: answer([]), ui: answer([task('UI-1')], 'u2') })
+  const result = await pageAcrossQueries(filterQueries(['web', 'api', 'ui']), undefined, 5, page, named)
+  assert.deepEqual([keys(result), result.nextCursor], [['WEB-1', 'UI-1'], '2:u2'])
+  assert.deepEqual(
+    asked.map((each) => each.query),
+    ['web', 'api', 'ui']
+  )
+})
+
+test('when the last queries have no tasks, the load answers an empty last page', async () => {
+  const { page } = tool({ api: answer([]), ops: answer([]) })
+  const result = await pageAcrossQueries(filterQueries(['web', 'api', 'ops']), '1:', 5, page, named)
+  assert.deepEqual(result, { tasks: [], nextCursor: null, truncated: false })
+})
+
 test('a cursor counts only the queries that run, so a blank query takes no index', async () => {
   const { page, asked } = tool({ ops: answer([task('OPS-1')], 'o2') })
   const result = await pageAcrossQueries(filterQueries(['web', ' ', 'ops']), '1:', 5, page, named)

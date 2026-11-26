@@ -26,13 +26,17 @@ export function requireQueries(filter: Filter | undefined, ask: string): { filte
   throw filter ? new FilterError(`${filter.name}: ${ask}`, filter.id) : new CliError(ask)
 }
 
+/** What a list throws when the tool failed with `error` on `query`, such as a `FilterError` when
+ *  the tracker rejected the query, or `error` itself. */
+export type QueryFailure = (query: FilterQuery, error: unknown) => unknown
+
 /** The only page of a filter whose tool has no cursor: `search` runs every query at once, and their
  *  tasks are joined in query order, truncated when any query's are. The first query that failed,
  *  in the filter's order, fails the list with `failure(query, error)`. */
 export async function searchEveryQuery(
   queries: readonly FilterQuery[],
   search: (query: FilterQuery) => Promise<{ tasks: Task[]; truncated: boolean }>,
-  failure: (query: FilterQuery, error: unknown) => unknown
+  failure: QueryFailure
 ): Promise<TaskPage> {
   const searches = await Promise.allSettled(queries.map(search))
   const pages = searches.map((outcome, index) => {
@@ -66,24 +70,25 @@ export type QueryPage = { tasks: Task[]; nextCursor: string | null }
 
 /** One page of up to `limit` tasks of a filter whose tool has a cursor, from where `cursor` (from
  *  `encodeQueryCursor`) points, in query order: each query is read to its end before the next.
- *  `page(query, after, limit)` asks the tool for at most `limit` tasks of `query` after its cursor
- *  `after`. When a query ends before the page is full, the same load goes on with the next one,
- *  asking only for the tasks the page still needs. The load stops at the first query with a next
- *  page, or once the page is full, with a cursor to go on from there; the last query's end gives
- *  none. A task several queries list is on the page once, where it first appears, so a page can
- *  show fewer than `limit`. A query that fails fails the list with `failure(query, error)`. */
+ *  `queries` are those `requireQueries` gives, so there is at least one. `readPage(query, after,
+ *  limit)` asks the tool for at most `limit` tasks of `query` after its cursor `after`. When a
+ *  query ends before the page is full, the same load goes on with the next one, asking only for
+ *  the tasks the page still needs. The load stops at the first query with a next page, or once
+ *  the page is full, with a cursor to go on from there; the last query's end gives none. A task
+ *  several queries list is on the page once, where it first appears, so a page can show fewer
+ *  than `limit`. A query that fails fails the list with `failure(query, error)`. */
 export async function pageAcrossQueries(
   queries: readonly FilterQuery[],
   cursor: string | undefined,
   limit: number,
-  page: (query: FilterQuery, after: string, limit: number) => Promise<QueryPage>,
-  failure: (query: FilterQuery, error: unknown) => unknown
+  readPage: (query: FilterQuery, after: string, limit: number) => Promise<QueryPage>,
+  failure: QueryFailure
 ): Promise<TaskPage> {
   let { index, after } = decodeQueryCursor(cursor, queries.length)
   let tasks: Task[] = []
   for (;;) {
     const query = queries[index]
-    const answer = await page(query, after, limit - tasks.length).catch((error: unknown) => {
+    const answer = await readPage(query, after, limit - tasks.length).catch((error: unknown) => {
       throw failure(query, error)
     })
     tasks = appendTasks(tasks, answer.tasks)
