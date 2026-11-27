@@ -2689,10 +2689,17 @@ function LoadedTasks({ list, words }: { list: ReadyTaskList; words: string }) {
   )
 }
 
-/** What a truncated list says: a list from several queries has the first 100 tasks of each. */
+/** What a truncated list says, in the words of each tracker: a list from several queries has the first 100 tasks of each.
+ *  A tracker added to `TrackerId` fails the type check until it has its own text here. */
+const TRUNCATION_NOTICE: Record<TrackerId, { one: string; several: string }> = {
+  github: { one: "Showing the first 100 of your repository's issues.", several: 'Showing the first 100 issues of each query.' },
+  jira: { one: 'Showing the first 100 tasks — narrow your JQL.', several: 'Showing the first 100 tasks of each query — narrow your JQL.' },
+  linear: { one: 'Showing the first 100 tasks — narrow your filter.', several: 'Showing the first 100 tasks of each query — narrow your filter.' }
+}
+
 function truncationNotice(list: ReadyTaskList): string {
-  if (list.provider === 'github') return list.queryCount > 1 ? 'Showing the first 100 issues of each query.' : "Showing the first 100 of your repository's issues."
-  return list.queryCount > 1 ? 'Showing the first 100 tasks of each query — narrow your JQL.' : 'Showing the first 100 tasks — narrow your JQL.'
+  const notice = TRUNCATION_NOTICE[trackerOf(list.provider)]
+  return list.queryCount > 1 ? notice.several : notice.one
 }
 
 /** A tracker search's results, without the text filter: a result may match on its description,

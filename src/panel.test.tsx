@@ -757,6 +757,30 @@ test('a truncated list says only the first 100 are shown', async () => {
   assert.ok(jira.find({ type: 'Text', text: 'Showing the first 100 tasks — narrow your JQL.' }))
 })
 
+test('a truncated Linear list says to narrow its filter, and no text names JQL', async () => {
+  const eng1 = task('ENG-1', { tracker: 'linear', url: 'https://linear.app/acme/issue/ENG-1/task' })
+  for (const [queryCount, notice] of [
+    [1, 'Showing the first 100 tasks — narrow your filter.'],
+    [2, 'Showing the first 100 tasks of each query — narrow your filter.']
+  ] as const) {
+    const view = await show(ready([eng1], { provider: 'linear-orca', truncated: true, queryCount }))
+    assert.ok(view.find({ type: 'Text', text: notice }), `${queryCount} queries show "${notice}"`)
+    assert.equal(view.find({ text: /JQL/ }), null)
+    await view.unmount()
+  }
+})
+
+test('a truncated Jira list read through twg says to narrow its JQL, like one read through Orca', async () => {
+  for (const [queryCount, notice] of [
+    [1, 'Showing the first 100 tasks — narrow your JQL.'],
+    [2, 'Showing the first 100 tasks of each query — narrow your JQL.']
+  ] as const) {
+    const view = await show(twgReady([task('WEB-1', { tracker: 'jira' })], { truncated: true, queryCount }))
+    assert.ok(view.find({ type: 'Text', text: notice }), `${queryCount} queries show "${notice}"`)
+    await view.unmount()
+  }
+})
+
 test('reloads when the workspace changes, and on Reload', async () => {
   let calls = 0
   const view = await show(() => ready([task(`#${++calls}`)]))
