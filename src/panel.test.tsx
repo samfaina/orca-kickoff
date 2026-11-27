@@ -4938,9 +4938,26 @@ const assignedFilter = { id: 'assigned', name: 'Assigned to me', queries: [linea
 /** The invented teams of the Acme workspace, as `linear.choices` answers them. */
 const LINEAR_CHOICES = { kind: 'ready' as const, teams: [{ key: 'ENG', name: 'Engineering' }, { key: 'DES', name: 'Design' }] }
 
+/** The names of the invented states and labels of each Acme team. Design has a state named Open,
+ *  which `--state` can't tell from Orca's own open. */
+const LINEAR_TEAM_LISTS: Record<string, { states: string[]; labels: string[] }> = {
+  ENG: { states: ['Backlog', 'In Progress', 'Done'], labels: ['Bug', 'Feature'] },
+  DES: { states: ['Todo', 'Open', 'In Review'], labels: ['Polish'] }
+}
+
+type LinearChoicesInput = { workspaceId: string; team?: string }
+
+/** `linear.choices` as the worker answers it for the Acme workspace: the teams, and with a team its
+ *  states and labels, or Orca's failure for a team Acme doesn't have. */
+const acmeChoices = (input: LinearChoicesInput) => {
+  if (!input.team) return LINEAR_CHOICES
+  const lists = LINEAR_TEAM_LISTS[input.team]
+  return lists ? { ...LINEAR_CHOICES, ...lists } : { kind: 'error' as const, message: `No connected Linear team matched ${input.team}.` }
+}
+
 /** The panel on the web project on Linear with `storage`, whose `tasks.load` lists, as the worker
  *  does, the Linear filter the request names, else the one stored as shown, else the first, own or
- *  global: ENG-12 for each. `linear.choices` answers the Acme teams unless `requests` says
+ *  global: ENG-12 for each. `linear.choices` answers as `acmeChoices` unless `requests` says
  *  otherwise. Also its host and the inputs `tasks.load` was asked with. */
 async function showLinearFilters(storage: ReturnType<typeof linearStored>, requests: MockRequests = {}) {
   const inputs: LoadInput[] = []
@@ -4958,7 +4975,7 @@ async function showLinearFilters(storage: ReturnType<typeof linearStored>, reque
         const filter = filters.find((f) => f.id === input.filterId) ?? filters.find((f) => f.id === project.shownFilterId?.linear) ?? filters[0]
         return ready([eng12], { provider: 'linear-orca', filterId: filter.id })
       },
-      'linear.choices': LINEAR_CHOICES,
+      'linear.choices': acmeChoices,
       ...requests
     },
     storage
@@ -4966,11 +4983,13 @@ async function showLinearFilters(storage: ReturnType<typeof linearStored>, reque
   return { view, host, inputs }
 }
 
+type LinearField = 'team' | 'state' | 'assignee' | 'label' | 'order'
+
 /** A field of the Linear query form at `index`, from 0. */
-const linearField = (field: 'team' | 'assignee' | 'order', index = 0) => ({ type: 'Select', testId: `linear-${field}-${index}` })
+const linearField = (field: LinearField, index = 0) => ({ type: 'Select', testId: `linear-${field}-${index}` })
 
 /** The labels of the options of the Linear query field `field` at `index`. */
-function linearOptions(view: TestPanel, field: 'team' | 'assignee' | 'order', index = 0): string[] {
+function linearOptions(view: TestPanel, field: LinearField, index = 0): string[] {
   const options = view.find(linearField(field, index))?.props.options as { label: string }[] | undefined
   return (options ?? []).map((option) => option.label)
 }
@@ -5095,6 +5114,125 @@ test("a stored team the workspace doesn't have stays chosen, marked not found, a
   assert.ok(failing.view.find({ type: 'Text', text: "Couldn't list the Linear teams: orca failed: Orca is not running." }))
   assert.equal(failing.view.valueOf(linearField('team')), 'OPS')
   assert.deepEqual(linearOptions(failing.view, 'team'), ['Any team', 'OPS'])
+})
+
+/** The value of the Linear query field `field` at `index`, and whether it can be changed. From its
+ *  props, since `valueOf` refuses a disabled Select. */
+function linearChoice(view: TestPanel, field: LinearField, index = 0): [unknown, boolean] {
+  const select = view.find(linearField(field, index))
+  return [select?.props.value, select !== null && !select.disabled]
+}
+
+test("with a team chosen, State offers Open and the team's states and Label Any label and its labels, chosen ones run as --state and --label; without a team neither can be changed", async () => {
+  const mine = { id: 'f-mine', name: 'Mine', queries: [linearQuery({ team: 'ENG', state: 'In Progress', label: 'Bug' }), linearQuery({ assignee: 'me' })] }
+  const asked: LinearChoicesInput[] = []
+  const { view, host } = await showLinearFilters(linearStored({ filters: { linear: [mine] } }), {
+    'linear.choices': (input: LinearChoicesInput) => (asked.push(input), acmeChoices(input))
+  })
+  await view.press(editFilter)
+  assert.deepEqual(
+    view.findAll({ type: 'Select' }).filter((select) => /^linear-/.test(select.key ?? '')).map((select) => select.label),
+    ['Team', 'State', 'Assignee', 'Label', 'Order', 'Team', 'State', 'Assignee', 'Label', 'Order']
+  )
+  assert.deepEqual(linearChoice(view, 'state'), ['In Progress', true])
+  assert.deepEqual(linearOptions(view, 'state'), ['Open', 'Backlog', 'In Progress', 'Done'])
+  assert.deepEqual(linearChoice(view, 'label'), ['Bug', true])
+  assert.deepEqual(linearOptions(view, 'label'), ['Any label', 'Bug', 'Feature'])
+  assert.deepEqual(linearChoice(view, 'state', 1), ['open', false])
+  assert.deepEqual(linearOptions(view, 'state', 1), ['Open'])
+  assert.deepEqual(linearChoice(view, 'label', 1), [':any', false])
+  assert.deepEqual(linearOptions(view, 'label', 1), ['Any label'])
+  assert.deepEqual(asked, [{ workspaceId: '' }, { workspaceId: '', team: 'ENG' }])
+  await view.select(linearField('state'), 'Done')
+  await view.select(linearField('label'), 'Feature')
+  await view.press(saveButton)
+  assert.deepEqual(storedLinearQueries(host), [{ team: 'ENG', state: 'Done', label: 'Feature' }, { assignee: 'me' }])
+  await view.press(editFilter)
+  await view.select(linearField('state'), 'open')
+  await view.select(linearField('label'), ':any')
+  await view.press(saveButton)
+  assert.deepEqual(storedLinearQueries(host)[0], { team: 'ENG' })
+  // The teams are listed once, but each opening of the editor reads the team's lists again.
+  assert.deepEqual(asked.slice(2), [{ workspaceId: '', team: 'ENG' }])
+  assert.deepEqual(view.errors, [])
+})
+
+test('changing the team reloads its states and labels, keeping the chosen ones, and Any team puts State back to Open and Label to Any label', async () => {
+  const asked: LinearChoicesInput[] = []
+  const { view, host } = await showLinearFilters(linearStored(), {
+    'linear.choices': (input: LinearChoicesInput) => (asked.push(input), acmeChoices(input))
+  })
+  await view.press(editFilter)
+  await view.select(linearField('team'), 'DES')
+  assert.deepEqual(asked.at(-1), { workspaceId: '', team: 'DES' })
+  // Design's own state named Open would run as Orca's open, which --state can't tell it from.
+  assert.deepEqual(linearOptions(view, 'state'), ['Open', 'Todo', 'In Review'])
+  assert.deepEqual(linearOptions(view, 'label'), ['Any label', 'Polish'])
+  await view.select(linearField('state'), 'Todo')
+  await view.select(linearField('label'), 'Polish')
+  await view.select(linearField('team'), 'ENG')
+  assert.deepEqual(asked.at(-1), { workspaceId: '', team: 'ENG' })
+  assert.deepEqual(linearChoice(view, 'state'), ['Todo', true])
+  assert.deepEqual(linearOptions(view, 'state'), ['Open', 'Backlog', 'In Progress', 'Done', 'Todo (not found)'])
+  assert.deepEqual(linearOptions(view, 'label'), ['Any label', 'Bug', 'Feature', 'Polish (not found)'])
+  await view.select(linearField('team'), 'DES')
+  assert.deepEqual(
+    asked.filter((input) => input.team === 'DES'),
+    [
+      { workspaceId: '', team: 'DES' },
+      { workspaceId: '', team: 'DES' }
+    ]
+  )
+  await view.select(linearField('team'), ':any')
+  assert.deepEqual(linearChoice(view, 'state'), ['open', false])
+  assert.deepEqual(linearChoice(view, 'label'), [':any', false])
+  await view.press(saveButton)
+  assert.deepEqual(storedLinearQueries(host), [{ assignee: 'me' }])
+})
+
+test('a stored state or label without a team is shown as it runs, and can be put back to Open and Any label, after which neither can be changed', async () => {
+  const mine = { id: 'f-mine', name: 'Mine', queries: [linearQuery({ state: 'Todo', label: 'Bug' })] }
+  const { view, host } = await showLinearFilters(linearStored({ filters: { linear: [mine] } }))
+  await view.press(editFilter)
+  assert.deepEqual(linearChoice(view, 'state'), ['Todo', true])
+  assert.deepEqual(linearOptions(view, 'state'), ['Open', 'Todo'])
+  assert.deepEqual(linearChoice(view, 'label'), ['Bug', true])
+  assert.deepEqual(linearOptions(view, 'label'), ['Any label', 'Bug'])
+  await view.select(linearField('state'), 'open')
+  await view.select(linearField('label'), ':any')
+  assert.deepEqual(linearChoice(view, 'state'), ['open', false])
+  assert.deepEqual(linearChoice(view, 'label'), [':any', false])
+  await view.press(saveButton)
+  assert.deepEqual(storedLinearQueries(host), [{}])
+})
+
+test("a team's states and labels say while they load and when they can't be read, and a stored state or label the team lacks stays chosen, marked not found", async () => {
+  const answer = held()
+  const mine = { id: 'f-mine', name: 'Mine', queries: [linearQuery({ team: 'ENG', state: 'Triage', label: 'Old' }), linearQuery({ team: 'OPS', state: 'Todo' })] }
+  const { view } = await showLinearFilters(linearStored({ filters: { linear: [mine] } }), {
+    'linear.choices': async (input: LinearChoicesInput) => {
+      if (input.team) await answer.released
+      return acmeChoices(input)
+    }
+  })
+  const opened = view.press(editFilter)
+  await drawn(view, { type: 'Spinner', label: 'Loading the states and labels of ENG' })
+  const whileLoading = [linearOptions(view, 'state'), linearOptions(view, 'label')]
+  answer.release()
+  await opened
+  assert.deepEqual(whileLoading, [
+    ['Open', 'Triage'],
+    ['Any label', 'Old']
+  ])
+  assert.equal(view.find({ type: 'Spinner', label: 'Loading the states and labels of ENG' }), null)
+  assert.deepEqual(linearChoice(view, 'state'), ['Triage', true])
+  assert.deepEqual(linearOptions(view, 'state'), ['Open', 'Backlog', 'In Progress', 'Done', 'Triage (not found)'])
+  assert.deepEqual(linearChoice(view, 'label'), ['Old', true])
+  assert.deepEqual(linearOptions(view, 'label'), ['Any label', 'Bug', 'Feature', 'Old (not found)'])
+  assert.ok(view.find({ type: 'Text', text: "Couldn't list the states and labels of OPS: No connected Linear team matched OPS." }))
+  assert.deepEqual(linearChoice(view, 'state', 1), ['Todo', true])
+  assert.deepEqual(linearOptions(view, 'state', 1), ['Open', 'Todo'])
+  assert.deepEqual(linearOptions(view, 'label', 1), ['Any label'])
 })
 
 test('+ on Linear opens the editor on a new filter with one Linear query of every default, and the recipes Assigned to me and Team open write its name and form', async () => {

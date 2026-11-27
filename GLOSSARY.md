@@ -57,7 +57,7 @@ A ready-made filter on GitHub, **Open** or **Assigned to me**, that writes a new
 _Avoid_: Preset, template (that is a prompt template)
 
 **Linear query**:
-One of the queries, in order, that make up a filter on Linear. Linear has no query language, so a Linear query is a set of fields whose values the user chooses from lists rather than types, such as a team of the workspace, the assignee and the order; a field left unchosen keeps its default, such as any team, and the state is open unless one is chosen. The filter shows the tasks of the first, then those of the next, each task once, where it first appears.
+One of the queries, in order, that make up a filter on Linear. Linear has no query language, so a Linear query is a set of fields whose values the user chooses from lists rather than types, such as a team of the workspace, one of the team's states or labels, the assignee and the order; a field left unchosen keeps its default, such as any team, and the state is open unless one is chosen. A state or label can be chosen only once a team is. The filter shows the tasks of the first, then those of the next, each task once, where it first appears.
 _Avoid_: Filter (that is the whole named set of queries), search, view (Linear's own saved filter)
 
 **Linear recipe**:
