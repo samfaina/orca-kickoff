@@ -2,7 +2,7 @@ import { assert, mockHost, mountWorker, test } from 'orca/testing'
 import type { JsonValue } from 'orca'
 import type { OrcaWorkerApi } from 'orca/worker'
 import { CliError, cliFailureMessage, type RunCli } from './cli'
-import type { StartEnded, Task } from './protocol'
+import type { LinearChoicesResult, StartEnded, Task } from './protocol'
 import { activateWith } from './worker'
 
 const wrap = (result: unknown) => JSON.stringify({ id: 'req-1', ok: true, result, _meta: { runtimeId: 'rt-1' } })
@@ -763,7 +763,7 @@ test("with no Linear connection in Orca, the list says to connect Linear in Orca
   })
 })
 
-test("any other Orca failure on Linear is Orca's own message, and a chosen workspace is passed as --workspace", async () => {
+test('a chosen Linear workspace that is no longer connected fails the list saying so, and names no filter', async () => {
   const unknown = JSON.stringify({ ok: false, error: { code: 'linear_invalid_workspace', message: 'Unknown Linear workspace ws-9.', data: { nextSteps: [] } } })
   const { worker, calls } = await start(
     { ...ORCA_OK, 'orca linear list-issues': unknown },
@@ -772,9 +772,39 @@ test("any other Orca failure on Linear is Orca's own message, and a chosen works
   assert.deepEqual(await worker.request('tasks.load', {}), {
     kind: 'error',
     project: { id: 'github:acme/web', name: 'web', repo: 'acme/web' },
-    message: 'orca failed: Unknown Linear workspace ws-9.'
+    message: "The Linear workspace chosen in Project settings isn't connected in Orca. Choose another workspace in Project settings, or connect it in Orca's settings (Settings › Integrations › Linear)."
   })
   assert.deepEqual(linearCalls(calls)[0].slice(-3), ['--workspace', 'ws-9', '--json'])
+})
+
+test("any other Orca failure on Linear is Orca's own message", async () => {
+  const failed = JSON.stringify({ ok: false, error: { code: 'runtime_error', message: 'Linear is down.' } })
+  const { worker } = await start({ ...ORCA_OK, 'orca linear list-issues': failed }, { storage: linearSettings() })
+  assert.deepEqual(await worker.request('tasks.load', {}), {
+    kind: 'error',
+    project: { id: 'github:acme/web', name: 'web', repo: 'acme/web' },
+    message: 'orca failed: Linear is down.'
+  })
+})
+
+test('a chosen Linear workspace is passed as --workspace to the list, its next page and a tracker search, and none chosen passes none', async () => {
+  const answer = (args: string[]) => linearPage([linearIssue('ENG-1')], args.includes('--cursor') ? null : 'cursor-2')
+  const chosen = await start({ ...ORCA_OK, 'orca linear list-issues': answer }, { storage: linearSettings({ providers: { 'linear-orca': { workspaceId: 'ws-2' } } }) })
+  const first = await chosen.worker.request('tasks.load', {})
+  assert.equal(first.kind, 'ready')
+  await chosen.worker.request('tasks.load', { cursor: first.kind === 'ready' ? (first.nextCursor ?? undefined) : undefined })
+  await chosen.worker.request('tasks.load', { query: 'dark' })
+  const calls = linearCalls(chosen.calls)
+  assert.equal(calls.length, 3)
+  for (const args of calls) assert.deepEqual(args.slice(args.indexOf('--workspace'), args.indexOf('--workspace') + 2), ['--workspace', 'ws-2'])
+  assert.ok(calls[1].includes('--cursor') && calls[2].includes('--query'))
+  const none = await start({ ...ORCA_OK, 'orca linear list-issues': answer }, { storage: linearSettings() })
+  await none.worker.request('tasks.load', {})
+  await none.worker.request('tasks.load', { query: 'dark' })
+  assert.equal(
+    linearCalls(none.calls).some((args) => args.includes('--workspace')),
+    false
+  )
 })
 
 /** `orca linear team list --json` with these teams of the invented Acme workspace. */
@@ -798,7 +828,7 @@ const linearProjects = (projects: { id: string; name: string; bare?: boolean }[]
     meta: { limit: 0, returned: projects.length, hasMore: truncated, partial: false, workspaceErrors: [] }
   })
 
-test("linear.choices answers the workspace's teams by key and name and its Linear projects by id and name, nothing about the workspace, and passes a chosen workspace", async () => {
+test("linear.choices answers the workspace's teams by key and name and its Linear projects by id and name, and passes a chosen workspace", async () => {
   const teams = linearTeams([
     { key: 'ENG', name: 'Engineering' },
     { key: 'DES', name: 'Design' }
@@ -817,7 +847,8 @@ test("linear.choices answers the workspace's teams by key and name and its Linea
     projects: [
       { id: 'pr-1', name: 'Dark mode' },
       { id: 'pr-2', name: 'Onboarding' }
-    ]
+    ],
+    workspaces: [{ id: 'ws-1', name: 'Acme' }]
   }
   assert.deepEqual(await worker.request('linear.choices', { workspaceId: '' }), expected)
   assert.deepEqual(await worker.request('linear.choices', { workspaceId: ' ws-2 ' }), expected)
@@ -825,11 +856,89 @@ test("linear.choices answers the workspace's teams by key and name and its Linea
     calls.map((call) => call.args),
     [
       ['linear', 'team', 'list', '--json'],
+      ['linear', 'team', 'list', '--workspace', 'all', '--json'],
       ['linear', 'project', 'list', '--json'],
       ['linear', 'team', 'list', '--workspace', 'ws-2', '--json'],
+      ['linear', 'team', 'list', '--workspace', 'all', '--json'],
       ['linear', 'project', 'list', '--workspace', 'ws-2', '--json']
     ]
   )
+})
+
+/** `orca linear team list --workspace all --json` of the invented workspaces `workspaces`, by id,
+ *  each with the teams of these keys. */
+const linearTeamsOfWorkspaces = (workspaces: { id: string; name: string; teams: string[] }[]) =>
+  wrap({
+    teams: workspaces.flatMap((workspace) =>
+      workspace.teams.map((key) => ({ id: `tm-${key}`, name: `Team ${key}`, key, url: `https://linear.app/x/team/${key}`, workspace: { id: workspace.id, name: workspace.name } }))
+    ),
+    meta: { workspaceId: 'all', returned: 0, partial: false, workspaceErrors: [] }
+  })
+
+/** The workspaces a `linear.choices` answer names, if any. */
+const workspacesOf = (answer: LinearChoicesResult) => (answer.kind === 'ready' ? answer.workspaces : undefined)
+
+test("linear.choices with no team answers the connected workspaces, each once by id and name, read from every workspace's teams, and logs none of their names", async () => {
+  const every = linearTeamsOfWorkspaces([
+    { id: 'ws-1', name: 'Acme', teams: ['ENG', 'DES'] },
+    { id: 'ws-2', name: 'Globex', teams: ['OPS'] }
+  ])
+  const chosen = linearTeams([{ key: 'OPS', name: 'Operations' }])
+  const teams = (args: string[]) => (args.includes('all') ? every : chosen)
+  const { worker, calls } = await start({ 'orca linear team': teams, 'orca linear project': linearProjects([]) })
+  assert.deepEqual(await worker.request('linear.choices', { workspaceId: 'ws-2' }), {
+    kind: 'ready',
+    teams: [{ key: 'OPS', name: 'Operations' }],
+    projects: [],
+    workspaces: [
+      { id: 'ws-1', name: 'Acme' },
+      { id: 'ws-2', name: 'Globex' }
+    ]
+  })
+  assert.deepEqual(
+    calls.map((call) => call.args),
+    [
+      ['linear', 'team', 'list', '--workspace', 'ws-2', '--json'],
+      ['linear', 'team', 'list', '--workspace', 'all', '--json'],
+      ['linear', 'project', 'list', '--workspace', 'ws-2', '--json']
+    ]
+  )
+  assert.deepEqual(worker.logs, [])
+})
+
+test('linear.choices answers the one workspace connected, drops teams without a workspace id or name, and reads no workspaces with a team', async () => {
+  const one = linearTeamsOfWorkspaces([{ id: 'ws-1', name: 'Acme', teams: ['ENG', 'DES'] }])
+  const { worker } = await start({ 'orca linear team': (args) => (args.includes('all') ? one : linearTeams([{ key: 'ENG', name: 'Engineering' }])), 'orca linear project': linearProjects([]) })
+  assert.deepEqual(workspacesOf(await worker.request('linear.choices', { workspaceId: '' })), [{ id: 'ws-1', name: 'Acme' }])
+  const odd = wrap({
+    teams: [{ key: 'A', name: 'A', workspace: { id: '', name: 'Nameless' } }, { key: 'B', name: 'B', workspace: { id: 'ws-3' } }, { key: 'C', name: 'C' }, { key: 'D', name: 'D', workspace: { id: 'ws-4', name: 'Initech' } }],
+    meta: {}
+  })
+  const other = await start({ 'orca linear team': (args) => (args.includes('all') ? odd : linearTeams([])), 'orca linear project': linearProjects([]) })
+  assert.deepEqual(workspacesOf(await other.worker.request('linear.choices', { workspaceId: '' })), [{ id: 'ws-4', name: 'Initech' }])
+  const withTeam = await start({
+    'orca linear team': linearTeamCommands({ list: linearTeams([{ key: 'ENG', name: 'Engineering' }]), states: linearTeamStates('ENG', []), labels: linearTeamLabels('ENG', []) })
+  })
+  const answer = await withTeam.worker.request('linear.choices', { workspaceId: 'ws-1', team: 'ENG' })
+  assert.equal(workspacesOf(answer), undefined)
+  assert.equal(
+    withTeam.calls.some((call) => call.args.includes('all')),
+    false
+  )
+})
+
+test("when the teams of every workspace can't be read, linear.choices still answers the workspace's teams and projects, naming no workspaces", async () => {
+  const teams = (args: string[]) => {
+    if (args.includes('all')) throw new CliError('orca failed: Orca is not running.')
+    return linearTeams([{ key: 'ENG', name: 'Engineering' }])
+  }
+  const { worker } = await start({ 'orca linear team': teams, 'orca linear project': linearProjects([{ id: 'pr-1', name: 'Dark mode' }]) })
+  assert.deepEqual(await worker.request('linear.choices', { workspaceId: '' }), {
+    kind: 'ready',
+    teams: [{ key: 'ENG', name: 'Engineering' }],
+    projects: [{ id: 'pr-1', name: 'Dark mode' }]
+  })
+  assert.deepEqual(worker.logs, [])
 })
 
 test('linear.choices says when Orca stopped reading the Linear projects before the end, as it does at its own deadline', async () => {
@@ -839,20 +948,22 @@ test('linear.choices says when Orca stopped reading the Linear projects before t
     kind: 'ready',
     teams: [{ key: 'ENG', name: 'Engineering' }],
     projects: [{ id: 'pr-1', name: 'Dark mode' }],
-    projectsTruncated: true
+    projectsTruncated: true,
+    workspaces: [{ id: 'ws-1', name: 'Acme' }]
   })
 })
 
-test('linear.choices answers no teams or projects when Orca lists none, as it does without a Linear connection, and drops teams and projects without a key, id or name', async () => {
+test('linear.choices answers no teams, projects or workspaces when Orca lists none, as it does without a Linear connection, and drops teams and projects without a key, id or name', async () => {
   const { worker } = await start({ 'orca linear team': linearTeams([]), 'orca linear project': linearProjects([]) })
-  assert.deepEqual(await worker.request('linear.choices', { workspaceId: '' }), { kind: 'ready', teams: [], projects: [] })
+  assert.deepEqual(await worker.request('linear.choices', { workspaceId: '' }), { kind: 'ready', teams: [], projects: [], workspaces: [] })
   const odd = wrap({ teams: [{ id: 'tm-1', key: 'ENG', name: '' }, { id: 'tm-2', name: 'Ops' }, 'x', { id: 'tm-3', key: 'OPS', name: 'Operations' }], meta: {} })
   const oddProjects = wrap({ projects: [{ id: 'pr-1', name: '' }, { name: 'Nameless id' }, 7, { id: 'pr-3', name: 'Billing' }], truncated: false, meta: {} })
   const { worker: other } = await start({ 'orca linear team': odd, 'orca linear project': oddProjects })
   assert.deepEqual(await other.request('linear.choices', { workspaceId: '' }), {
     kind: 'ready',
     teams: [{ key: 'OPS', name: 'Operations' }],
-    projects: [{ id: 'pr-3', name: 'Billing' }]
+    projects: [{ id: 'pr-3', name: 'Billing' }],
+    workspaces: []
   })
 })
 
@@ -924,14 +1035,20 @@ test("linear.choices with a team also answers the names of the team's states and
   )
 })
 
-test("linear.choices with a blank team reads the teams and the Linear projects alone, and a team whose states or labels can't be read answers Orca's message", async () => {
+test("linear.choices with a blank team reads the teams, the workspaces and the Linear projects alone, and a team whose states or labels can't be read answers Orca's message", async () => {
   const list = linearTeams([{ key: 'ENG', name: 'Engineering' }])
   const { worker, calls } = await start({ 'orca linear team': linearTeamCommands({ list }), 'orca linear project': linearProjects([]) })
-  assert.deepEqual(await worker.request('linear.choices', { workspaceId: '', team: ' ' }), { kind: 'ready', teams: [{ key: 'ENG', name: 'Engineering' }], projects: [] })
+  assert.deepEqual(await worker.request('linear.choices', { workspaceId: '', team: ' ' }), {
+    kind: 'ready',
+    teams: [{ key: 'ENG', name: 'Engineering' }],
+    projects: [],
+    workspaces: [{ id: 'ws-1', name: 'Acme' }]
+  })
   assert.deepEqual(
     calls.map((call) => call.args),
     [
       ['linear', 'team', 'list', '--json'],
+      ['linear', 'team', 'list', '--workspace', 'all', '--json'],
       ['linear', 'project', 'list', '--json']
     ]
   )

@@ -86,9 +86,9 @@ import {
   type Filter,
   type FilterSettings,
   type ListedFilter,
-  type JiraProviderId,
   type JiraSitesResult,
   type LinearChoicesResult,
+  type LinearWorkspace,
   type ActionResult,
   type AgentChoice,
   type AgentsResult,
@@ -154,10 +154,12 @@ const PROVIDER_OPTIONS: { value: ProviderId; label: string }[] = [
   { value: 'linear-orca', label: 'Linear (Orca connection)' }
 ]
 
-/** Select values can't be empty, so these stand for "no tracker yet" and "Orca's default site".
- *  Neither can be a provider id or an Orca site id. */
+/** Select values can't be empty, so these stand for "no tracker yet", "Orca's default site" and
+ *  "Orca's selected Linear workspace". None can be a provider id, an Orca site id or a Linear
+ *  workspace id. */
 const NO_TRACKER = ':none'
 const DEFAULT_SITE = ':default'
+const DEFAULT_WORKSPACE = ':default'
 
 /** The listed project's settings, as the person sees them. `provider` is null while none is set.
  *  `filterSettings` holds every tracker's own filters and the one each showed last, as stored, and
@@ -323,10 +325,15 @@ const shownSettings = atom<ShownSettings | null>(null)
 /** The sites of Orca's Jira connection, asked for the first time they are needed. */
 const jiraSites = atom<JiraSitesResult | 'loading' | null>(null)
 /** What the Linear query form offers for the workspace `workspaceId`, by team key: under '' the
- *  teams and Linear projects, asked for when the filter editor opens on a Linear filter, and under
+ *  teams and Linear projects, with the workspaces connected, asked for when the filter editor opens
+ *  on a Linear filter and while Project settings show a Linear project, and under
  *  a team's key the teams and its states and labels, asked for then for each team its queries name,
  *  and when a form's team changes. */
 const linearChoices = atom<{ workspaceId: string; answers: Record<string, ShownLinearChoices> } | null>(null)
+/** The Linear workspaces connected in Orca, as the last `linear.choices` with no team answered them,
+ *  for Project settings' Workspace; kept while the choices of another workspace load. null until
+ *  then. Their names are the Linear organisations': shown, never logged. */
+const linearWorkspaces = atom<LinearWorkspace[] | null>(null)
 /** The agents Orca can start on the active worktree's host, as last answered: asked on each load
  *  of the list and each time Project settings opens. null until the first answer. */
 const availableAgents = atom<AgentsResult | null>(null)
@@ -1172,8 +1179,8 @@ function closeSettings(): void {
   if (listedTrackerSettingsVersion !== trackerSettingsVersion) void load()
 }
 
-/** Changes some of a Jira provider's settings, keeping the rest. */
-function changeJiraConfig<K extends JiraProviderId>(id: K, changes: Partial<Required<ProviderConfigs>[K]>): void {
+/** Changes some of a provider's settings, keeping the rest. */
+function changeProviderConfig<K extends ProviderId>(id: K, changes: Partial<Required<ProviderConfigs>[K]>): void {
   const current = read(shownSettings)
   if (!current) return
   changeSettings({ providers: { [id]: { ...providerConfig({ providers: current.providers }, id), ...changes } } })
@@ -1193,7 +1200,8 @@ async function loadJiraSites(): Promise<void> {
 }
 
 /** Asks for what the Linear query form offers in the workspace `workspaceId`: its teams and Linear
- *  projects when `team` is '', else its teams and the states and labels of the team `team`, unless
+ *  projects, with the workspaces connected for Project settings, when `team` is '', else its teams
+ *  and the states and labels of the team `team`, unless
  *  that is being asked for. The teams and projects aren't asked for again once some teams are
  *  listed: after a failure or with none listed, the person may have connected Linear since. A
  *  team's lists are asked for again each time, so a team chosen again shows its lists as they are
@@ -1210,12 +1218,21 @@ async function loadLinearChoices(workspaceId: string, team = ''): Promise<void> 
   } catch (error) {
     answer = { kind: 'error', message: `Kickoff's worker didn't answer (${errorCode(error)}).` }
   }
+  // The workspaces connected are the same whichever workspace was asked for.
+  if (answer.kind === 'ready' && answer.workspaces) set(linearWorkspaces, answer.workspaces)
   const latest = read(linearChoices)
   if (latest?.workspaceId === workspaceId) set(linearChoices, { workspaceId, answers: { ...latest.answers, [team]: answer } })
 }
 
 /** The workspace the shown project's Linear filters read: '' for the one Orca picks. */
 const linearWorkspace = (shown: ShownSettings): string => providerConfig({ providers: shown.providers }, 'linear-orca').workspaceId
+
+/** On Linear, asks for the choices of the workspace the project reads with no team, as
+ *  `loadLinearChoices` does, for the workspaces connected they name: Project settings' Workspace. */
+function loadLinearSettingsChoices(): void {
+  const shown = read(shownSettings)
+  if (shown?.provider === 'linear-orca') void loadLinearChoices(linearWorkspace(shown))
+}
 
 /** Asks for the agents Orca can start, and keeps the last answer shown until the new one arrives.
  *  A worker that doesn't answer counts as agents that can't be read. */
@@ -1249,6 +1266,7 @@ function openSettings(): void {
   set(settingsChoice, 'open')
   void loadAgents()
   void askAbout()
+  loadLinearSettingsChoices()
 }
 
 /** Lists the active project's tasks, or runs the tracker search shown again. `poll` says the poll
@@ -1297,7 +1315,12 @@ async function load(reason: 'poll' | 'other' = 'other'): Promise<void> {
   set(list, answer)
   set(loading, false)
   // Project settings may open by itself with this answer: only one that names a project.
-  if ('project' in answer && answer.project && read(settingsChoice) === 'auto' && needsSettings(answer)) void askAbout()
+  const named = 'project' in answer && answer.project !== null
+  const opensItself = named && read(settingsChoice) === 'auto' && needsSettings(answer)
+  if (opensItself) void askAbout()
+  // Project settings shown, by itself or kept open after a change of tracker or workspace, offer
+  // the Linear workspaces.
+  if (opensItself || (named && read(settingsChoice) === 'open')) loadLinearSettingsChoices()
   // A failed query opens the filter editor on its filter, unless a draft, or the choice of +, is
   // open already.
   if (answer.kind === 'error' && answer.filterId !== undefined && !read(templateDraft) && !read(filterDraft) && !read(newFilterChoice)) {
@@ -2160,11 +2183,56 @@ function TrackerFields({ shown }: { shown: ShownSettings }) {
       {shown.provider === 'jira-orca' ? <JiraOrcaSettings providers={shown.providers} /> : null}
       {shown.provider === 'jira-twg' ? <JiraTwgSettings providers={shown.providers} /> : null}
       {shown.provider !== null && trackerOf(shown.provider) === 'jira' ? <JiraProjectKeyField value={shown.jiraProjectKey} /> : null}
-      {shown.provider === 'linear-orca' ? (
-        <Text size="sm" muted>
-          Kickoff reads Linear through the connection saved in Orca. Connect Linear in Orca's settings first if you haven't.
+      {shown.provider === 'linear-orca' ? <LinearOrcaSettings providers={shown.providers} /> : null}
+    </Stack>
+  )
+}
+
+/** Linear (Orca connection)'s settings: the Workspace Select, only once more than one workspace is
+ *  connected, or while the workspace chosen isn't among those connected, or isn't known to be yet,
+ *  so it stays shown as chosen, marked not connected once the workspaces are read. A workspace
+ *  chosen is stored and lists its tasks. */
+function LinearOrcaSettings({ providers }: { providers: ProviderConfigs }) {
+  const { workspaceId } = providerConfig({ providers }, 'linear-orca')
+  const connected = read(linearWorkspaces)
+  const listed = connected !== null
+  const missing = workspaceId !== '' && !(connected ?? []).some((workspace) => workspace.id === workspaceId)
+  const choices = read(linearChoices)
+  const answer = choices?.workspaceId === workspaceId ? choices.answers[''] : undefined
+  const failed = !listed && answer !== undefined && answer !== 'loading' && answer.kind === 'error' ? answer.message : null
+  const options = withStored(
+    [{ value: DEFAULT_WORKSPACE, label: "Orca's selected workspace" }, ...(connected ?? []).map((workspace) => ({ value: workspace.id, label: workspace.name }))],
+    workspaceId || undefined,
+    listed,
+    'not connected'
+  )
+  return (
+    <Stack gap="sm">
+      {(connected?.length ?? 0) > 1 || missing ? (
+        <Select
+          label="Workspace"
+          value={workspaceId || DEFAULT_WORKSPACE}
+          options={options}
+          onChange={(value) => {
+            // The load that follows asks for the choices of the workspace chosen.
+            changeProviderConfig('linear-orca', { workspaceId: value === DEFAULT_WORKSPACE ? '' : value })
+            loadKeepingSettingsOpen()
+          }}
+        />
+      ) : null}
+      {listed && missing ? (
+        <Text size="sm" tone="warning">
+          The workspace chosen isn't connected in Orca. Choose another one.
         </Text>
       ) : null}
+      {failed !== null ? (
+        <Text size="sm" tone="danger">
+          {`Couldn't list the Linear workspaces: ${failed}`}
+        </Text>
+      ) : null}
+      <Text size="sm" muted>
+        Kickoff reads Linear through the connection saved in Orca. Connect Linear in Orca's settings first if you haven't.
+      </Text>
     </Stack>
   )
 }
@@ -2204,7 +2272,7 @@ function JiraOrcaSettings({ providers }: { providers: ProviderConfigs }) {
         value={config.siteId || DEFAULT_SITE}
         options={siteOptions}
         onChange={(value) => {
-          changeJiraConfig('jira-orca', { siteId: value === DEFAULT_SITE ? '' : value })
+          changeProviderConfig('jira-orca', { siteId: value === DEFAULT_SITE ? '' : value })
           loadKeepingSettingsOpen()
         }}
       />
@@ -2275,11 +2343,11 @@ const LINEAR_ORDER_OPTIONS: { value: NonNullable<LinearQuery['orderBy']>; label:
 
 type ChoiceOption = { value: string; label: string }
 
-/** `options`, then the stored value `stored` when it isn't among them, marked not found once the
- *  list it is looked for in is `listed`. */
-function withStored(options: ChoiceOption[], stored: string | undefined, listed: boolean): ChoiceOption[] {
+/** `options`, then the stored value `stored` when it isn't among them, marked `missing` ("not
+ *  found" unless said) once the list it is looked for in is `listed`. */
+function withStored(options: ChoiceOption[], stored: string | undefined, listed: boolean, missing = 'not found'): ChoiceOption[] {
   if (stored === undefined || options.some((option) => option.value === stored)) return options
-  return [...options, { value: stored, label: listed ? `${stored} (not found)` : stored }]
+  return [...options, { value: stored, label: listed ? `${stored} (${missing})` : stored }]
 }
 
 /** The answer `answer` when it is read, else null. */
@@ -2507,14 +2575,14 @@ function JiraTwgSettings({ providers }: { providers: ProviderConfigs }) {
         label="Site"
         value={config.site}
         placeholder="twg's default site"
-        onChange={(site) => changeJiraConfig('jira-twg', { site })}
+        onChange={(site) => changeProviderConfig('jira-twg', { site })}
         onSubmit={loadKeepingSettingsOpen}
       />
       <Input
         label="Profile"
         value={config.profile}
         placeholder="twg's default profile"
-        onChange={(profile) => changeJiraConfig('jira-twg', { profile })}
+        onChange={(profile) => changeProviderConfig('jira-twg', { profile })}
         onSubmit={loadKeepingSettingsOpen}
       />
       <Text size="sm" muted>

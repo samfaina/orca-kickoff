@@ -121,7 +121,7 @@ An agent Orca can start on the host of the worktree an agent is launched in, the
 _Avoid_: Installed agent (that includes the turned-off ones), configured agent
 
 **Project settings**:
-What Kickoff keeps for one project: its tracker and how the provider reads it, its Jira project key, its own filters, its agent choice, its own prompt templates with the default template, and whether it uses its own branch settings or the global ones, with its own when it has them. Global filters, prompt templates and branch settings are not part of any one project's settings.
+What Kickoff keeps for one project: its tracker and how the provider reads it (such as the Jira site, or the Linear workspace when Orca is connected to more than one), its Jira project key, its own filters, its agent choice, its own prompt templates with the default template, and whether it uses its own branch settings or the global ones, with its own when it has them. Global filters, prompt templates and branch settings are not part of any one project's settings.
 _Avoid_: Settings, Kickoff settings, plugin settings, config
 
 **Active project**:

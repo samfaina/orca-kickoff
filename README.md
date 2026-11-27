@@ -36,7 +36,7 @@ Open the **Kickoff** panel from its icon (a lightning bolt) in Orca's right side
   - **GitHub**, for a project whose repository Orca knows.
   - **Jira (Orca connection)**: the site, when Orca is connected to more than one (Orca's default site otherwise).
   - **Jira (twg)**: optionally `twg`'s site and profile.
-  - **Linear (Orca connection)**: nothing to set. Kickoff reads the Linear workspace Orca reads.
+  - **Linear (Orca connection)**: the **Workspace**, when Orca is connected to more than one (**Orca's selected workspace** otherwise, the one Orca reads). A chosen workspace that is no longer connected stays chosen, marked *(not connected)*, and the list says so until you choose another.
 
   On Jira, the **Jira project key** is the key of the Jira project the tasks are in, such as `WEB`. It starts empty, is never guessed from your JQL, and is stored trimmed and upper-cased. [Filters](#filters) and [prompt templates](#prompt-templates) name it as `{{jira_project}}`.
 
