@@ -6,7 +6,7 @@ import { CliError, unreadableOutput, type RunCli } from '../cli'
 import { isRecord, text } from '../json'
 import { readLinearQuery, type LinearQuery } from '../linear-query'
 import { orcaResult } from '../orca'
-import type { LinearProject, LinearTeam, ProviderConfigs, Task } from '../protocol'
+import type { LinearProject, LinearTeam, LinearWorkspace, ProviderConfigs, Task } from '../protocol'
 import { pageAcrossQueries, requireQueries, type QueryPage } from './queries'
 import type { Provider } from './types'
 
@@ -40,7 +40,9 @@ export function linearListArgs(config: Config, query: LinearQuery, after = '', l
 }
 
 /** The `orca linear team list` arguments for the workspace `workspaceId`: `--workspace` only when
- *  it isn't blank, so Orca reads the workspace it picks, as `list-issues` does. */
+ *  it isn't blank, so Orca reads the workspace it picks, as `list-issues` does. With `all`, Orca
+ *  reads the teams of every workspace connected, whose rows name the workspaces: only `team list`
+ *  is given `all`, since `list-issues` refuses a cursor with it. */
 export function linearTeamListArgs(workspaceId: string): string[] {
   return ['linear', 'team', 'list', ...workspaceArgs(workspaceId), '--json']
 }
@@ -80,9 +82,26 @@ export function parseLinearTeamNames(stdout: string, list: 'states' | 'labels'):
  *  dropped. Nothing else is read, since each team carries the workspace's name. Orca lists none
  *  without a Linear connection, as for a workspace with no teams. */
 export function parseLinearTeams(stdout: string): LinearTeam[] {
+  return teamRows(stdout).flatMap((team) => (isRecord(team) && text(team.key) && text(team.name) ? [{ key: text(team.key), name: text(team.name) }] : []))
+}
+
+/** The workspaces of a `team list --workspace all` answer, each once by the id and name its teams
+ *  carry, in Orca's order; a team without both names none. A workspace with no teams isn't there.
+ *  The names are the Linear organisations': shown in the panel, never logged. */
+export function parseLinearWorkspaces(stdout: string): LinearWorkspace[] {
+  const workspaces = new Map<string, string>()
+  for (const team of teamRows(stdout)) {
+    const workspace = isRecord(team) && isRecord(team.workspace) ? team.workspace : {}
+    if (text(workspace.id) && text(workspace.name) && !workspaces.has(text(workspace.id))) workspaces.set(text(workspace.id), text(workspace.name))
+  }
+  return [...workspaces].map(([id, name]) => ({ id, name }))
+}
+
+/** The rows of a `team list` answer, unread. */
+function teamRows(stdout: string): unknown[] {
   const result = orcaResult(stdout)
   if (!isRecord(result) || !Array.isArray(result.teams)) throw unreadableOutput('orca')
-  return result.teams.flatMap((team) => (isRecord(team) && text(team.key) && text(team.name) ? [{ key: text(team.key), name: text(team.name) }] : []))
+  return result.teams
 }
 
 /** The Linear projects of a `project list` answer, by id (which `--project` takes, and which
@@ -115,12 +134,21 @@ export const linearOrca: Provider<Config> = {
   }
 }
 
-/** `error` as the failure of the list: no Linear connection says how to connect; any other failure,
- *  such as an unknown workspace, is Orca's own message. Linear rejects none of a query's values (an
- *  unknown team, state or label lists nothing), so no failure of Orca's is the filter's: only one
- *  with no Linear query to run is (see `list`). */
+/** What the list says when the workspace stored in the provider's configuration isn't connected. */
+export const LINEAR_WORKSPACE_NOT_CONNECTED =
+  "The Linear workspace chosen in Project settings isn't connected in Orca. Choose another workspace in Project settings, or connect it in Orca's settings (Settings › Integrations › Linear)."
+
+/** `error` as the failure of the list: no Linear connection says how to connect, and a workspace
+ *  that isn't connected says so (Orca answers `linear_invalid_workspace` only for a `--workspace`,
+ *  and Kickoff passes one only when the project chose it, never `all`); any other failure is Orca's
+ *  own message. Linear rejects none of a query's values (an unknown team, state or label lists
+ *  nothing), so no failure of Orca's is the filter's: only one with no Linear query to run is (see
+ *  `list`). */
 function linearFailure(error: unknown): unknown {
-  return error instanceof CliError && error.code === 'linear_not_connected' ? new CliError(LINEAR_NOT_CONNECTED, false, error.code) : error
+  if (!(error instanceof CliError)) return error
+  if (error.code === 'linear_not_connected') return new CliError(LINEAR_NOT_CONNECTED, false, error.code)
+  if (error.code === 'linear_invalid_workspace') return new CliError(LINEAR_WORKSPACE_NOT_CONNECTED, false, error.code)
+  return error
 }
 
 /** One `list-issues` page, with Orca's cursor for the next one while `meta.hasMore` is true. */

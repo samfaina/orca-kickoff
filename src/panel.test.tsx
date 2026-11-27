@@ -5010,6 +5010,89 @@ const linearForms = (view: TestPanel) =>
 const storedLinearQueries = (host: MockHost, index = 0) =>
   ((storedProject(host) as StoredLinearFilters).filters?.linear?.[index].queries ?? []).map((query) => JSON.parse(query) as unknown)
 
+/** The invented workspaces connected in Orca: Acme and Globex. */
+const TWO_WORKSPACES = [
+  { id: 'ws-1', name: 'Acme' },
+  { id: 'ws-2', name: 'Globex' }
+]
+
+/** `linear.choices` as `acmeChoices` answers it, naming `workspaces` as connected when asked with no
+ *  team, and each input it was asked with. */
+function choicesWithWorkspaces(workspaces: { id: string; name: string }[]) {
+  const asked: LinearChoicesInput[] = []
+  const answer = (input: LinearChoicesInput) => {
+    asked.push(input)
+    const choices = acmeChoices(input)
+    return input.team ? choices : { ...choices, workspaces }
+  }
+  return { asked, answer }
+}
+
+const workspaceSelect = { type: 'Select', label: 'Workspace' }
+
+test('with several Linear workspaces, Project settings show the Workspace Select, and a workspace chosen is stored, lists its tasks, is asked for its teams and stays across a switch of tracker', async () => {
+  const choices = choicesWithWorkspaces(TWO_WORKSPACES)
+  const { view, host, inputs } = await showLinearFilters(linearStored(), { 'linear.choices': choices.answer })
+  await view.press(gear)
+  assert.deepEqual(optionLabels(view, 'Workspace'), ["Orca's selected workspace", 'Acme', 'Globex'])
+  assert.equal(view.valueOf(workspaceSelect), ':default')
+  assert.deepEqual(choices.asked, [{ workspaceId: '' }])
+  const loads = inputs.length
+  await view.select(workspaceSelect, 'ws-2')
+  assert.deepEqual(storedProject(host), { provider: 'linear-orca', providers: { 'linear-orca': { workspaceId: 'ws-2' } } })
+  assert.equal(inputs.length, loads + 1)
+  assert.deepEqual(choices.asked.at(-1), { workspaceId: 'ws-2' })
+  assert.equal(view.valueOf(workspaceSelect), 'ws-2')
+  assert.deepEqual(optionLabels(view, 'Workspace'), ["Orca's selected workspace", 'Acme', 'Globex'])
+  await view.select({ type: 'Select', label: 'Tracker' }, 'github')
+  assert.equal(view.find(workspaceSelect), null)
+  await view.select({ type: 'Select', label: 'Tracker' }, 'linear-orca')
+  assert.equal(view.valueOf(workspaceSelect), 'ws-2')
+  assert.deepEqual((storedProject(host) as { providers: unknown }).providers, { 'linear-orca': { workspaceId: 'ws-2' }, github: {} })
+  await view.select(workspaceSelect, ':default')
+  assert.deepEqual((storedProject(host) as { providers: unknown }).providers, { 'linear-orca': { workspaceId: '' }, github: {} })
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.warnings, [])
+})
+
+test('with one Linear workspace, or none, Project settings show no Workspace Select', async () => {
+  for (const workspaces of [[TWO_WORKSPACES[0]], []]) {
+    const choices = choicesWithWorkspaces(workspaces)
+    const { view } = await showLinearFilters(linearStored(), { 'linear.choices': choices.answer })
+    await view.press(gear)
+    assert.deepEqual(choices.asked, [{ workspaceId: '' }])
+    assert.equal(view.find(workspaceSelect), null)
+    assert.ok(view.find({ type: 'Text', text: /Connect Linear in Orca's settings/ }))
+  }
+})
+
+test('a chosen Linear workspace no longer connected stays chosen in Project settings, marked not connected, and the failed list says so', async () => {
+  const message = "The Linear workspace chosen in Project settings isn't connected in Orca. Choose another workspace in Project settings, or connect it in Orca's settings (Settings › Integrations › Linear)."
+  for (const workspaces of [TWO_WORKSPACES, [TWO_WORKSPACES[0]]]) {
+    const choices = choicesWithWorkspaces(workspaces)
+    const { view } = await showWith({ 'tasks.load': { kind: 'error', project: web, message }, 'linear.choices': choices.answer }, linearStored({}, undefined, 'ws-9'))
+    // The failed list opens Project settings by itself.
+    assert.ok(view.find(settingsTitle))
+    assert.equal(view.valueOf(workspaceSelect), 'ws-9')
+    assert.deepEqual(optionLabels(view, 'Workspace'), ["Orca's selected workspace", ...workspaces.map((workspace) => workspace.name), 'ws-9 (not connected)'])
+    assert.ok(view.find({ type: 'Text', text: "The workspace chosen isn't connected in Orca. Choose another one." }))
+    assert.deepEqual(choices.asked, [{ workspaceId: 'ws-9' }])
+    await view.press(done)
+    assert.equal(view.find({ type: 'Callout' })?.text, `Couldn't load tasks ${message}`)
+  }
+})
+
+test("while the Linear workspaces can't be read, a chosen workspace stays shown as chosen, unmarked, and Project settings say why", async () => {
+  const { view } = await showLinearFilters(linearStored({}, undefined, 'ws-2'), { 'linear.choices': { kind: 'error', message: 'orca failed: Orca is not running.' } })
+  await view.press(gear)
+  assert.equal(view.valueOf(workspaceSelect), 'ws-2')
+  assert.deepEqual(optionLabels(view, 'Workspace'), ["Orca's selected workspace", 'ws-2'])
+  assert.ok(view.find({ type: 'Text', text: "Couldn't list the Linear workspaces: orca failed: Orca is not running." }))
+  const unchosen = await showLinearFilters(linearStored(), { 'linear.choices': { kind: 'error', message: 'orca failed: Orca is not running.' } })
+  await unchosen.view.press(gear)
+  assert.equal(unchosen.view.find(workspaceSelect), null)
+})
+
 test('on Linear, ✎ opens the filter editor with a Linear query form per query, each choosing Team, Assignee and Order, with Add query and Remove', async () => {
   const mine = { id: 'f-mine', name: 'Mine', queries: [linearQuery({ team: 'ENG', assignee: 'me', orderBy: 'createdAt' }), linearQuery({ assignee: 'null' })] }
   const { view } = await showLinearFilters(linearStored({ filters: { linear: [mine] } }))

@@ -63,7 +63,8 @@ import {
   linearTeamListArgs,
   parseLinearProjects,
   parseLinearTeamNames,
-  parseLinearTeams
+  parseLinearTeams,
+  parseLinearWorkspaces
 } from './providers/linear-orca'
 import { FilterError } from './providers/queries'
 import type { PageRequest } from './providers/types'
@@ -366,15 +367,26 @@ export function activateWith(orca: OrcaWorkerApi, { run, now, workerUrl, readFil
   }
 
   /** The Linear query form's choices for the workspace `workspaceId`: its teams, with its Linear
-   *  projects when `team` is blank, else with the states and labels of the team `team`, all read at
-   *  once. A failure of any is data. */
+   *  projects and every workspace connected when `team` is blank, else with the states and labels
+   *  of the team `team`, all read at once. A failure of any is data, except the workspaces': Project
+   *  settings then offer none, and the form keeps its teams and projects. Nothing here is logged:
+   *  the answers carry the Linear organisations' names. */
   async function linearChoices(workspaceId: string, team = ''): Promise<LinearChoicesResult> {
     try {
       const teams = run('orca', linearTeamListArgs(workspaceId)).then(parseLinearTeams)
       if (team.trim() === '') {
+        const workspaces = run('orca', linearTeamListArgs('all'))
+          .then(parseLinearWorkspaces)
+          .catch(() => null)
         const projects = run('orca', linearProjectListArgs(workspaceId), { timeoutMs: LINEAR_PROJECT_LIST_TIMEOUT_MS }).then(parseLinearProjects)
-        const [teamsListed, projectsListed] = await Promise.all([teams, projects])
-        return { kind: 'ready', teams: teamsListed, projects: projectsListed.projects, ...(projectsListed.truncated ? { projectsTruncated: true as const } : {}) }
+        const [teamsListed, workspacesListed, projectsListed] = await Promise.all([teams, workspaces, projects])
+        return {
+          kind: 'ready',
+          teams: teamsListed,
+          projects: projectsListed.projects,
+          ...(projectsListed.truncated ? { projectsTruncated: true as const } : {}),
+          ...(workspacesListed !== null ? { workspaces: workspacesListed } : {})
+        }
       }
       const teamNames = (list: 'states' | 'labels') => run('orca', linearTeamArgs(list, workspaceId, team)).then((stdout) => parseLinearTeamNames(stdout, list))
       const [listed, states, labels] = await Promise.all([teams, teamNames('states'), teamNames('labels')])
