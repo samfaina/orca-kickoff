@@ -42,8 +42,28 @@ export function linearListArgs(config: Config, query: LinearQuery, after = '', l
 /** The `orca linear team list` arguments for the workspace `workspaceId`: `--workspace` only when
  *  it isn't blank, so Orca reads the workspace it picks, as `list-issues` does. */
 export function linearTeamListArgs(workspaceId: string): string[] {
+  return ['linear', 'team', 'list', ...workspaceArgs(workspaceId), '--json']
+}
+
+/** The `orca linear team states` or `team labels` arguments for the team of key `team` in the
+ *  workspace `workspaceId`, with `--workspace` as for `team list`. */
+export function linearTeamArgs(list: 'states' | 'labels', workspaceId: string, team: string): string[] {
+  return ['linear', 'team', list, '--team', team.trim(), ...workspaceArgs(workspaceId), '--json']
+}
+
+function workspaceArgs(workspaceId: string): string[] {
   const workspace = workspaceId.trim()
-  return ['linear', 'team', 'list', ...(workspace !== '' ? ['--workspace', workspace] : []), '--json']
+  return workspace !== '' ? ['--workspace', workspace] : []
+}
+
+/** The names in the list `list` of a `team states` or `team labels` answer, in Orca's order; an
+ *  entry without one is dropped. Nothing else is read, since the answer carries the workspace's
+ *  name. */
+export function parseLinearTeamNames(stdout: string, list: 'states' | 'labels'): string[] {
+  const result = orcaResult(stdout)
+  const entries = isRecord(result) ? result[list] : undefined
+  if (!Array.isArray(entries)) throw unreadableOutput('orca')
+  return entries.flatMap((entry) => (isRecord(entry) && text(entry.name) ? [text(entry.name)] : []))
 }
 
 /** The teams of a `team list` answer, by key and name, in Orca's order; a team without either is

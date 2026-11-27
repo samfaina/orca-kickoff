@@ -538,9 +538,13 @@ export type JiraSitesResult =
 /** A team of a Linear workspace: the key a Linear query names it by, and its name. */
 export type LinearTeam = { key: string; name: string }
 
-/** What the Linear query form offers, read from Orca's Linear connection: the workspace's teams. No
- *  teams can mean no Linear connection, since Orca then lists none. */
-export type LinearChoicesResult = { kind: 'ready'; teams: LinearTeam[] } | { kind: 'error'; message: string }
+/** What the Linear query form offers, read from Orca's Linear connection: the workspace's teams,
+ *  and, when a team was asked for, the names of its states and of its labels, by which a Linear
+ *  query's `state` and `label` name them. No teams can mean no Linear connection, since Orca then
+ *  lists none. */
+export type LinearChoicesResult =
+  | { kind: 'ready'; teams: LinearTeam[]; states?: string[]; labels?: string[] }
+  | { kind: 'error'; message: string }
 
 /** An agent Orca can start on a host, as `orca agent installed` lists it: the id `--agent` takes,
  *  Orca's display name, and whether it is Orca's default agent. */
@@ -586,8 +590,8 @@ declare module 'orca' {
     'project.active': { input: {}; output: ActiveProjectResult }
     'jira.sites': { input: {}; output: JiraSitesResult }
     /** What the Linear query form offers, for the workspace `workspaceId` ('' for the one Orca
-     *  reads without `--workspace`). */
-    'linear.choices': { input: { workspaceId: string }; output: LinearChoicesResult }
+     *  reads without `--workspace`) and, unless `team` is blank or missing, the team of that key. */
+    'linear.choices': { input: { workspaceId: string; team?: string }; output: LinearChoicesResult }
     /** The agents Orca can start on the active worktree's host, for Project settings' Agent and the
      *  task's card: read again on each request. An error with no active worktree. */
     'agents.load': { input: {}; output: AgentsResult }

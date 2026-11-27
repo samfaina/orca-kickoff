@@ -11,6 +11,7 @@ import {
   type AgentsResult,
   type Filter,
   type JiraProviderId,
+  type LinearChoicesResult,
   type ProjectRef,
   type ProviderId,
   type Task,
@@ -29,6 +30,18 @@ const AVAILABLE_AGENTS: AgentsResult = {
     { id: 'codex', name: 'Codex', default: false },
     { id: 'copilot', name: 'GitHub Copilot', default: false }
   ]
+}
+
+/** What the Linear query form offers in the invented Acme workspace: its teams, and with a team
+ *  Engineering's states and labels, or Orca's failure for a team Acme doesn't have. */
+function linearChoices({ team }: { team?: string }): LinearChoicesResult {
+  const teams = [
+    { key: 'ENG', name: 'Engineering' },
+    { key: 'DES', name: 'Design' }
+  ]
+  if (!team) return { kind: 'ready', teams }
+  if (team !== 'ENG') return { kind: 'error', message: `No connected Linear team matched ${team}.` }
+  return { kind: 'ready', teams, states: ['Triage', 'Todo', 'In Progress', 'Done'], labels: ['Bug', 'Feature'] }
 }
 
 /** The answers of a panel showing `tasks`, whose project is the active one. The worktrees and the
@@ -50,7 +63,7 @@ function answers(tasks: TaskList): MockRequests {
     'project.active': { projectId: 'project' in tasks && tasks.project ? tasks.project.id : null },
     'starts.load': { starting },
     'jira.sites': { kind: 'ready', sites: [{ id: 'site-1', name: 'example.atlassian.net' }] },
-    'linear.choices': { kind: 'ready', teams: [{ key: 'ENG', name: 'Engineering' }, { key: 'DES', name: 'Design' }] },
+    'linear.choices': linearChoices,
     'agents.load': AVAILABLE_AGENTS,
     'task.start': { ok: false, message: 'Starting is off in check scenarios.' },
     'task.runHere': { ok: false, message: 'Running here is off in check scenarios.' },
@@ -231,12 +244,12 @@ const linearStarted = ready(
   }
 )
 
-/** A Linear filter of two Linear queries: Engineering's unassigned issues, last created first, then
- *  the issues of a team the workspace no longer has. */
+/** A Linear filter of two Linear queries: Engineering's unassigned bugs in Triage, last created
+ *  first, then the issues of a team the workspace no longer has. */
 const triageFilter: Filter = {
   id: 'f-triage',
   name: 'Triage',
-  queries: [JSON.stringify({ team: 'ENG', assignee: 'null', orderBy: 'createdAt' }), JSON.stringify({ team: 'OPS' })]
+  queries: [JSON.stringify({ team: 'ENG', state: 'Triage', assignee: 'null', label: 'Bug', orderBy: 'createdAt' }), JSON.stringify({ team: 'OPS' })]
 }
 
 /** `web` on Linear with its initial filter and `triageFilter`, which it shows. */
@@ -364,8 +377,9 @@ export default defineCheck({
   // A Linear project on its initial filter: the filter row has ✎ and +, and each card shows the
   // state's name.
   'linear-ready': { storage: linearSettings, requests: answers(linearStarted) },
-  // A Linear filter of two Linear queries, shown: ✎ opens a form for each, the second naming a team
-  // the workspace no longer has.
+  // A Linear filter of two Linear queries, shown: ✎ opens a form for each, the first with a state
+  // and a label of its team's, the second naming a team the workspace no longer has, whose states
+  // and labels can't be read.
   'linear-queries': {
     storage: linearTriageSettings,
     requests: answers(ready(web, 'linear-orca', linearStarted.tasks.slice(1, 3), { filterId: triageFilter.id, queryCount: 2 }))

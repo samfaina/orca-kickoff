@@ -171,7 +171,7 @@ test('linear-ready lists the Linear issues assigned to the user, with their stat
   assert.equal(shown.valueOf({ label: 'Tracker' }), 'linear-orca')
 })
 
-test('linear-queries opens, with ✎, a Linear query form per query, the stored team the workspace lacks marked not found', async () => {
+test("linear-queries opens, with ✎, a Linear query form per query, with its team's states and labels, the stored team the workspace lacks marked not found", async () => {
   const shown = await render('linear-queries')
   assert.equal(shown.valueOf({ type: 'Select', label: 'Filter' }), 'f-triage')
   await shown.press({ type: 'IconButton', label: 'Edit filter' })
@@ -180,11 +180,14 @@ test('linear-queries opens, with ✎, a Linear query form per query, the stored 
     ['Linear query', 'Linear query 2']
   )
   assert.deepEqual(
-    ['team', 'assignee', 'order'].map((field) => shown.valueOf({ type: 'Select', testId: `linear-${field}-0` })),
-    ['ENG', 'null', 'createdAt']
+    ['team', 'state', 'assignee', 'label', 'order'].map((field) => shown.valueOf({ type: 'Select', testId: `linear-${field}-0` })),
+    ['ENG', 'Triage', 'null', 'Bug', 'createdAt']
   )
-  const second = shown.find({ type: 'Select', testId: 'linear-team-1' })?.props.options as { label: string }[]
-  assert.deepEqual(second.map((option) => option.label), ['Any team', 'Engineering (ENG)', 'Design (DES)', 'OPS (not found)'])
+  const options = (field: string, index: number) => (shown.find({ type: 'Select', testId: `linear-${field}-${index}` })?.props.options as { label: string }[]).map((option) => option.label)
+  assert.deepEqual(options('state', 0), ['Open', 'Triage', 'Todo', 'In Progress', 'Done'])
+  assert.deepEqual(options('label', 0), ['Any label', 'Bug', 'Feature'])
+  assert.deepEqual(options('team', 1), ['Any team', 'Engineering (ENG)', 'Design (DES)', 'OPS (not found)'])
+  assert.ok(shown.find({ text: "Couldn't list the states and labels of OPS: No connected Linear team matched OPS." }))
   assert.deepEqual(shown.errors, [])
   assert.deepEqual(shown.warnings, [])
 })

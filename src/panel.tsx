@@ -319,9 +319,10 @@ const loading = atom(false)
 const shownSettings = atom<ShownSettings | null>(null)
 /** The sites of Orca's Jira connection, asked for the first time they are needed. */
 const jiraSites = atom<JiraSitesResult | 'loading' | null>(null)
-/** What the Linear query form offers for the workspace `workspaceId`, asked for when the filter
- *  editor opens on a Linear filter. */
-const linearChoices = atom<{ workspaceId: string; answer: ShownLinearChoices } | null>(null)
+/** What the Linear query form offers for the workspace `workspaceId`, by team key: under '' the
+ *  teams, asked for when the filter editor opens on a Linear filter, and under a team's key also its
+ *  states and labels, asked for then for each team its queries name, and when a form's team changes. */
+const linearChoices = atom<{ workspaceId: string; answers: Record<string, ShownLinearChoices> } | null>(null)
 /** The agents Orca can start on the active worktree's host, as last answered: asked on each load
  *  of the list and each time Project settings opens. null until the first answer. */
 const availableAgents = atom<AgentsResult | null>(null)
@@ -660,13 +661,14 @@ function chooseFilter(id: string): void {
 /** Opens the filter editor, in place of the panel view, on one of the shown project's filters, or
  *  on a new one: named "Filter 2", "Filter 3"… with one new query, or with the name and queries of
  *  `recipe`, the name made free. `loadError` is the failed load that opened it. On Linear it asks
- *  for what the Linear query form offers. */
+ *  for what the Linear query form offers: the teams, and the lists of each team its queries name. */
 function openFilter(id: string | null, loadError: string | null = null, recipe: FilterRecipe | null = null): void {
   const shown = read(shownSettings)
   const current = shown ? trackerFilters(shown) : null
   if (!shown || !current) return
   const filter = id === null ? null : current.filters.find((candidate) => candidate.id === id)
   if (id !== null && !filter) return
+  const queries = draftQueries(current.tracker, filter ? filter.queries : recipe ? recipe.queries : [])
   closeTemplate()
   set(newFilterChoice, null)
   set(filterDraft, {
@@ -677,13 +679,16 @@ function openFilter(id: string | null, loadError: string | null = null, recipe: 
     global: filter?.global ?? false,
     confirmingOwn: false,
     name: filter?.name ?? (recipe ? recipeFilterName(current.filters, recipe.name) : newFilterName(current.filters)),
-    queries: draftQueries(current.tracker, filter ? filter.queries : recipe ? recipe.queries : []),
+    queries,
     loadError,
     error: null,
     saving: false,
     confirmingDelete: false
   })
-  if (current.tracker === 'linear') void loadLinearChoices(linearWorkspace(shown))
+  if (current.tracker !== 'linear') return
+  const workspaceId = linearWorkspace(shown)
+  void loadLinearChoices(workspaceId)
+  for (const team of new Set(queries.map((query) => readLinearQuery(query).team))) if (team !== undefined) void loadLinearChoices(workspaceId, team)
 }
 
 /** `queries` as the filter editor's draft holds them on `tracker`: one new query when there are
@@ -1183,21 +1188,25 @@ async function loadJiraSites(): Promise<void> {
   }
 }
 
-/** Asks for what the Linear query form offers in the workspace `workspaceId`, unless it is being
- *  asked for or some teams are already listed for it: after a failure or with none listed, the
- *  person may have connected Linear since. An answer for another workspace than the last one asked
- *  for is dropped. */
-async function loadLinearChoices(workspaceId: string): Promise<void> {
+/** Asks for what the Linear query form offers in the workspace `workspaceId`, with the states and
+ *  labels of the team `team` unless it is '', unless that is being asked for. The teams aren't asked
+ *  for again once some are listed: after a failure or with none listed, the person may have
+ *  connected Linear since. A team's lists are asked for again each time, so a team chosen again
+ *  shows its lists as they are now. The answers for another workspace are dropped when one for this
+ *  one is asked for, and an answer for another workspace than the last one asked for is dropped. */
+async function loadLinearChoices(workspaceId: string, team = ''): Promise<void> {
   const current = read(linearChoices)
-  if (current?.workspaceId === workspaceId && (current.answer === 'loading' || (current.answer.kind === 'ready' && current.answer.teams.length > 0))) return
-  set(linearChoices, { workspaceId, answer: 'loading' })
+  const asked = current?.workspaceId === workspaceId ? current.answers[team] : undefined
+  if (asked === 'loading' || (team === '' && asked?.kind === 'ready' && asked.teams.length > 0)) return
+  set(linearChoices, { workspaceId, answers: { ...(current?.workspaceId === workspaceId ? current.answers : {}), [team]: 'loading' } })
   let answer: LinearChoicesResult
   try {
-    answer = await plugin.request('linear.choices', { workspaceId })
+    answer = await plugin.request('linear.choices', team === '' ? { workspaceId } : { workspaceId, team })
   } catch (error) {
     answer = { kind: 'error', message: `Kickoff's worker didn't answer (${errorCode(error)}).` }
   }
-  if (read(linearChoices)?.workspaceId === workspaceId) set(linearChoices, { workspaceId, answer })
+  const latest = read(linearChoices)
+  if (latest?.workspaceId === workspaceId) set(linearChoices, { workspaceId, answers: { ...latest.answers, [team]: answer } })
 }
 
 /** The workspace the shown project's Linear filters read: '' for the one Orca picks. */
@@ -2240,9 +2249,13 @@ const QUERY_WORDING: Record<TrackerId, { label: string; add: string; fresh: stri
  *  until it arrives. */
 type ShownLinearChoices = LinearChoicesResult | 'loading'
 
-/** Select values can't be empty, so this stands for "any team" and "anyone" in the Linear query
- *  form. It can't be a team key. */
+/** Select values can't be empty, so this stands for "any team", "anyone" and "any label" in the
+ *  Linear query form. It can't be a team key, and Kickoff takes it that no label is named so. */
 const LINEAR_ANY = ':any'
+
+/** The State option of Orca's own `open`, a Linear query's default state. `--state` ignores case,
+ *  so a team's state named "Open" in any case runs as this one, and isn't offered beside it. */
+const LINEAR_OPEN = { value: 'open', label: 'Open' }
 
 const LINEAR_ASSIGNEE_OPTIONS: { value: NonNullable<LinearQuery['assignee']> | typeof LINEAR_ANY; label: string }[] = [
   { value: 'me', label: 'Me' },
@@ -2255,28 +2268,68 @@ const LINEAR_ORDER_OPTIONS: { value: NonNullable<LinearQuery['orderBy']>; label:
   { value: 'createdAt', label: 'Recently created first' }
 ]
 
-/** The Team options: "Any team", then each team of the workspace, then the stored team when it isn't
- *  among them, marked not found once the teams are read. */
-function linearTeamOptions(answer: ShownLinearChoices, stored: string | undefined): { value: string; label: string }[] {
-  const teams = answer !== 'loading' && answer.kind === 'ready' ? answer.teams : null
-  const options = [{ value: LINEAR_ANY, label: 'Any team' }, ...(teams ?? []).map((team) => ({ value: team.key, label: `${team.name} (${team.key})` }))]
-  if (stored !== undefined && !options.some((option) => option.value === stored)) options.push({ value: stored, label: teams ? `${stored} (not found)` : stored })
-  return options
+type ChoiceOption = { value: string; label: string }
+
+/** `options`, then the stored value `stored` when it isn't among them, marked not found once the
+ *  list it is looked for in is `listed`. */
+function withStored(options: ChoiceOption[], stored: string | undefined, listed: boolean): ChoiceOption[] {
+  if (stored === undefined || options.some((option) => option.value === stored)) return options
+  return [...options, { value: stored, label: listed ? `${stored} (not found)` : stored }]
 }
 
-/** One Linear query as a form, whose values are chosen: Team, Assignee and Order. `index` names its
- *  fields' keys. A change stores the query again with the field changed, keeping the others. */
-function LinearQueryForm({ query, index, answer, onChange }: { query: string; index: number; answer: ShownLinearChoices; onChange: (query: string) => void }) {
+/** The answer `answer` when it is read, else null. */
+const readChoices = (answer: ShownLinearChoices | undefined) => (answer !== undefined && answer !== 'loading' && answer.kind === 'ready' ? answer : null)
+
+/** One Linear query as a form, whose values are chosen: Team, from the teams in `answers['']`, then
+ *  State and Label, from the team's lists in `answers[team]`, then Assignee and Order. Without a team,
+ *  State and Label can't be changed, except to put a stored one back to its default. `index` names
+ *  its fields' keys. A change stores the query again with the field changed, keeping the others;
+ *  choosing Any team puts State and Label back to their defaults, and choosing a team runs
+ *  `onTeamChosen` to read its lists again. */
+function LinearQueryForm({
+  query,
+  index,
+  answers,
+  onTeamChosen,
+  onChange
+}: {
+  query: string
+  index: number
+  answers: Record<string, ShownLinearChoices>
+  onTeamChosen: (team: string) => void
+  onChange: (query: string) => void
+}) {
   const fields = readLinearQuery(query)
   const change = (changes: Partial<LinearQuery>) => onChange(withLinearQueryChanges(query, changes))
+  const teams = readChoices(answers[''])?.teams ?? null
+  const lists = fields.team === undefined ? null : readChoices(answers[fields.team])
+  const listed = lists !== null
+  const states = (lists?.states ?? []).filter((state) => state.toLowerCase() !== LINEAR_OPEN.value)
+  const chooseTeam = (team: string) => {
+    if (team === LINEAR_ANY) {
+      change({ team: undefined, state: undefined, label: undefined })
+      return
+    }
+    change({ team })
+    onTeamChosen(team)
+  }
   return (
     <Stack gap="xs">
       <Select
         key={`linear-team-${index}`}
         label="Team"
         value={fields.team ?? LINEAR_ANY}
-        options={linearTeamOptions(answer, fields.team)}
-        onChange={(team) => change({ team: team === LINEAR_ANY ? undefined : team })}
+        options={withStored([{ value: LINEAR_ANY, label: 'Any team' }, ...(teams ?? []).map((team) => ({ value: team.key, label: `${team.name} (${team.key})` }))], fields.team, teams !== null)}
+        onChange={chooseTeam}
+      />
+      {fields.team !== undefined ? <LinearTeamListsNote team={fields.team} answer={answers[fields.team] ?? 'loading'} /> : null}
+      <Select
+        key={`linear-state-${index}`}
+        label="State"
+        value={fields.state ?? LINEAR_OPEN.value}
+        options={withStored([LINEAR_OPEN, ...states.map((state) => ({ value: state, label: state }))], fields.state, listed)}
+        disabled={fields.team === undefined && fields.state === undefined}
+        onChange={(state) => change({ state: state === LINEAR_OPEN.value ? undefined : state })}
       />
       <Select
         key={`linear-assignee-${index}`}
@@ -2286,6 +2339,14 @@ function LinearQueryForm({ query, index, answer, onChange }: { query: string; in
         onChange={(assignee) => change({ assignee: assignee === 'me' || assignee === 'null' ? assignee : undefined })}
       />
       <Select
+        key={`linear-label-${index}`}
+        label="Label"
+        value={fields.label ?? LINEAR_ANY}
+        options={withStored([{ value: LINEAR_ANY, label: 'Any label' }, ...(lists?.labels ?? []).map((label) => ({ value: label, label }))], fields.label, listed)}
+        disabled={fields.team === undefined && fields.label === undefined}
+        onChange={(label) => change({ label: label === LINEAR_ANY ? undefined : label })}
+      />
+      <Select
         key={`linear-order-${index}`}
         label="Order"
         value={fields.orderBy ?? 'updatedAt'}
@@ -2293,6 +2354,18 @@ function LinearQueryForm({ query, index, answer, onChange }: { query: string; in
         onChange={(orderBy) => change({ orderBy: orderBy === 'createdAt' ? 'createdAt' : undefined })}
       />
     </Stack>
+  )
+}
+
+/** What a Linear query form says about its team's states and labels, under its Team: that they are
+ *  loading, or couldn't be read. */
+function LinearTeamListsNote({ team, answer }: { team: string; answer: ShownLinearChoices }) {
+  if (answer === 'loading') return <Spinner label={`Loading the states and labels of ${team}`} />
+  if (answer.kind === 'ready') return null
+  return (
+    <Text size="sm" tone="danger">
+      {`Couldn't list the states and labels of ${team}: ${answer.message}`}
+    </Text>
   )
 }
 
@@ -2336,7 +2409,8 @@ function FilterQueries({
   // A filter stored with no query at all still shows one to fill in.
   const queries = stored.length > 0 ? stored : [wording.fresh]
   const choices = read(linearChoices)
-  const answer = choices?.workspaceId === linearWorkspaceId ? choices.answer : 'loading'
+  const answers = choices?.workspaceId === linearWorkspaceId ? choices.answers : {}
+  const loadTeamLists = (team: string) => void loadLinearChoices(linearWorkspaceId, team)
   return (
     <Stack gap="sm">
       {wording.hint !== null ? (
@@ -2344,7 +2418,7 @@ function FilterQueries({
           {wording.hint}
         </Text>
       ) : null}
-      {tracker === 'linear' ? <LinearChoicesNote answer={answer} /> : null}
+      {tracker === 'linear' ? <LinearChoicesNote answer={answers[''] ?? 'loading'} /> : null}
       {queries.map((query, index) => {
         const label = index === 0 ? wording.label : `${wording.label} ${index + 1}`
         const changeQuery = (value: string) => change(queries.map((other, at) => (at === index ? value : other)))
@@ -2354,7 +2428,7 @@ function FilterQueries({
             <Box direction="row" align="center" gap="xs">
               <Box grow minWidth={0}>
                 {tracker === 'linear' ? (
-                  <LinearQueryForm query={query} index={index} answer={answer} onChange={changeQuery} />
+                  <LinearQueryForm query={query} index={index} answers={answers} onTeamChosen={loadTeamLists} onChange={changeQuery} />
                 ) : (
                   <Textarea
                     label={label}
