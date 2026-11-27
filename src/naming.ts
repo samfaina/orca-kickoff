@@ -60,7 +60,8 @@ export function titleExclusion(settings: Pick<ProjectSettings, 'titleExclusion'>
 
 /** `<prefix>-<up to four words of the title, cleaned by the title exclusion pattern>`, that of
  *  `settings`, the branch settings the project uses:
- *  `issue-42-add-dark-mode` on GitHub, `web-12-anadir-modo-oscuro-a` on Jira. */
+ *  `issue-42-add-dark-mode` on GitHub, `web-12-anadir-modo-oscuro-a` on Jira,
+ *  `eng-12-add-dark-mode-to` on Linear (the identifier `ENG-12`, "Add dark mode to settings"). */
 export function worktreeName(task: Pick<Task, 'tracker' | 'key' | 'title'>, settings: Pick<ProjectSettings, 'titleExclusion'>): string {
   const prefix = task.tracker === 'github' ? `issue-${githubIssueNumber(task.key)}` : task.key.toLowerCase()
   const slug = taskSlug(task.title, titleExclusion(settings))
@@ -84,7 +85,7 @@ export const BRANCH_VARIABLE_DESCRIPTIONS: Record<BranchVariable, string> = {
 
 /** The task's branch type: the text of the first row whose issue type is the task's, trimmed and
  *  ignoring case, else the fallback, trimmed. A row with a blank issue type or branch type counts
- *  as none. GitHub tasks have no issue type, so they get the fallback. */
+ *  as none. GitHub and Linear tasks have no issue type, so they get the fallback. */
 export function branchType(settings: Pick<ProjectSettings, 'branchTypes' | 'branchTypeFallback'>, issueType: string | undefined): string {
   const wanted = issueType?.trim().toLowerCase() ?? ''
   for (const row of settings.branchTypes ?? []) {
@@ -178,11 +179,13 @@ export function githubIssueNumber(key: string): string {
 }
 
 const GITHUB_NAME = /^issue-(\d+)(?:-|$)/
-/** Orca's Jira key pattern (`/^[A-Za-z][A-Za-z0-9_]*-\d+$/`), at the start of a name. */
+/** Orca's Jira key pattern (`/^[A-Za-z][A-Za-z0-9_]*-\d+$/`), at the start of a name. It reads
+ *  Linear identifiers (`ENG-12`) as well as Jira keys. */
 const JIRA_NAME = /^([a-z][a-z0-9_]*-\d+)(?:-|$)/i
 
-/** The task key a worktree name starts with, or null. It follows the project's tracker, because
- *  `issue-42-...` also matches the Jira pattern. */
+/** The task key a worktree name starts with, upper-cased on Jira and Linear, or null. It follows
+ *  the project's tracker, because `issue-42-...` also matches the pattern of Jira keys and Linear
+ *  identifiers. */
 export function taskKeyFromWorktreeName(name: string, tracker: TrackerId): string | null {
   if (tracker === 'github') {
     const match = GITHUB_NAME.exec(name)
