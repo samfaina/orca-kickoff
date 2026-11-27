@@ -76,7 +76,8 @@ export const linearOrca: Provider<Config> = {
 
 /** `error` as the failure of the list: no Linear connection says how to connect; any other failure,
  *  such as an unknown workspace, is Orca's own message. Linear rejects none of a query's values (an
- *  unknown team, state or label lists nothing), so no failure is the filter's. */
+ *  unknown team, state or label lists nothing), so no failure of Orca's is the filter's: only one
+ *  with no Linear query to run is (see `list`). */
 function linearFailure(error: unknown): unknown {
   return error instanceof CliError && error.code === 'linear_not_connected' ? new CliError(LINEAR_NOT_CONNECTED, false, error.code) : error
 }

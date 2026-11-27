@@ -5019,6 +5019,19 @@ test("a Linear query's choices are saved as its fields, the defaults left out an
   assert.deepEqual(storedLinearQueries(host)[0], {})
 })
 
+test('a blank Linear query, which never runs, opens as a query of every default, which does, so Save stores what the form shows', async () => {
+  const blank = { id: 'f-blank', name: 'Blank', queries: ['', linearQuery({ team: 'ENG' }), '  '] }
+  const { view, host } = await showLinearFilters(linearStored({ filters: { linear: [blank] } }))
+  await view.press(editFilter)
+  assert.deepEqual(linearForms(view), [
+    ['Linear query', ':any', ':any', 'updatedAt'],
+    ['Linear query 2', 'ENG', ':any', 'updatedAt'],
+    ['Linear query 3', ':any', ':any', 'updatedAt']
+  ])
+  await view.press(saveButton)
+  assert.deepEqual(storedLinearQueries(host), [{}, { team: 'ENG' }, {}])
+})
+
 test('the Linear query form asks for the teams of the workspace the project reads, and says while they load', async () => {
   const answer = held()
   const asked: { workspaceId: string }[] = []

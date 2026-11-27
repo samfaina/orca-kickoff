@@ -34,7 +34,7 @@ export function withLinearQueryChanges(stored: string, changes: Partial<LinearQu
   return JSON.stringify({ ...readLinearQuery(stored), ...changes } satisfies LinearQuery)
 }
 
-const TEXT_FIELDS =['team', 'state', 'label', 'project'] as const
+const TEXT_FIELDS = ['team', 'state', 'label', 'project'] as const
 
 /** The Linear query a stored string holds. A string that isn't a JSON object reads as an empty
  *  query (every default); unknown keys are dropped, and a field of the wrong type or value, or a

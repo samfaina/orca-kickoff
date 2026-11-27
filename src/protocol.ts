@@ -415,7 +415,8 @@ export function providerConfig<K extends ProviderId>(settings: Pick<ProjectSetti
   return configs[id]
 }
 
-/** One query of a filter to run (JQL on Jira, a GitHub search on GitHub): trimmed, each line break
+/** One query of a filter to run (JQL on Jira, a GitHub search on GitHub, a Linear query's JSON on
+ *  Linear): trimmed, each line break
  *  a space, and its position from 1 among the filter's queries as the filter editor shows them,
  *  blank ones included. */
 export type FilterQuery = { text: string; position: number }

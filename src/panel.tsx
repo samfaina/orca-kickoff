@@ -321,7 +321,7 @@ const shownSettings = atom<ShownSettings | null>(null)
 const jiraSites = atom<JiraSitesResult | 'loading' | null>(null)
 /** What the Linear query form offers for the workspace `workspaceId`, asked for when the filter
  *  editor opens on a Linear filter. */
-const linearChoices = atom<{ workspaceId: string; answer: LinearChoicesResult | 'loading' } | null>(null)
+const linearChoices = atom<{ workspaceId: string; answer: ShownLinearChoices } | null>(null)
 /** The agents Orca can start on the active worktree's host, as last answered: asked on each load
  *  of the list and each time Project settings opens. null until the first answer. */
 const availableAgents = atom<AgentsResult | null>(null)
@@ -677,13 +677,22 @@ function openFilter(id: string | null, loadError: string | null = null, recipe: 
     global: filter?.global ?? false,
     confirmingOwn: false,
     name: filter?.name ?? (recipe ? recipeFilterName(current.filters, recipe.name) : newFilterName(current.filters)),
-    queries: filter ? [...filter.queries] : recipe ? [...recipe.queries] : [QUERY_WORDING[current.tracker].fresh],
+    queries: draftQueries(current.tracker, filter ? filter.queries : recipe ? recipe.queries : []),
     loadError,
     error: null,
     saving: false,
     confirmingDelete: false
   })
   if (current.tracker === 'linear') void loadLinearChoices(linearWorkspace(shown))
+}
+
+/** `queries` as the filter editor's draft holds them on `tracker`: one new query when there are
+ *  none, and, where each query is a form, a new query in place of each blank one, since the form
+ *  shows a blank one as every default, which runs, while a blank query never does. */
+function draftQueries(tracker: TrackerId, queries: readonly string[]): string[] {
+  const wording = QUERY_WORDING[tracker]
+  if (queries.length === 0) return [wording.fresh]
+  return queries.map((query) => (wording.form && query.trim() === '' ? wording.fresh : query))
 }
 
 /** + in the filter row: on Jira, the choice of a blank filter or a JQL recipe, in place of the panel
@@ -2197,19 +2206,24 @@ function JiraOrcaSettings({ providers }: { providers: ProviderConfigs }) {
   )
 }
 
+/** Where Ctrl+Enter saves a filter whose queries are text: in any of them. */
+const SUBMIT_FROM_QUERY = 'Ctrl+Enter (Cmd+Enter on macOS) saves the filter and lists its tasks.'
+
 /** How the filter editor names a tracker's queries: "JQL" on Jira, "Query" on GitHub, "Linear
  *  query" on Linear, with the button that adds one, what it adds (`fresh`), the placeholder of the
- *  first, what the queries are, when it needs saying, and where Ctrl+Enter saves. On Linear, whose
- *  queries are forms with no text to type, it saves from the name, where Enter does too. */
-const QUERY_WORDING: Record<TrackerId, { label: string; add: string; fresh: string; placeholder: string; hint: string | null; submit: string }> = {
-  jira: { label: 'JQL', add: 'Add JQL', fresh: '', placeholder: DEFAULT_JQL, hint: null, submit: 'Ctrl+Enter (Cmd+Enter on macOS) saves the filter and lists its tasks.' },
+ *  first, what the queries are, when it needs saying, and where Ctrl+Enter saves. `form`: each
+ *  query is a form of choices rather than text, as on Linear, so there is no text to save from with
+ *  Ctrl+Enter, and the name saves instead, where Enter does too. */
+const QUERY_WORDING: Record<TrackerId, { label: string; add: string; fresh: string; placeholder: string; hint: string | null; submit: string; form: boolean }> = {
+  jira: { label: 'JQL', add: 'Add JQL', fresh: '', placeholder: DEFAULT_JQL, hint: null, submit: SUBMIT_FROM_QUERY, form: false },
   github: {
     label: 'Query',
     add: 'Add query',
     fresh: '',
     placeholder: DEFAULT_GITHUB_QUERY,
     hint: 'Each query is a GitHub issue search, such as is:open label:bug or assignee:@me. Kickoff lists open issues only.',
-    submit: 'Ctrl+Enter (Cmd+Enter on macOS) saves the filter and lists its tasks.'
+    submit: SUBMIT_FROM_QUERY,
+    form: false
   },
   linear: {
     label: 'Linear query',
@@ -2217,18 +2231,23 @@ const QUERY_WORDING: Record<TrackerId, { label: string; add: string; fresh: stri
     fresh: NEW_LINEAR_QUERY,
     placeholder: '',
     hint: 'Each Linear query lists open issues unless a state is chosen.',
-    submit: 'Ctrl+Enter (Cmd+Enter on macOS), or Enter, in the name saves the filter and lists its tasks.'
+    submit: 'Ctrl+Enter (Cmd+Enter on macOS), or Enter, in the name saves the filter and lists its tasks.',
+    form: true
   }
 }
 
+/** What the Linear query form shows of its choices: the answer for its workspace, or 'loading'
+ *  until it arrives. */
+type ShownLinearChoices = LinearChoicesResult | 'loading'
+
 /** Select values can't be empty, so this stands for "any team" and "anyone" in the Linear query
  *  form. It can't be a team key. */
-const ANY = ':any'
+const LINEAR_ANY = ':any'
 
-const LINEAR_ASSIGNEE_OPTIONS: { value: NonNullable<LinearQuery['assignee']> | typeof ANY; label: string }[] = [
+const LINEAR_ASSIGNEE_OPTIONS: { value: NonNullable<LinearQuery['assignee']> | typeof LINEAR_ANY; label: string }[] = [
   { value: 'me', label: 'Me' },
   { value: 'null', label: 'Unassigned' },
-  { value: ANY, label: 'Anyone' }
+  { value: LINEAR_ANY, label: 'Anyone' }
 ]
 
 const LINEAR_ORDER_OPTIONS: { value: NonNullable<LinearQuery['orderBy']>; label: string }[] = [
@@ -2238,16 +2257,16 @@ const LINEAR_ORDER_OPTIONS: { value: NonNullable<LinearQuery['orderBy']>; label:
 
 /** The Team options: "Any team", then each team of the workspace, then the stored team when it isn't
  *  among them, marked not found once the teams are read. */
-function linearTeamOptions(answer: LinearChoicesResult | 'loading', stored: string | undefined): { value: string; label: string }[] {
+function linearTeamOptions(answer: ShownLinearChoices, stored: string | undefined): { value: string; label: string }[] {
   const teams = answer !== 'loading' && answer.kind === 'ready' ? answer.teams : null
-  const options = [{ value: ANY, label: 'Any team' }, ...(teams ?? []).map((team) => ({ value: team.key, label: `${team.name} (${team.key})` }))]
+  const options = [{ value: LINEAR_ANY, label: 'Any team' }, ...(teams ?? []).map((team) => ({ value: team.key, label: `${team.name} (${team.key})` }))]
   if (stored !== undefined && !options.some((option) => option.value === stored)) options.push({ value: stored, label: teams ? `${stored} (not found)` : stored })
   return options
 }
 
 /** One Linear query as a form, whose values are chosen: Team, Assignee and Order. `index` names its
  *  fields' keys. A change stores the query again with the field changed, keeping the others. */
-function LinearQueryForm({ query, index, answer, onChange }: { query: string; index: number; answer: LinearChoicesResult | 'loading'; onChange: (query: string) => void }) {
+function LinearQueryForm({ query, index, answer, onChange }: { query: string; index: number; answer: ShownLinearChoices; onChange: (query: string) => void }) {
   const fields = readLinearQuery(query)
   const change = (changes: Partial<LinearQuery>) => onChange(withLinearQueryChanges(query, changes))
   return (
@@ -2255,14 +2274,14 @@ function LinearQueryForm({ query, index, answer, onChange }: { query: string; in
       <Select
         key={`linear-team-${index}`}
         label="Team"
-        value={fields.team ?? ANY}
+        value={fields.team ?? LINEAR_ANY}
         options={linearTeamOptions(answer, fields.team)}
-        onChange={(team) => change({ team: team === ANY ? undefined : team })}
+        onChange={(team) => change({ team: team === LINEAR_ANY ? undefined : team })}
       />
       <Select
         key={`linear-assignee-${index}`}
         label="Assignee"
-        value={fields.assignee ?? ANY}
+        value={fields.assignee ?? LINEAR_ANY}
         options={LINEAR_ASSIGNEE_OPTIONS}
         onChange={(assignee) => change({ assignee: assignee === 'me' || assignee === 'null' ? assignee : undefined })}
       />
@@ -2279,7 +2298,7 @@ function LinearQueryForm({ query, index, answer, onChange }: { query: string; in
 
 /** What the Linear query form says about its lists, above the forms: that the teams are loading,
  *  couldn't be read, or that there are none, which can mean Linear isn't connected. */
-function LinearChoicesNote({ answer }: { answer: LinearChoicesResult | 'loading' }) {
+function LinearChoicesNote({ answer }: { answer: ShownLinearChoices }) {
   if (answer === 'loading') return <Spinner label="Loading the Linear teams" />
   if (answer.kind === 'error') {
     return (
@@ -3126,8 +3145,8 @@ function FilterEditor({
             value={draft.name}
             invalid={nameProblem !== null}
             onChange={(name) => changeFilterDraft(draft, { name })}
-            // A Linear query has no text field to save from with Ctrl+Enter, so the name saves.
-            onSubmit={draft.tracker === 'linear' ? save : undefined}
+            // Queries that are forms have no text to save from with Ctrl+Enter, so the name saves.
+            onSubmit={QUERY_WORDING[draft.tracker].form ? save : undefined}
           />
           {nameProblem !== null ? (
             <Text size="sm" tone="danger">
