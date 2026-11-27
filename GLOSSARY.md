@@ -57,7 +57,7 @@ A ready-made filter on GitHub, **Open** or **Assigned to me**, that writes a new
 _Avoid_: Preset, template (that is a prompt template)
 
 **Tracker search**:
-Asking the tracker for the tasks of the filter shown that match the user's words, including tasks not loaded yet. It only narrows that filter: it never finds tasks outside it.
+Asking the tracker for the tasks of the filter shown that match the user's words, including tasks not loaded yet. It only narrows that filter, on GitHub, Jira and Linear alike: it never finds tasks outside it. On Linear it matches the whole text as one phrase of the title or the description, not word by word and not the task key.
 _Avoid_: Search (alone), remote search, query
 
 **Prompt template**:

@@ -209,6 +209,53 @@ test('the results replace the list, without the text filter, under "Results in G
   assert.deepEqual(view.warnings, [])
 })
 
+const LINEAR_SEARCH_HINT = 'Linear matches the words as one phrase of the title or description, not the task key.'
+
+test('on Linear, the hint also says the words match as one phrase of the title or description, not the task key, and Load more reads the search on', async () => {
+  const linearTask = (key: string) => task(key, { tracker: 'linear', url: `https://linear.app/acme/issue/${key}/task` })
+  const { view, inputs } = await showSearching(ready([linearTask('ENG-1'), linearTask('ENG-2')], { provider: 'linear-orca' }), (_query, { cursor }) =>
+    cursor ? ready([linearTask('ENG-10')], { provider: 'linear-orca' }) : ready([linearTask('ENG-9')], { provider: 'linear-orca', nextCursor: '0:found-2' })
+  )
+  assert.equal(view.find({ type: 'Text', text: LINEAR_SEARCH_HINT }), null)
+  await view.type(searchField, 'dark settings')
+  assert.ok(view.find({ type: 'Text', text: 'Filtering 2 loaded tasks · Enter searches Linear' }))
+  assert.equal(view.find({ type: 'Text', text: LINEAR_SEARCH_HINT })?.props.muted, true)
+  // The text filter on the loaded tasks still matches the task key.
+  await view.type(searchField, ' eng-2 ', { replace: true })
+  assert.deepEqual(keysShown(view, ['ENG-1', 'ENG-2']), ['ENG-2'])
+
+  await view.type(searchField, ' dark mode ', { replace: true })
+  await view.press(searchIn('Linear'))
+  assert.ok(view.find({ type: 'Text', text: 'Results in Linear for "dark mode"' }))
+  assert.ok(view.find({ type: 'Text', text: LINEAR_SEARCH_HINT }))
+  await view.press({ type: 'Button', text: 'Showing 1 · Load more' })
+  assert.deepEqual(keysShown(view, ['ENG-1', 'ENG-2', 'ENG-9', 'ENG-10']), ['ENG-9', 'ENG-10'])
+  assert.deepEqual(
+    inputs.slice(1).map(({ cursor, query }) => ({ cursor, query })),
+    [
+      { cursor: undefined, query: 'dark mode' },
+      { cursor: '0:found-2', query: 'dark mode' }
+    ]
+  )
+
+  await view.type(searchField, '  ', { replace: true })
+  assert.equal(view.find({ type: 'Text', text: LINEAR_SEARCH_HINT }), null)
+  assert.deepEqual(view.warnings, [])
+  await view.unmount()
+
+  const others: [TaskList, string][] = [
+    [ready([task('#1')]), 'GitHub'],
+    [ready([task('WEB-1', { tracker: 'jira' })], { provider: 'jira-orca' }), 'Jira']
+  ]
+  for (const [list, tracker] of others) {
+    const other = await show(list)
+    await other.type(searchField, 'dark')
+    assert.ok(other.find(searchIn(tracker)))
+    assert.equal(other.find({ type: 'Text', text: LINEAR_SEARCH_HINT }), null)
+    await other.unmount()
+  }
+})
+
 test('a tracker search without results says that no task in the tracker matches', async () => {
   const github = await showSearching(ready([task('#1')]), () => ready([]))
   await github.view.type(searchField, 'nothing')

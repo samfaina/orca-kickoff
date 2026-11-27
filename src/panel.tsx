@@ -2445,7 +2445,12 @@ type ReadyTaskList = Extract<TaskList, { kind: 'ready' }>
 const TRACKER_NAMES: Record<TrackerId, string> = { github: 'GitHub', jira: 'Jira', linear: 'Linear' }
 const trackerName = (tracker: TrackerId) => TRACKER_NAMES[tracker]
 
-/** The warnings, "Filters" with the filter row and the field, and the tracker search's title, which
+/** How a tracker search on Linear matches: Kickoff passes the text whole as `--query`, and Linear
+ *  matches it as one substring of the title or the description, never the identifier. */
+const LINEAR_SEARCH_HINT = 'Linear matches the words as one phrase of the title or description, not the task key.'
+
+/** The warnings, "Filters" with the filter row, the field and its hints (on Linear also how a
+ *  tracker search matches), and the tracker search's title, which
  *  stay in place, then the list, which scrolls inside the rest of the panel's height: the loaded
  *  tasks that match the text filter, or the tracker search's results, then "Load more" and the
  *  truncation notice. */
@@ -2453,7 +2458,8 @@ function ReadyList({ list }: { list: ReadyTaskList }) {
   const text = read(fieldText)
   const query = text.trim()
   const found = read(trackerSearch)
-  const tracker = trackerName(trackerOf(list.provider))
+  const trackerId = trackerOf(list.provider)
+  const tracker = trackerName(trackerId)
   return (
     <>
       {list.warning ? (
@@ -2492,6 +2498,11 @@ function ReadyList({ list }: { list: ReadyTaskList }) {
                 </Button>
               </Box>
             </Box>
+          ) : null}
+          {query !== '' && trackerId === 'linear' ? (
+            <Text size="sm" muted>
+              {LINEAR_SEARCH_HINT}
+            </Text>
           ) : null}
         </Stack>
       </FiltersSection>

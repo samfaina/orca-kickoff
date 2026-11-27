@@ -716,6 +716,31 @@ test('a tracker search on Linear adds the trimmed words, whole, as --query to ea
   ])
 })
 
+test('a tracker search on Linear runs every Linear query of the filter shown, each with its own fields and --query, and pages on from a later query', async () => {
+  const filter = { id: 'f-two', name: 'Two', queries: ['{"assignee":"me"}', '{"team":"ENG","label":"Bug"}'] }
+  const answer = (args: string[]) => (args.includes('--team') ? linearPage([linearIssue('ENG-3')], args.includes('--cursor') ? null : 'cursor-9') : linearPage([linearIssue('ENG-1')]))
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca linear list-issues': answer }, { storage: linearSettings({ filters: { linear: [filter] } }) })
+  const found = await worker.request('tasks.load', { filterId: 'f-two', query: 'dark mode' })
+  assert.ok(found.kind === 'ready')
+  assert.deepEqual([found.filterId, found.queryCount, found.tasks.map((task) => task.key), found.nextCursor], ['f-two', 2, ['ENG-1', 'ENG-3'], '1:cursor-9'])
+  const more = await worker.request('tasks.load', { filterId: 'f-two', query: 'dark mode', cursor: '1:cursor-9' })
+  assert.ok(more.kind === 'ready')
+  assert.deepEqual([more.tasks.map((task) => task.key), more.nextCursor], [['ENG-3'], null])
+  assert.deepEqual(linearCalls(calls), [
+    ['linear', 'list-issues', '--state', 'open', '--assignee', 'me', '--order-by', 'updatedAt', '--limit', '50', '--query', 'dark mode', '--json'],
+    ['linear', 'list-issues', '--team', 'ENG', '--state', 'open', '--label', 'Bug', '--order-by', 'updatedAt', '--limit', '49', '--query', 'dark mode', '--json'],
+    ['linear', 'list-issues', '--team', 'ENG', '--state', 'open', '--label', 'Bug', '--order-by', 'updatedAt', '--limit', '50', '--cursor', 'cursor-9', '--query', 'dark mode', '--json']
+  ])
+})
+
+test('a blank tracker search on Linear lists the filter as usual, without --query', async () => {
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca linear list-issues': linearPage([linearIssue('ENG-1')]) }, { storage: linearSettings() })
+  const list = await worker.request('tasks.load', { query: '   ' })
+  assert.ok(list.kind === 'ready')
+  assert.deepEqual(list.tasks.map((task) => task.key), ['ENG-1'])
+  assert.deepEqual(linearCalls(calls), [['linear', 'list-issues', '--state', 'open', '--assignee', 'me', '--order-by', 'updatedAt', '--limit', '50', '--json']])
+})
+
 test("a Linear filter whose queries are all blank fails without running Orca and names no filter, since the panel can't edit Linear filters yet", async () => {
   const filter = { id: 'f-blank', name: 'Blank', queries: ['', ' '] }
   const { worker, calls } = await start({ ...ORCA_OK }, { storage: linearSettings({ filters: { linear: [filter] } }) })
