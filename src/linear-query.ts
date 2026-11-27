@@ -23,7 +23,18 @@ export type LinearQuery = {
  *  the user. */
 export const INITIAL_LINEAR_QUERY = JSON.stringify({ assignee: 'me' } satisfies LinearQuery)
 
-const TEXT_FIELDS = ['team', 'state', 'label', 'project'] as const
+/** A Linear query with every field at its default, as the filter editor adds one: unlike a blank
+ *  query, it runs. */
+export const NEW_LINEAR_QUERY = JSON.stringify({} satisfies LinearQuery)
+
+/** The stored Linear query `stored` with `changes`, as it is stored again: a field changed to
+ *  undefined goes back to its default, and the fields not changed stay as `readLinearQuery` reads
+ *  them. */
+export function withLinearQueryChanges(stored: string, changes: Partial<LinearQuery>): string {
+  return JSON.stringify({ ...readLinearQuery(stored), ...changes } satisfies LinearQuery)
+}
+
+const TEXT_FIELDS =['team', 'state', 'label', 'project'] as const
 
 /** The Linear query a stored string holds. A string that isn't a JSON object reads as an empty
  *  query (every default); unknown keys are dropped, and a field of the wrong type or value, or a

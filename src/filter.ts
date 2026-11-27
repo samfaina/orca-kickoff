@@ -16,6 +16,7 @@ import {
   type ProjectChanges,
   type TrackerId
 } from './protocol'
+import { INITIAL_LINEAR_QUERY, NEW_LINEAR_QUERY } from './linear-query'
 import { JIRA_PROJECT_VARIABLE } from './template'
 
 /** What a write of filters changes in a project's settings: every tracker's filters and the one
@@ -147,11 +148,15 @@ const RECIPES: Record<TrackerId, readonly FilterRecipe[]> = {
     { name: 'Assigned to me', queries: ['is:open assignee:@me'] }
   ],
   jira: [],
-  linear: []
+  // Team open leaves the team for the person to choose: Any team until they do.
+  linear: [
+    { name: 'Assigned to me', queries: [INITIAL_LINEAR_QUERY] },
+    { name: 'Team open', queries: [NEW_LINEAR_QUERY] }
+  ]
 }
 
-/** The recipes the filter editor offers a new filter on `tracker`: GitHub's. Jira's JQL recipes come
- *  before the editor, with + (`src/jql-recipe.ts`). The panel doesn't edit Linear filters yet. */
+/** The recipes the filter editor offers a new filter on `tracker`: GitHub's and Linear's. Jira's JQL
+ *  recipes come before the editor, with + (`src/jql-recipe.ts`). */
 export function filterRecipes(tracker: TrackerId): FilterRecipe[] {
   return RECIPES[tracker].map((recipe) => ({ name: recipe.name, queries: [...recipe.queries] }))
 }

@@ -53,6 +53,7 @@ import {
 import { projectBranchSettings, sameBranchSettings, usesGlobalBranchSettings, withBranchSwitched } from './branch-settings'
 import { isRecord } from './json'
 import { jqlRecipe, type JqlRecipeAnswers, type RecipeAssignees } from './jql-recipe'
+import { NEW_LINEAR_QUERY, readLinearQuery, withLinearQueryChanges, type LinearQuery } from './linear-query'
 import {
   BRANCH_VARIABLE_DESCRIPTIONS,
   BRANCH_VARIABLES,
@@ -87,6 +88,7 @@ import {
   type ListedFilter,
   type JiraProviderId,
   type JiraSitesResult,
+  type LinearChoicesResult,
   type ActionResult,
   type AgentChoice,
   type AgentsResult,
@@ -317,6 +319,9 @@ const loading = atom(false)
 const shownSettings = atom<ShownSettings | null>(null)
 /** The sites of Orca's Jira connection, asked for the first time they are needed. */
 const jiraSites = atom<JiraSitesResult | 'loading' | null>(null)
+/** What the Linear query form offers for the workspace `workspaceId`, asked for when the filter
+ *  editor opens on a Linear filter. */
+const linearChoices = atom<{ workspaceId: string; answer: LinearChoicesResult | 'loading' } | null>(null)
 /** The agents Orca can start on the active worktree's host, as last answered: asked on each load
  *  of the list and each time Project settings opens. null until the first answer. */
 const availableAgents = atom<AgentsResult | null>(null)
@@ -653,8 +658,9 @@ function chooseFilter(id: string): void {
 }
 
 /** Opens the filter editor, in place of the panel view, on one of the shown project's filters, or
- *  on a new one: named "Filter 2", "Filter 3"… with one blank query, or with the name and queries of
- *  `recipe`, the name made free. `loadError` is the failed load that opened it. */
+ *  on a new one: named "Filter 2", "Filter 3"… with one new query, or with the name and queries of
+ *  `recipe`, the name made free. `loadError` is the failed load that opened it. On Linear it asks
+ *  for what the Linear query form offers. */
 function openFilter(id: string | null, loadError: string | null = null, recipe: FilterRecipe | null = null): void {
   const shown = read(shownSettings)
   const current = shown ? trackerFilters(shown) : null
@@ -671,17 +677,18 @@ function openFilter(id: string | null, loadError: string | null = null, recipe: 
     global: filter?.global ?? false,
     confirmingOwn: false,
     name: filter?.name ?? (recipe ? recipeFilterName(current.filters, recipe.name) : newFilterName(current.filters)),
-    queries: filter ? [...filter.queries] : recipe ? [...recipe.queries] : [''],
+    queries: filter ? [...filter.queries] : recipe ? [...recipe.queries] : [QUERY_WORDING[current.tracker].fresh],
     loadError,
     error: null,
     saving: false,
     confirmingDelete: false
   })
+  if (current.tracker === 'linear') void loadLinearChoices(linearWorkspace(shown))
 }
 
 /** + in the filter row: on Jira, the choice of a blank filter or a JQL recipe, in place of the panel
  *  view, with fresh answers, Board order's Jira project key starting as the project's own;
- *  on GitHub, the filter editor on a new filter, whose recipes are in it. */
+ *  on GitHub and Linear, the filter editor on a new filter, whose recipes are in it. */
 function newFilter(): void {
   const shown = read(shownSettings)
   const current = shown ? trackerFilters(shown) : null
@@ -1166,6 +1173,26 @@ async function loadJiraSites(): Promise<void> {
     set(jiraSites, { kind: 'error', message: `Kickoff's worker didn't answer (${errorCode(error)}).` })
   }
 }
+
+/** Asks for what the Linear query form offers in the workspace `workspaceId`, unless it is being
+ *  asked for or some teams are already listed for it: after a failure or with none listed, the
+ *  person may have connected Linear since. An answer for another workspace than the last one asked
+ *  for is dropped. */
+async function loadLinearChoices(workspaceId: string): Promise<void> {
+  const current = read(linearChoices)
+  if (current?.workspaceId === workspaceId && (current.answer === 'loading' || (current.answer.kind === 'ready' && current.answer.teams.length > 0))) return
+  set(linearChoices, { workspaceId, answer: 'loading' })
+  let answer: LinearChoicesResult
+  try {
+    answer = await plugin.request('linear.choices', { workspaceId })
+  } catch (error) {
+    answer = { kind: 'error', message: `Kickoff's worker didn't answer (${errorCode(error)}).` }
+  }
+  if (read(linearChoices)?.workspaceId === workspaceId) set(linearChoices, { workspaceId, answer })
+}
+
+/** The workspace the shown project's Linear filters read: '' for the one Orca picks. */
+const linearWorkspace = (shown: ShownSettings): string => providerConfig({ providers: shown.providers }, 'linear-orca').workspaceId
 
 /** Asks for the agents Orca can start, and keeps the last answer shown until the new one arrives.
  *  A worker that doesn't answer counts as agents that can't be read. */
@@ -1760,6 +1787,7 @@ export default function Panel() {
         draft={filterEdit}
         filters={listedFilters(shown, filterEdit.tracker)}
         jiraProjectKey={shown.jiraProjectKey}
+        linearWorkspaceId={linearWorkspace(shown)}
         projectName={project?.name ?? ''}
       />
     )
@@ -2170,36 +2198,126 @@ function JiraOrcaSettings({ providers }: { providers: ProviderConfigs }) {
 }
 
 /** How the filter editor names a tracker's queries: "JQL" on Jira, "Query" on GitHub, "Linear
- *  query" on Linear, with the button that adds one, the placeholder of the first and what the
- *  queries are, when it needs saying. The panel doesn't edit Linear filters yet. */
-const QUERY_WORDING: Record<TrackerId, { label: string; add: string; placeholder: string; hint: string | null }> = {
-  jira: { label: 'JQL', add: 'Add JQL', placeholder: DEFAULT_JQL, hint: null },
+ *  query" on Linear, with the button that adds one, what it adds (`fresh`), the placeholder of the
+ *  first, what the queries are, when it needs saying, and where Ctrl+Enter saves. On Linear, whose
+ *  queries are forms with no text to type, it saves from the name, where Enter does too. */
+const QUERY_WORDING: Record<TrackerId, { label: string; add: string; fresh: string; placeholder: string; hint: string | null; submit: string }> = {
+  jira: { label: 'JQL', add: 'Add JQL', fresh: '', placeholder: DEFAULT_JQL, hint: null, submit: 'Ctrl+Enter (Cmd+Enter on macOS) saves the filter and lists its tasks.' },
   github: {
     label: 'Query',
     add: 'Add query',
+    fresh: '',
     placeholder: DEFAULT_GITHUB_QUERY,
-    hint: 'Each query is a GitHub issue search, such as is:open label:bug or assignee:@me. Kickoff lists open issues only.'
+    hint: 'Each query is a GitHub issue search, such as is:open label:bug or assignee:@me. Kickoff lists open issues only.',
+    submit: 'Ctrl+Enter (Cmd+Enter on macOS) saves the filter and lists its tasks.'
   },
-  linear: { label: 'Linear query', add: 'Add query', placeholder: '', hint: 'Each Linear query lists open issues unless a state is chosen.' }
+  linear: {
+    label: 'Linear query',
+    add: 'Add query',
+    fresh: NEW_LINEAR_QUERY,
+    placeholder: '',
+    hint: 'Each Linear query lists open issues unless a state is chosen.',
+    submit: 'Ctrl+Enter (Cmd+Enter on macOS), or Enter, in the name saves the filter and lists its tasks.'
+  }
+}
+
+/** Select values can't be empty, so this stands for "any team" and "anyone" in the Linear query
+ *  form. It can't be a team key. */
+const ANY = ':any'
+
+const LINEAR_ASSIGNEE_OPTIONS: { value: NonNullable<LinearQuery['assignee']> | typeof ANY; label: string }[] = [
+  { value: 'me', label: 'Me' },
+  { value: 'null', label: 'Unassigned' },
+  { value: ANY, label: 'Anyone' }
+]
+
+const LINEAR_ORDER_OPTIONS: { value: NonNullable<LinearQuery['orderBy']>; label: string }[] = [
+  { value: 'updatedAt', label: 'Recently updated first' },
+  { value: 'createdAt', label: 'Recently created first' }
+]
+
+/** The Team options: "Any team", then each team of the workspace, then the stored team when it isn't
+ *  among them, marked not found once the teams are read. */
+function linearTeamOptions(answer: LinearChoicesResult | 'loading', stored: string | undefined): { value: string; label: string }[] {
+  const teams = answer !== 'loading' && answer.kind === 'ready' ? answer.teams : null
+  const options = [{ value: ANY, label: 'Any team' }, ...(teams ?? []).map((team) => ({ value: team.key, label: `${team.name} (${team.key})` }))]
+  if (stored !== undefined && !options.some((option) => option.value === stored)) options.push({ value: stored, label: teams ? `${stored} (not found)` : stored })
+  return options
+}
+
+/** One Linear query as a form, whose values are chosen: Team, Assignee and Order. `index` names its
+ *  fields' keys. A change stores the query again with the field changed, keeping the others. */
+function LinearQueryForm({ query, index, answer, onChange }: { query: string; index: number; answer: LinearChoicesResult | 'loading'; onChange: (query: string) => void }) {
+  const fields = readLinearQuery(query)
+  const change = (changes: Partial<LinearQuery>) => onChange(withLinearQueryChanges(query, changes))
+  return (
+    <Stack gap="xs">
+      <Select
+        key={`linear-team-${index}`}
+        label="Team"
+        value={fields.team ?? ANY}
+        options={linearTeamOptions(answer, fields.team)}
+        onChange={(team) => change({ team: team === ANY ? undefined : team })}
+      />
+      <Select
+        key={`linear-assignee-${index}`}
+        label="Assignee"
+        value={fields.assignee ?? ANY}
+        options={LINEAR_ASSIGNEE_OPTIONS}
+        onChange={(assignee) => change({ assignee: assignee === 'me' || assignee === 'null' ? assignee : undefined })}
+      />
+      <Select
+        key={`linear-order-${index}`}
+        label="Order"
+        value={fields.orderBy ?? 'updatedAt'}
+        options={LINEAR_ORDER_OPTIONS}
+        onChange={(orderBy) => change({ orderBy: orderBy === 'createdAt' ? 'createdAt' : undefined })}
+      />
+    </Stack>
+  )
+}
+
+/** What the Linear query form says about its lists, above the forms: that the teams are loading,
+ *  couldn't be read, or that there are none, which can mean Linear isn't connected. */
+function LinearChoicesNote({ answer }: { answer: LinearChoicesResult | 'loading' }) {
+  if (answer === 'loading') return <Spinner label="Loading the Linear teams" />
+  if (answer.kind === 'error') {
+    return (
+      <Text size="sm" tone="danger">
+        {`Couldn't list the Linear teams: ${answer.message}`}
+      </Text>
+    )
+  }
+  if (answer.teams.length > 0) return null
+  return (
+    <Text size="sm" tone="warning">
+      Linear lists no teams. Linear may not be connected: connect it in Orca's settings (Settings › Integrations › Linear).
+    </Text>
+  )
 }
 
 /** The queries of a filter on `tracker`, each with its Remove button while more than one is left,
- *  then Add JQL (Add query on GitHub). Ctrl+Enter (Cmd+Enter on macOS) in any of them runs
- *  `onSubmit`. */
+ *  then Add JQL (Add query on GitHub and Linear). Each is a text field, or on Linear a Linear query
+ *  form whose lists come from the workspace `linearWorkspaceId`. Ctrl+Enter (Cmd+Enter on macOS) in
+ *  any text field runs `onSubmit`. */
 function FilterQueries({
   tracker,
   queries: stored,
+  linearWorkspaceId,
   onChange: change,
   onSubmit
 }: {
   tracker: TrackerId
   queries: string[]
+  linearWorkspaceId: string
   onChange: (queries: string[]) => void
   onSubmit: () => void
 }) {
   const wording = QUERY_WORDING[tracker]
-  // A filter stored with no query at all still shows one field to type into.
-  const queries = stored.length > 0 ? stored : ['']
+  // A filter stored with no query at all still shows one to fill in.
+  const queries = stored.length > 0 ? stored : [wording.fresh]
+  const choices = read(linearChoices)
+  const answer = choices?.workspaceId === linearWorkspaceId ? choices.answer : 'loading'
   return (
     <Stack gap="sm">
       {wording.hint !== null ? (
@@ -2207,22 +2325,28 @@ function FilterQueries({
           {wording.hint}
         </Text>
       ) : null}
+      {tracker === 'linear' ? <LinearChoicesNote answer={answer} /> : null}
       {queries.map((query, index) => {
         const label = index === 0 ? wording.label : `${wording.label} ${index + 1}`
+        const changeQuery = (value: string) => change(queries.map((other, at) => (at === index ? value : other)))
         // The label is the Field's, above the row, so Remove centres on the query's box alone.
         return (
           <Field key={`query-${index}`} label={label}>
             <Box direction="row" align="center" gap="xs">
               <Box grow minWidth={0}>
-                <Textarea
-                  label={label}
-                  labelHidden
-                  rows={3}
-                  value={query}
-                  placeholder={index === 0 ? wording.placeholder : undefined}
-                  onChange={(value) => change(queries.map((other, at) => (at === index ? value : other)))}
-                  onSubmit={onSubmit}
-                />
+                {tracker === 'linear' ? (
+                  <LinearQueryForm query={query} index={index} answer={answer} onChange={changeQuery} />
+                ) : (
+                  <Textarea
+                    label={label}
+                    labelHidden
+                    rows={3}
+                    value={query}
+                    placeholder={index === 0 ? wording.placeholder : undefined}
+                    onChange={changeQuery}
+                    onSubmit={onSubmit}
+                  />
+                )}
               </Box>
               {queries.length > 1 ? (
                 <Box shrink={false}>
@@ -2242,12 +2366,12 @@ function FilterQueries({
         )
       })}
       <Row gap="none" align="center">
-        <Button key="query-add" icon="add" size="sm" variant="solid" onPress={() => change([...queries, ''])}>
+        <Button key="query-add" icon="add" size="sm" variant="solid" onPress={() => change([...queries, wording.fresh])}>
           {wording.add}
         </Button>
       </Row>
       <Text size="sm" muted>
-        Ctrl+Enter (Cmd+Enter on macOS) saves the filter and lists its tasks.
+        {wording.submit}
       </Text>
     </Stack>
   )
@@ -2389,13 +2513,11 @@ function FiltersSection({ projectId, words = '', children }: { projectId: string
   )
 }
 
-/** On a project with a tracker, the filter shown, ✎ to edit it and + to add one. Linear filters
- *  can't be edited yet, so a Linear project has neither. */
+/** On a project with a tracker, the filter shown, ✎ to edit it and + to add one. */
 function FilterRow({ projectId }: { projectId: string }) {
   const shown = read(shownSettings)
   const current = shown?.projectId === projectId ? trackerFilters(shown) : null
   if (!current) return null
-  const editable = current.tracker !== 'linear'
   return (
     <Box direction="row" align="center" gap="xs">
       <Box grow minWidth={0}>
@@ -2407,14 +2529,12 @@ function FilterRow({ projectId }: { projectId: string }) {
           onChange={chooseFilter}
         />
       </Box>
-      {editable ? (
-        <Box shrink={false}>
-          <Row gap="none" align="center">
-            <IconButton icon="edit" label="Edit filter" tooltip="Edit filter" size="sm" variant="ghost" onPress={() => openFilter(current.shownFilterId)} />
-            <IconButton icon="add" label="New filter" tooltip="New filter" size="sm" variant="ghost" onPress={newFilter} />
-          </Row>
-        </Box>
-      ) : null}
+      <Box shrink={false}>
+        <Row gap="none" align="center">
+          <IconButton icon="edit" label="Edit filter" tooltip="Edit filter" size="sm" variant="ghost" onPress={() => openFilter(current.shownFilterId)} />
+          <IconButton icon="add" label="New filter" tooltip="New filter" size="sm" variant="ghost" onPress={newFilter} />
+        </Row>
+      </Box>
     </Box>
   )
 }
@@ -2964,16 +3084,19 @@ function NewFilterChooser({ choice, projectName }: { choice: NewFilterChoice; pr
  *  at once.
  *  That bar is the Delete bar, or, while turning Global off waits for its confirmation, the bar
  *  that asks for it. The form starts with the failed load that opened it, if one did. `filters`
- *  are those the project lists on the draft's tracker, its own and the global ones. */
+ *  are those the project lists on the draft's tracker, its own and the global ones, and
+ *  `linearWorkspaceId` the workspace its Linear query forms list teams from. */
 function FilterEditor({
   draft,
   filters,
   jiraProjectKey,
+  linearWorkspaceId,
   projectName
 }: {
   draft: FilterDraft
   filters: ListedFilter[]
   jiraProjectKey: string
+  linearWorkspaceId: string
   projectName: string
 }) {
   const nameProblem = filterNameProblem(filters, draft.name, draft.id, draft.global)
@@ -2998,7 +3121,14 @@ function FilterEditor({
       <Box direction="column" gap="sm" grow minHeight={0} maxHeight="100%" scroll="y">
         {draft.loadError !== null ? <LoadError message={draft.loadError} /> : null}
         <Stack gap="xs">
-          <Input label="Name" value={draft.name} invalid={nameProblem !== null} onChange={(name) => changeFilterDraft(draft, { name })} />
+          <Input
+            label="Name"
+            value={draft.name}
+            invalid={nameProblem !== null}
+            onChange={(name) => changeFilterDraft(draft, { name })}
+            // A Linear query has no text field to save from with Ctrl+Enter, so the name saves.
+            onSubmit={draft.tracker === 'linear' ? save : undefined}
+          />
           {nameProblem !== null ? (
             <Text size="sm" tone="danger">
               {nameProblem}
@@ -3022,7 +3152,13 @@ function FilterEditor({
             </Row>
           </Field>
         ) : null}
-        <FilterQueries tracker={draft.tracker} queries={draft.queries} onChange={(queries) => changeFilterDraft(draft, { queries })} onSubmit={save} />
+        <FilterQueries
+          tracker={draft.tracker}
+          queries={draft.queries}
+          linearWorkspaceId={linearWorkspaceId}
+          onChange={(queries) => changeFilterDraft(draft, { queries })}
+          onSubmit={save}
+        />
         {namesJiraProjectKey ? (
           <Stack gap="xs">
             <Text size="sm" tone="warning">

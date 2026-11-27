@@ -50,6 +50,7 @@ function answers(tasks: TaskList): MockRequests {
     'project.active': { projectId: 'project' in tasks && tasks.project ? tasks.project.id : null },
     'starts.load': { starting },
     'jira.sites': { kind: 'ready', sites: [{ id: 'site-1', name: 'example.atlassian.net' }] },
+    'linear.choices': { kind: 'ready', teams: [{ key: 'ENG', name: 'Engineering' }, { key: 'DES', name: 'Design' }] },
     'agents.load': AVAILABLE_AGENTS,
     'task.start': { ok: false, message: 'Starting is off in check scenarios.' },
     'task.runHere': { ok: false, message: 'Running here is off in check scenarios.' },
@@ -230,6 +231,29 @@ const linearStarted = ready(
   }
 )
 
+/** A Linear filter of two Linear queries: Engineering's unassigned issues, last created first, then
+ *  the issues of a team the workspace no longer has. */
+const triageFilter: Filter = {
+  id: 'f-triage',
+  name: 'Triage',
+  queries: [JSON.stringify({ team: 'ENG', assignee: 'null', orderBy: 'createdAt' }), JSON.stringify({ team: 'OPS' })]
+}
+
+/** `web` on Linear with its initial filter and `triageFilter`, which it shows. */
+const linearTriageSettings = {
+  settings: {
+    version: 1,
+    projects: {
+      [web.id]: {
+        provider: 'linear-orca',
+        providers: { 'linear-orca': { workspaceId: '' } },
+        filters: { linear: [assignedFilter, triageFilter] },
+        shownFilterId: { linear: triageFilter.id }
+      }
+    }
+  }
+}
+
 /** What the worker answers when twg has no login, when the Orca CLI can't be found, and when
  *  `orca worktree list` fails. */
 const TWG_LOGGED_OUT =
@@ -337,9 +361,15 @@ export default defineCheck({
     requests: answers(ready(web, 'jira-twg', jiraTasks.slice(0, 2), { filterId: 'g-sprint' }))
   },
   'jira-started': { storage: jiraSettings('jira-twg'), requests: answers(jiraStarted) },
-  // A Linear project on its initial filter: the filter row has no ✎ or +, since Linear filters
-  // can't be edited yet, and each card shows the state's name.
+  // A Linear project on its initial filter: the filter row has ✎ and +, and each card shows the
+  // state's name.
   'linear-ready': { storage: linearSettings, requests: answers(linearStarted) },
+  // A Linear filter of two Linear queries, shown: ✎ opens a form for each, the second naming a team
+  // the workspace no longer has.
+  'linear-queries': {
+    storage: linearTriageSettings,
+    requests: answers(ready(web, 'linear-orca', linearStarted.tasks.slice(1, 3), { filterId: triageFilter.id, queryCount: 2 }))
+  },
   // Five tasks stand for the 100 Orca's Jira search answers at most.
   truncated: {
     storage: jiraSettings('jira-orca'),

@@ -43,6 +43,7 @@ import {
   type AgentsResult,
   type JiraSitesResult,
   type LaunchRequest,
+  type LinearChoicesResult,
   type ProjectRef,
   type ProjectSettings,
   type Settings,
@@ -55,6 +56,7 @@ import {
 import { taskLister } from './providers'
 import { runHereLaunch } from './run-here'
 import { JIRA_CONNECTION_ARGS, parseJiraSites } from './providers/jira-orca'
+import { linearTeamListArgs, parseLinearTeams } from './providers/linear-orca'
 import { FilterError } from './providers/queries'
 import type { PageRequest } from './providers/types'
 import { buildPrompt, findTemplate, TEMPLATE_GONE } from './template'
@@ -355,6 +357,15 @@ export function activateWith(orca: OrcaWorkerApi, { run, now, workerUrl, readFil
     }
   }
 
+  /** The Linear query form's choices for the workspace `workspaceId`. A failure is data. */
+  async function linearChoices(workspaceId: string): Promise<LinearChoicesResult> {
+    try {
+      return { kind: 'ready', teams: parseLinearTeams(await run('orca', linearTeamListArgs(workspaceId))) }
+    } catch (error) {
+      return { kind: 'error', message: messageOf(error) }
+    }
+  }
+
   async function openWorktree(worktreeId: string): Promise<ActionResult> {
     try {
       checkOrcaAnswer(await run('orca', worktreeActivateArgs(worktreeId)))
@@ -386,6 +397,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, now, workerUrl, readFil
   orca.panels.handle('worktrees.load', ({ projectId }) => loadWorktrees(projectId))
   orca.panels.handle('project.active', () => activeProjectId())
   orca.panels.handle('jira.sites', () => jiraSites())
+  orca.panels.handle('linear.choices', ({ workspaceId }) => linearChoices(workspaceId))
   orca.panels.handle('agents.load', () => loadAgents())
   orca.panels.handle('task.start', startTask)
   orca.panels.handle('task.runHere', runHere)
