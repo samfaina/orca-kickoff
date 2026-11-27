@@ -84,11 +84,11 @@ While it runs, the card says *Running … here*. A failure shows on the card, as
 
 ### Filters
 
-A filter is a named way to ask the tracker for the project's tasks, made of one or more queries in order: JQL queries on Jira, GitHub issue searches on GitHub. A project can have several, for example the board's tasks in board order and the tasks assigned to you, its own and the [global](#global-filters) ones, and each tracker keeps its own.
+A filter is a named way to ask the tracker for the project's tasks, made of one or more queries in order: JQL queries on Jira, GitHub issue searches on GitHub, Linear queries on Linear. A project can have several, for example the board's tasks in board order and the tasks assigned to you, its own and the [global](#global-filters) ones, and each tracker keeps its own.
 
 - A Jira project starts with one, **Tasks**, whose query is `assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC`.
 - A GitHub project starts with one, **Open**, whose query is `is:open`: its open issues, as before filters.
-- A Linear project starts with one, **Assigned to me**: the open issues assigned to you, those in triage and backlog included. Linear filters can't be edited or added yet, so a Linear project's filter row has no ✎ or **+**.
+- A Linear project starts with one, **Assigned to me**: the open issues assigned to you, those in triage and backlog included.
 
 The filter row, in **Filters** above **Search tasks**, shows the filter listed, with ✎ to edit it and **+** to add one. It lists the project's own filters first, then the global ones, marked **(Global)**. Choosing another filter loads its tasks from the tracker, keeping the words in **Search tasks**; the panel opens on the filter shown last. Both Jira providers list the same filters.
 
@@ -105,8 +105,9 @@ A new filter is named **Filter 2**, **Filter 3**…, or after its recipe, the fi
 - **Name**: not empty, and unique among the project's own filters on the tracker, or among the global ones, ignoring case.
 - **Global**: whether the filter is global (see [Global filters](#global-filters)).
 - **JQL**, **JQL 2**… on Jira, **Query**, **Query 2**… on GitHub: the list shows the tasks of the first query, then those of the next that the earlier ones didn't list, each in the tracker's order; a blank query is kept and skipped. **Add JQL** (**Add query**) adds a query and the trash can removes one. A query can span several lines.
-- On GitHub, a new filter can start from a recipe: **Open** (`is:open`) or **Assigned to me** (`is:open assignee:@me`), which write the filter's name and query for you to change before saving.
-- **Save** (or **Ctrl+Enter**, **Cmd+Enter** on macOS, in a query) stores the filter, goes back to the list and loads it. **Cancel** goes back without storing anything.
+- **Linear query**, **Linear query 2**… on Linear: Linear has no query language, so each one is a form whose values you choose rather than type, and a typo can't turn into an empty list. **Team** is **Any team** or one of the workspace's teams; **Assignee** is **Me**, **Unassigned** or **Anyone**; **Order** is **Recently updated first** or **Recently created first**. Each lists open issues: any state but done or canceled. The teams are read from Orca's Linear connection when the editor opens, and the form says while they load or when they can't be read. With no teams listed, it says that Linear may not be connected. A stored team the workspace no longer has stays chosen, marked *(not found)*. **Add query** adds a query with every default, and a blank one stored by hand, which never runs, opens as one with every default, which does.
+- On GitHub and Linear, a new filter can start from a recipe, which writes the filter's name and queries for you to change before saving. On GitHub: **Open** (`is:open`) or **Assigned to me** (`is:open assignee:@me`). On Linear: **Assigned to me** (the open issues assigned to you), or **Team open** (a team's open issues, with the team left for you to choose).
+- **Save** (or **Ctrl+Enter**, **Cmd+Enter** on macOS, in a query, or in the name on Linear, where **Enter** does too) stores the filter, goes back to the list and loads it. **Cancel** goes back without storing anything.
 - **Delete filter**, clicked twice, removes the filter; a project keeps at least one on its tracker, own or global.
 
 A JQL query can name the project's Jira project key as `{{jira_project}}`, spaces inside the braces allowed, so two projects with the same workflow can use the same queries: `project = {{jira_project}} ORDER BY Rank` lists each project's own tasks. It becomes the key each time the query runs, for the list, **Load more** and a tracker search; the filter keeps it as written. In a project without a Jira project key, a filter that names it runs none of its queries, and the list says *This filter uses {{jira_project}}. Set the Jira project key in Project settings.* Filters that don't name it list as usual. GitHub searches run as written: they are already limited to the project's repository.
@@ -117,12 +118,12 @@ A query the tracker rejects names its filter and its place in it, such as `Board
 
 ### Global filters
 
-A filter is either the project's own or **global**: kept once, apart from every project's settings, and offered in every project on its tracker. A global Jira filter is offered in every Jira project, through either Jira provider, and in no GitHub project; a global GitHub filter in every GitHub project. A global filter can be the filter shown.
+A filter is either the project's own or **global**: kept once, apart from every project's settings, and offered in every project on its tracker. A global Jira filter is offered in every Jira project, through either Jira provider, and in no GitHub or Linear project; a global GitHub filter in every GitHub project, and a global Linear filter in every Linear project. A global filter can be the filter shown.
 
 - **Names**: no two of a project's own filters on a tracker share a name, nor two global ones on that tracker, ignoring case. An own filter and a global one may share one; the mark tells them apart.
 - **The Global switch**, in the filter editor, moves a filter between the two groups. Turned on, the filter leaves the project and becomes global at once, and stays the filter shown. Turned off, a bar first asks to confirm, since *Other projects will stop offering it*; **Confirm** moves it to the active project only, and other projects that showed it fall back to their first filter. A move whose name the other group already has is refused with a message, and changes nothing. On a new filter, the switch says where **Save** stores it.
 - **Edits and Delete**: editing a global filter changes it in every project on its tracker. Deleting one deletes it in every project, as its Delete bar says. A filter can be deleted while the active project lists at least one other on that tracker, own or global.
-- **The initial filter**: a project lists **Tasks** (or **Open**) only while it has no filter of its own on the tracker and there is no global one there. The first global filter, saved from a project that listed only the initial one, keeps it in that project as one of its own.
+- **The initial filter**: a project lists **Tasks** (or **Open**, or **Assigned to me**) only while it has no filter of its own on the tracker and there is no global one there. The first global filter, saved from a project that listed only the initial one, keeps it in that project as one of its own.
 - **`{{jira_project}}`**: a global Jira filter is the same in every project, so it should name the Jira project as `{{jira_project}}`. When its queries name the active project's Jira project key literally, as `project = WEB`, the editor says *This filter names WEB. Use {{jira_project}} so each project lists its own tasks.*, and **Use {{jira_project}}** replaces those keys in the queries for you to save. The hint blocks nothing.
 
 ## Prompt templates

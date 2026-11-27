@@ -415,7 +415,8 @@ export function providerConfig<K extends ProviderId>(settings: Pick<ProjectSetti
   return configs[id]
 }
 
-/** One query of a filter to run (JQL on Jira, a GitHub search on GitHub): trimmed, each line break
+/** One query of a filter to run (JQL on Jira, a GitHub search on GitHub, a Linear query's JSON on
+ *  Linear): trimmed, each line break
  *  a space, and its position from 1 among the filter's queries as the filter editor shows them,
  *  blank ones included. */
 export type FilterQuery = { text: string; position: number }
@@ -534,6 +535,13 @@ export type JiraSitesResult =
   | { kind: 'ready'; sites: { id: string; name: string }[] }
   | { kind: 'error'; message: string }
 
+/** A team of a Linear workspace: the key a Linear query names it by, and its name. */
+export type LinearTeam = { key: string; name: string }
+
+/** What the Linear query form offers, read from Orca's Linear connection: the workspace's teams. No
+ *  teams can mean no Linear connection, since Orca then lists none. */
+export type LinearChoicesResult = { kind: 'ready'; teams: LinearTeam[] } | { kind: 'error'; message: string }
+
 /** An agent Orca can start on a host, as `orca agent installed` lists it: the id `--agent` takes,
  *  Orca's display name, and whether it is Orca's default agent. */
 export type AvailableAgent = { id: string; name: string; default: boolean }
@@ -577,6 +585,9 @@ declare module 'orca' {
     'worktrees.load': { input: { projectId: string }; output: WorktreesResult }
     'project.active': { input: {}; output: ActiveProjectResult }
     'jira.sites': { input: {}; output: JiraSitesResult }
+    /** What the Linear query form offers, for the workspace `workspaceId` ('' for the one Orca
+     *  reads without `--workspace`). */
+    'linear.choices': { input: { workspaceId: string }; output: LinearChoicesResult }
     /** The agents Orca can start on the active worktree's host, for Project settings' Agent and the
      *  task's card: read again on each request. An error with no active worktree. */
     'agents.load': { input: {}; output: AgentsResult }

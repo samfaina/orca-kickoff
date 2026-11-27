@@ -37,7 +37,7 @@ Narrowing the tasks already loaded in the panel to those whose task key, title o
 _Avoid_: Filter (that is a named set of tracker queries), search, local search
 
 **Filter**:
-A named way to ask the tracker for a project's tasks, made of tracker queries in order: JQL queries on Jira, GitHub issue searches on GitHub. A project can have several on each tracker, its own and the global ones, and the panel shows the tasks of one at a time. A task can be in several filters; its task worktree is the same in each.
+A named way to ask the tracker for a project's tasks, made of tracker queries in order: JQL queries on Jira, GitHub issue searches on GitHub, Linear queries on Linear. A project can have several on each tracker, its own and the global ones, and the panel shows the tasks of one at a time. A task can be in several filters; its task worktree is the same in each.
 _Avoid_: Task list, view, saved filter (on Jira that is a stored JQL query of Jira's own), board
 
 **JQL query**:
@@ -54,6 +54,14 @@ _Avoid_: Preset, template (that is a prompt template), JQL template
 
 **GitHub recipe**:
 A ready-made filter on GitHub, **Open** or **Assigned to me**, that writes a new filter's name and GitHub search for the user to change before saving it.
+_Avoid_: Preset, template (that is a prompt template)
+
+**Linear query**:
+One of the queries, in order, that make up a filter on Linear. Linear has no query language, so a Linear query is a set of fields whose values the user chooses from lists rather than types, such as a team of the workspace, the assignee and the order; a field left unchosen keeps its default, such as any team, and the state is open unless one is chosen. The filter shows the tasks of the first, then those of the next, each task once, where it first appears.
+_Avoid_: Filter (that is the whole named set of queries), search, view (Linear's own saved filter)
+
+**Linear recipe**:
+A ready-made filter on Linear, **Assigned to me** or **Team open**, that writes a new filter's name and Linear queries for the user to change before saving it. **Team open** leaves the team for the user to choose.
 _Avoid_: Preset, template (that is a prompt template)
 
 **Tracker search**:

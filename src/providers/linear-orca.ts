@@ -6,8 +6,8 @@ import { CliError, unreadableOutput, type RunCli } from '../cli'
 import { isRecord, text } from '../json'
 import { readLinearQuery, type LinearQuery } from '../linear-query'
 import { orcaResult } from '../orca'
-import type { Filter, FilterQuery, ProviderConfigs, Task } from '../protocol'
-import { FilterError, pageAcrossQueries, requireQueries, type QueryPage } from './queries'
+import type { LinearTeam, ProviderConfigs, Task } from '../protocol'
+import { pageAcrossQueries, requireQueries, type QueryPage } from './queries'
 import type { Provider } from './types'
 
 const LIMIT = 50
@@ -39,14 +39,31 @@ export function linearListArgs(config: Config, query: LinearQuery, after = '', l
   return args
 }
 
+/** The `orca linear team list` arguments for the workspace `workspaceId`: `--workspace` only when
+ *  it isn't blank, so Orca reads the workspace it picks, as `list-issues` does. */
+export function linearTeamListArgs(workspaceId: string): string[] {
+  const workspace = workspaceId.trim()
+  return ['linear', 'team', 'list', ...(workspace !== '' ? ['--workspace', workspace] : []), '--json']
+}
+
+/** The teams of a `team list` answer, by key and name, in Orca's order; a team without either is
+ *  dropped. Nothing else is read, since each team carries the workspace's name. Orca lists none
+ *  without a Linear connection, as for a workspace with no teams. */
+export function parseLinearTeams(stdout: string): LinearTeam[] {
+  const result = orcaResult(stdout)
+  if (!isRecord(result) || !Array.isArray(result.teams)) throw unreadableOutput('orca')
+  return result.teams.flatMap((team) => (isRecord(team) && text(team.key) && text(team.name) ? [{ key: text(team.key), name: text(team.name) }] : []))
+}
+
 export const linearOrca: Provider<Config> = {
   id: 'linear-orca',
   tracker: 'linear',
   label: 'Linear (Orca connection)',
   /** Up to `LIMIT` tasks, filled across the filter's Linear queries (see `pageAcrossQueries`), with
-   *  `<index>:<Orca cursor>` as the panel's cursor. */
+   *  `<index>:<Orca cursor>` as the panel's cursor. A filter with no Linear query to run fails
+   *  naming it (see `requireQueries`), so the panel opens its filter editor. */
   async list(run, _project, config, request = {}) {
-    const queries = linearQueries(request.filter)
+    const { queries } = requireQueries(request.filter, 'Add a Linear query to list Linear tasks.')
     return pageAcrossQueries(
       queries,
       request.cursor,
@@ -57,20 +74,10 @@ export const linearOrca: Provider<Config> = {
   }
 }
 
-/** The Linear queries of `filter` to run (see `requireQueries`). With none, the failure names no
- *  filter: the panel opens the filter editor on a filter that fails, and it can't edit Linear
- *  filters yet. */
-function linearQueries(filter: Filter | undefined): FilterQuery[] {
-  try {
-    return requireQueries(filter, 'Add a Linear query to list Linear tasks.').queries
-  } catch (error) {
-    throw error instanceof FilterError ? new CliError(error.message) : error
-  }
-}
-
 /** `error` as the failure of the list: no Linear connection says how to connect; any other failure,
  *  such as an unknown workspace, is Orca's own message. Linear rejects none of a query's values (an
- *  unknown team, state or label lists nothing), so no failure is the filter's. */
+ *  unknown team, state or label lists nothing), so no failure of Orca's is the filter's: only one
+ *  with no Linear query to run is (see `list`). */
 function linearFailure(error: unknown): unknown {
   return error instanceof CliError && error.code === 'linear_not_connected' ? new CliError(LINEAR_NOT_CONNECTED, false, error.code) : error
 }

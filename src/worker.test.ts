@@ -741,13 +741,14 @@ test('a blank tracker search on Linear lists the filter as usual, without --quer
   assert.deepEqual(linearCalls(calls), [['linear', 'list-issues', '--state', 'open', '--assignee', 'me', '--order-by', 'updatedAt', '--limit', '50', '--json']])
 })
 
-test("a Linear filter whose queries are all blank fails without running Orca and names no filter, since the panel can't edit Linear filters yet", async () => {
+test('a Linear filter whose queries are all blank fails without running Orca, naming the filter for the panel to open its editor', async () => {
   const filter = { id: 'f-blank', name: 'Blank', queries: ['', ' '] }
   const { worker, calls } = await start({ ...ORCA_OK }, { storage: linearSettings({ filters: { linear: [filter] } }) })
   assert.deepEqual(await worker.request('tasks.load', {}), {
     kind: 'error',
     project: { id: 'github:acme/web', name: 'web', repo: 'acme/web' },
-    message: 'Blank: Add a Linear query to list Linear tasks.'
+    message: 'Blank: Add a Linear query to list Linear tasks.',
+    filterId: 'f-blank'
   })
   assert.deepEqual(linearCalls(calls), [])
 })
@@ -774,6 +775,53 @@ test("any other Orca failure on Linear is Orca's own message, and a chosen works
     message: 'orca failed: Unknown Linear workspace ws-9.'
   })
   assert.deepEqual(linearCalls(calls)[0].slice(-3), ['--workspace', 'ws-9', '--json'])
+})
+
+/** `orca linear team list --json` with these teams of the invented Acme workspace. */
+const linearTeams = (teams: { key: string; name: string }[]) =>
+  wrap({
+    teams: teams.map((team, index) => ({ id: `tm-${index}`, ...team, url: `https://linear.app/acme/team/${team.key}`, workspace: { id: 'ws-1', name: 'Acme' } })),
+    meta: { workspaceId: 'ws-1' }
+  })
+
+test("linear.choices answers the workspace's teams by key and name, nothing about the workspace, and passes a chosen workspace", async () => {
+  const teams = linearTeams([
+    { key: 'ENG', name: 'Engineering' },
+    { key: 'DES', name: 'Design' }
+  ])
+  const { worker, calls } = await start({ 'orca linear team': teams })
+  const expected = {
+    kind: 'ready',
+    teams: [
+      { key: 'ENG', name: 'Engineering' },
+      { key: 'DES', name: 'Design' }
+    ]
+  }
+  assert.deepEqual(await worker.request('linear.choices', { workspaceId: '' }), expected)
+  assert.deepEqual(await worker.request('linear.choices', { workspaceId: ' ws-2 ' }), expected)
+  assert.deepEqual(
+    calls.map((call) => call.args),
+    [
+      ['linear', 'team', 'list', '--json'],
+      ['linear', 'team', 'list', '--workspace', 'ws-2', '--json']
+    ]
+  )
+})
+
+test('linear.choices answers no teams when Orca lists none, as it does without a Linear connection, and drops teams without a key or name', async () => {
+  const { worker } = await start({ 'orca linear team': linearTeams([]) })
+  assert.deepEqual(await worker.request('linear.choices', { workspaceId: '' }), { kind: 'ready', teams: [] })
+  const odd = wrap({ teams: [{ id: 'tm-1', key: 'ENG', name: '' }, { id: 'tm-2', name: 'Ops' }, 'x', { id: 'tm-3', key: 'OPS', name: 'Operations' }], meta: {} })
+  const { worker: other } = await start({ 'orca linear team': odd })
+  assert.deepEqual(await other.request('linear.choices', { workspaceId: '' }), { kind: 'ready', teams: [{ key: 'OPS', name: 'Operations' }] })
+})
+
+test('linear.choices answers a failure, or output it cannot read, as data', async () => {
+  const { worker } = await start({ 'orca linear team': new CliError('orca failed: Orca is not running.') })
+  assert.deepEqual(await worker.request('linear.choices', { workspaceId: '' }), { kind: 'error', message: 'orca failed: Orca is not running.' })
+  const { worker: other } = await start({ 'orca linear team': wrap({ nothing: true }) })
+  const answer = await other.request('linear.choices', { workspaceId: '' })
+  assert.equal(answer.kind, 'error')
 })
 
 const eng12: Task = {

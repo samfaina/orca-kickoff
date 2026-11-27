@@ -34,6 +34,7 @@ const PANEL_REQUESTS = Object.keys({
   'worktrees.load': true,
   'project.active': true,
   'jira.sites': true,
+  'linear.choices': true,
   'agents.load': true,
   'task.start': true,
   'task.runHere': true,
@@ -155,10 +156,11 @@ test('jira-started shows started tasks with their worktree and agent, one starti
   assert.ok(starts.length > 0 && starts.every((start) => !start.disabled))
 })
 
-test('linear-ready lists the Linear issues assigned to the user, with their state, one started, and Load more, but no filter editing', async () => {
+test('linear-ready lists the Linear issues assigned to the user, with their state, one started, Load more, ✎ and +', async () => {
   const shown = await render('linear-ready')
   assert.equal(shown.valueOf({ type: 'Select', label: 'Filter' }), 'assigned')
-  assert.equal(shown.find({ type: 'IconButton', label: 'Edit filter' }), null)
+  assert.ok(shown.find({ type: 'IconButton', label: 'Edit filter' }))
+  assert.ok(shown.find({ type: 'IconButton', label: 'New filter' }))
   assert.ok(shown.find({ type: 'Link', text: 'ENG-12' }))
   assert.ok(shown.find({ type: 'Badge', text: 'Triage' }))
   assert.ok(shown.find({ text: 'Agent: claude' }))
@@ -167,6 +169,24 @@ test('linear-ready lists the Linear issues assigned to the user, with their stat
   assert.ok(shown.find({ role: 'button', text: /^Showing \d+ · Load more$/ }))
   await shown.press({ type: 'IconButton', label: 'Project settings' })
   assert.equal(shown.valueOf({ label: 'Tracker' }), 'linear-orca')
+})
+
+test('linear-queries opens, with ✎, a Linear query form per query, the stored team the workspace lacks marked not found', async () => {
+  const shown = await render('linear-queries')
+  assert.equal(shown.valueOf({ type: 'Select', label: 'Filter' }), 'f-triage')
+  await shown.press({ type: 'IconButton', label: 'Edit filter' })
+  assert.deepEqual(
+    shown.findAll({ type: 'Field', label: /^Linear query/ }).map((field) => field.label),
+    ['Linear query', 'Linear query 2']
+  )
+  assert.deepEqual(
+    ['team', 'assignee', 'order'].map((field) => shown.valueOf({ type: 'Select', testId: `linear-${field}-0` })),
+    ['ENG', 'null', 'createdAt']
+  )
+  const second = shown.find({ type: 'Select', testId: 'linear-team-1' })?.props.options as { label: string }[]
+  assert.deepEqual(second.map((option) => option.label), ['Any team', 'Engineering (ENG)', 'Design (DES)', 'OPS (not found)'])
+  assert.deepEqual(shown.errors, [])
+  assert.deepEqual(shown.warnings, [])
 })
 
 test('truncated ends the list with the truncation notice', async () => {
