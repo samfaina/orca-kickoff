@@ -6,7 +6,7 @@ import { CliError, unreadableOutput, type RunCli } from '../cli'
 import { isRecord, text } from '../json'
 import { readLinearQuery, type LinearQuery } from '../linear-query'
 import { orcaResult } from '../orca'
-import type { LinearTeam, ProviderConfigs, Task } from '../protocol'
+import type { LinearProject, LinearTeam, ProviderConfigs, Task } from '../protocol'
 import { pageAcrossQueries, requireQueries, type QueryPage } from './queries'
 import type { Provider } from './types'
 
@@ -51,6 +51,16 @@ export function linearTeamArgs(list: 'states' | 'labels', workspaceId: string, t
   return ['linear', 'team', list, '--team', team.trim(), ...workspaceArgs(workspaceId), '--json']
 }
 
+/** The `orca linear project list` arguments for the workspace `workspaceId`, with `--workspace` as
+ *  for `team list`. No `--limit`: Orca then reads every project, until its own 20 s deadline. */
+export function linearProjectListArgs(workspaceId: string): string[] {
+  return ['linear', 'project', 'list', ...workspaceArgs(workspaceId), '--json']
+}
+
+/** How long Kickoff waits for `project list`: longer than Orca's own 20 s deadline, so that Orca
+ *  answers the projects it read by then rather than Kickoff giving up first. */
+export const LINEAR_PROJECT_LIST_TIMEOUT_MS = 30_000
+
 function workspaceArgs(workspaceId: string): string[] {
   const workspace = workspaceId.trim()
   return workspace !== '' ? ['--workspace', workspace] : []
@@ -73,6 +83,17 @@ export function parseLinearTeams(stdout: string): LinearTeam[] {
   const result = orcaResult(stdout)
   if (!isRecord(result) || !Array.isArray(result.teams)) throw unreadableOutput('orca')
   return result.teams.flatMap((team) => (isRecord(team) && text(team.key) && text(team.name) ? [{ key: text(team.key), name: text(team.name) }] : []))
+}
+
+/** The Linear projects of a `project list` answer, by id (which `--project` takes, and which
+ *  survives a rename) and name, in Orca's order; a project without either is dropped. `truncated`
+ *  when Orca stopped reading before the last project (`truncated` or `meta.hasMore`), as at its
+ *  deadline. Nothing else is read, since each project can carry the workspace's name. */
+export function parseLinearProjects(stdout: string): { projects: LinearProject[]; truncated: boolean } {
+  const result = orcaResult(stdout)
+  if (!isRecord(result) || !Array.isArray(result.projects)) throw unreadableOutput('orca')
+  const projects = result.projects.flatMap((project) => (isRecord(project) && text(project.id) && text(project.name) ? [{ id: text(project.id), name: text(project.name) }] : []))
+  return { projects, truncated: result.truncated === true || (isRecord(result.meta) && result.meta.hasMore === true) }
 }
 
 export const linearOrca: Provider<Config> = {

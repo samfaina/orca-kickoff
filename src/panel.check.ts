@@ -32,14 +32,15 @@ const AVAILABLE_AGENTS: AgentsResult = {
   ]
 }
 
-/** What the Linear query form offers in the invented Acme workspace: its teams, and with a team
- *  Engineering's states and labels, or Orca's failure for a team Acme doesn't have. */
+/** What the Linear query form offers in the invented Acme workspace: its teams and Linear projects,
+ *  or with a team its teams and Engineering's states and labels, or Orca's failure for a team Acme
+ *  doesn't have. */
 function linearChoices({ team }: { team?: string }): LinearChoicesResult {
   const teams = [
     { key: 'ENG', name: 'Engineering' },
     { key: 'DES', name: 'Design' }
   ]
-  if (!team) return { kind: 'ready', teams }
+  if (!team) return { kind: 'ready', teams, projects: [{ id: 'pr-1', name: 'Dark mode' }, { id: 'pr-2', name: 'Onboarding' }] }
   if (team !== 'ENG') return { kind: 'error', message: `No connected Linear team matched ${team}.` }
   return { kind: 'ready', teams, states: ['Triage', 'Todo', 'In Progress', 'Done'], labels: ['Bug', 'Feature'] }
 }
@@ -244,12 +245,16 @@ const linearStarted = ready(
   }
 )
 
-/** A Linear filter of two Linear queries: Engineering's unassigned bugs in Triage, last created
- *  first, then the issues of a team the workspace no longer has. */
+/** A Linear filter of two Linear queries: Engineering's unassigned bugs in Triage of the Dark mode
+ *  project, last created first, then the issues of a team and a Linear project the workspace no
+ *  longer has. */
 const triageFilter: Filter = {
   id: 'f-triage',
   name: 'Triage',
-  queries: [JSON.stringify({ team: 'ENG', state: 'Triage', assignee: 'null', label: 'Bug', orderBy: 'createdAt' }), JSON.stringify({ team: 'OPS' })]
+  queries: [
+    JSON.stringify({ team: 'ENG', state: 'Triage', assignee: 'null', label: 'Bug', project: 'pr-1', orderBy: 'createdAt' }),
+    JSON.stringify({ team: 'OPS', project: 'pr-9' })
+  ]
 }
 
 /** `web` on Linear with its initial filter and `triageFilter`, which it shows. */
@@ -378,8 +383,8 @@ export default defineCheck({
   // state's name.
   'linear-ready': { storage: linearSettings, requests: answers(linearStarted) },
   // A Linear filter of two Linear queries, shown: ✎ opens a form for each, the first with a state
-  // and a label of its team's, the second naming a team the workspace no longer has, whose states
-  // and labels can't be read.
+  // and a label of its team's and a Linear project, the second naming a team and a project the
+  // workspace no longer has, the team's states and labels unreadable.
   'linear-queries': {
     storage: linearTriageSettings,
     requests: answers(ready(web, 'linear-orca', linearStarted.tasks.slice(1, 3), { filterId: triageFilter.id, queryCount: 2 }))

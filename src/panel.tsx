@@ -134,6 +134,9 @@ const START_TIMEOUT_MS = 60_000
 /** `task.runHere` waits for four Orca queries, run together, then the launch, which Orca answers
  *  in under a second: two calls of at most 20 s each in a row. */
 const RUN_HERE_TIMEOUT_MS = 60_000
+/** `linear.choices` waits for Orca's Linear lists, run together: up to the worker's 30 s for the
+ *  Linear projects (`LINEAR_PROJECT_LIST_TIMEOUT_MS`), so the panel waits longer than that. */
+const LINEAR_CHOICES_TIMEOUT_MS = 45_000
 /** How long Delete waits for its second click, as "Confirm delete". */
 const CONFIRM_DELETE_MS = 4_000
 /** How often the panel asks for the active project while it is visible. */
@@ -320,8 +323,9 @@ const shownSettings = atom<ShownSettings | null>(null)
 /** The sites of Orca's Jira connection, asked for the first time they are needed. */
 const jiraSites = atom<JiraSitesResult | 'loading' | null>(null)
 /** What the Linear query form offers for the workspace `workspaceId`, by team key: under '' the
- *  teams, asked for when the filter editor opens on a Linear filter, and under a team's key also its
- *  states and labels, asked for then for each team its queries name, and when a form's team changes. */
+ *  teams and Linear projects, asked for when the filter editor opens on a Linear filter, and under
+ *  a team's key the teams and its states and labels, asked for then for each team its queries name,
+ *  and when a form's team changes. */
 const linearChoices = atom<{ workspaceId: string; answers: Record<string, ShownLinearChoices> } | null>(null)
 /** The agents Orca can start on the active worktree's host, as last answered: asked on each load
  *  of the list and each time Project settings opens. null until the first answer. */
@@ -1188,12 +1192,13 @@ async function loadJiraSites(): Promise<void> {
   }
 }
 
-/** Asks for what the Linear query form offers in the workspace `workspaceId`, with the states and
- *  labels of the team `team` unless it is '', unless that is being asked for. The teams aren't asked
- *  for again once some are listed: after a failure or with none listed, the person may have
- *  connected Linear since. A team's lists are asked for again each time, so a team chosen again
- *  shows its lists as they are now. The answers for another workspace are dropped when one for this
- *  one is asked for, and an answer for another workspace than the last one asked for is dropped. */
+/** Asks for what the Linear query form offers in the workspace `workspaceId`: its teams and Linear
+ *  projects when `team` is '', else its teams and the states and labels of the team `team`, unless
+ *  that is being asked for. The teams and projects aren't asked for again once some teams are
+ *  listed: after a failure or with none listed, the person may have connected Linear since. A
+ *  team's lists are asked for again each time, so a team chosen again shows its lists as they are
+ *  now. The answers for another workspace are dropped when one for this one is asked for, and an
+ *  answer for another workspace than the last one asked for is dropped. */
 async function loadLinearChoices(workspaceId: string, team = ''): Promise<void> {
   const current = read(linearChoices)
   const asked = current?.workspaceId === workspaceId ? current.answers[team] : undefined
@@ -1201,7 +1206,7 @@ async function loadLinearChoices(workspaceId: string, team = ''): Promise<void> 
   set(linearChoices, { workspaceId, answers: { ...(current?.workspaceId === workspaceId ? current.answers : {}), [team]: 'loading' } })
   let answer: LinearChoicesResult
   try {
-    answer = await plugin.request('linear.choices', team === '' ? { workspaceId } : { workspaceId, team })
+    answer = await plugin.request('linear.choices', team === '' ? { workspaceId } : { workspaceId, team }, { timeoutMs: LINEAR_CHOICES_TIMEOUT_MS })
   } catch (error) {
     answer = { kind: 'error', message: `Kickoff's worker didn't answer (${errorCode(error)}).` }
   }
@@ -2281,11 +2286,12 @@ function withStored(options: ChoiceOption[], stored: string | undefined, listed:
 const readChoices = (answer: ShownLinearChoices | undefined) => (answer !== undefined && answer !== 'loading' && answer.kind === 'ready' ? answer : null)
 
 /** One Linear query as a form, whose values are chosen: Team, from the teams in `answers['']`, then
- *  State and Label, from the team's lists in `answers[team]`, then Assignee and Order. Without a team,
- *  State and Label can't be changed, except to put a stored one back to its default. `index` names
- *  its fields' keys. A change stores the query again with the field changed, keeping the others;
- *  choosing Any team puts State and Label back to their defaults, and choosing a team runs
- *  `onTeamChosen` to read its lists again. */
+ *  State and Label, from the team's lists in `answers[team]`, then Assignee, Project, from the
+ *  workspace's Linear projects in `answers['']`, and Order. Without a team, State and Label can't be
+ *  changed, except to put a stored one back to its default; Project is the workspace's, so it can
+ *  be chosen with any team. `index` names its fields' keys. A change stores the query again with
+ *  the field changed, keeping the others; choosing Any team puts State and Label back to their
+ *  defaults, and choosing a team runs `onTeamChosen` to read its lists again. */
 function LinearQueryForm({
   query,
   index,
@@ -2301,7 +2307,9 @@ function LinearQueryForm({
 }) {
   const fields = readLinearQuery(query)
   const change = (changes: Partial<LinearQuery>) => onChange(withLinearQueryChanges(query, changes))
-  const teams = readChoices(answers[''])?.teams ?? null
+  const workspaceLists = readChoices(answers[''])
+  const teams = workspaceLists?.teams ?? null
+  const projects = workspaceLists?.projects ?? null
   const lists = fields.team === undefined ? null : readChoices(answers[fields.team])
   const listed = lists !== null
   const states = (lists?.states ?? []).filter((state) => state.toLowerCase() !== LINEAR_OPEN.value)
@@ -2347,6 +2355,18 @@ function LinearQueryForm({
         onChange={(label) => change({ label: label === LINEAR_ANY ? undefined : label })}
       />
       <Select
+        key={`linear-project-${index}`}
+        label="Project"
+        value={fields.project ?? LINEAR_ANY}
+        options={withStored(
+          [{ value: LINEAR_ANY, label: 'Any project' }, ...(projects ?? []).map((project) => ({ value: project.id, label: project.name }))],
+          fields.project,
+          // A list Orca cut short may lack a project that is still there.
+          projects !== null && workspaceLists?.projectsTruncated !== true
+        )}
+        onChange={(project) => change({ project: project === LINEAR_ANY ? undefined : project })}
+      />
+      <Select
         key={`linear-order-${index}`}
         label="Order"
         value={fields.orderBy ?? 'updatedAt'}
@@ -2369,22 +2389,31 @@ function LinearTeamListsNote({ team, answer }: { team: string; answer: ShownLine
   )
 }
 
-/** What the Linear query form says about its lists, above the forms: that the teams are loading,
- *  couldn't be read, or that there are none, which can mean Linear isn't connected. */
+/** What the Linear query form says about its lists, above the forms: that the teams and Linear
+ *  projects are loading, couldn't be read, or that there are no teams, which can mean Linear isn't
+ *  connected; and that Orca stopped reading the projects before the last one. */
 function LinearChoicesNote({ answer }: { answer: ShownLinearChoices }) {
-  if (answer === 'loading') return <Spinner label="Loading the Linear teams" />
+  if (answer === 'loading') return <Spinner label="Loading the Linear teams and projects" />
   if (answer.kind === 'error') {
     return (
       <Text size="sm" tone="danger">
-        {`Couldn't list the Linear teams: ${answer.message}`}
+        {`Couldn't list the Linear teams and projects: ${answer.message}`}
       </Text>
     )
   }
-  if (answer.teams.length > 0) return null
   return (
-    <Text size="sm" tone="warning">
-      Linear lists no teams. Linear may not be connected: connect it in Orca's settings (Settings › Integrations › Linear).
-    </Text>
+    <>
+      {answer.teams.length === 0 ? (
+        <Text size="sm" tone="warning">
+          Linear lists no teams. Linear may not be connected: connect it in Orca's settings (Settings › Integrations › Linear).
+        </Text>
+      ) : null}
+      {answer.projectsTruncated === true ? (
+        <Text size="sm" tone="warning">
+          Orca stopped reading the Linear projects before the last one, so some aren't offered.
+        </Text>
+      ) : null}
+    </>
   )
 }
 

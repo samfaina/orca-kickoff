@@ -4935,8 +4935,13 @@ const linearQuery = (fields: Record<string, string>) => JSON.stringify(fields)
 /** The filter a Linear project has before it stores any. */
 const assignedFilter = { id: 'assigned', name: 'Assigned to me', queries: [linearQuery({ assignee: 'me' })] }
 
-/** The invented teams of the Acme workspace, as `linear.choices` answers them. */
-const LINEAR_CHOICES = { kind: 'ready' as const, teams: [{ key: 'ENG', name: 'Engineering' }, { key: 'DES', name: 'Design' }] }
+/** The invented teams and Linear projects of the Acme workspace, as `linear.choices` answers them
+ *  with no team. */
+const LINEAR_CHOICES = {
+  kind: 'ready' as const,
+  teams: [{ key: 'ENG', name: 'Engineering' }, { key: 'DES', name: 'Design' }],
+  projects: [{ id: 'pr-1', name: 'Dark mode' }, { id: 'pr-2', name: 'Onboarding' }]
+}
 
 /** The names of the invented states and labels of each Acme team. Design has a state named Open,
  *  which `--state` can't tell from Orca's own open. */
@@ -4947,12 +4952,13 @@ const LINEAR_TEAM_LISTS: Record<string, { states: string[]; labels: string[] }> 
 
 type LinearChoicesInput = { workspaceId: string; team?: string }
 
-/** `linear.choices` as the worker answers it for the Acme workspace: the teams, and with a team its
- *  states and labels, or Orca's failure for a team Acme doesn't have. */
+/** `linear.choices` as the worker answers it for the Acme workspace: the teams and the Linear
+ *  projects, or with a team the teams and its states and labels, or Orca's failure for a team Acme
+ *  doesn't have. */
 const acmeChoices = (input: LinearChoicesInput) => {
   if (!input.team) return LINEAR_CHOICES
   const lists = LINEAR_TEAM_LISTS[input.team]
-  return lists ? { ...LINEAR_CHOICES, ...lists } : { kind: 'error' as const, message: `No connected Linear team matched ${input.team}.` }
+  return lists ? { kind: 'ready' as const, teams: LINEAR_CHOICES.teams, ...lists } : { kind: 'error' as const, message: `No connected Linear team matched ${input.team}.` }
 }
 
 /** The panel on the web project on Linear with `storage`, whose `tasks.load` lists, as the worker
@@ -4983,7 +4989,7 @@ async function showLinearFilters(storage: ReturnType<typeof linearStored>, reque
   return { view, host, inputs }
 }
 
-type LinearField = 'team' | 'state' | 'assignee' | 'label' | 'order'
+type LinearField = 'team' | 'state' | 'assignee' | 'label' | 'project' | 'order'
 
 /** A field of the Linear query form at `index`, from 0. */
 const linearField = (field: LinearField, index = 0) => ({ type: 'Select', testId: `linear-${field}-${index}` })
@@ -5086,14 +5092,15 @@ test('the Linear query form asks for the teams of the workspace the project read
     }
   })
   const opened = view.press(editFilter)
-  await drawn(view, { type: 'Spinner', label: 'Loading the Linear teams' })
-  const optionsWhileLoading = linearOptions(view, 'team')
+  await drawn(view, { type: 'Spinner', label: 'Loading the Linear teams and projects' })
+  const optionsWhileLoading = [linearOptions(view, 'team'), linearOptions(view, 'project')]
   answer.release()
   await opened
   assert.deepEqual(asked, [{ workspaceId: 'ws-2' }])
-  assert.deepEqual(optionsWhileLoading, ['Any team'])
-  assert.equal(view.find({ type: 'Spinner', label: 'Loading the Linear teams' }), null)
+  assert.deepEqual(optionsWhileLoading, [['Any team'], ['Any project']])
+  assert.equal(view.find({ type: 'Spinner', label: 'Loading the Linear teams and projects' }), null)
   assert.deepEqual(linearOptions(view, 'team'), ['Any team', 'Engineering (ENG)', 'Design (DES)'])
+  assert.deepEqual(linearOptions(view, 'project'), ['Any project', 'Dark mode', 'Onboarding'])
   // Listed once, the teams aren't asked for again.
   await view.press({ type: 'Button', text: 'Cancel' })
   await view.press(editFilter)
@@ -5111,9 +5118,66 @@ test("a stored team the workspace doesn't have stays chosen, marked not found, a
     'linear.choices': { kind: 'error', message: 'orca failed: Orca is not running.' }
   })
   await failing.view.press(editFilter)
-  assert.ok(failing.view.find({ type: 'Text', text: "Couldn't list the Linear teams: orca failed: Orca is not running." }))
+  assert.ok(failing.view.find({ type: 'Text', text: "Couldn't list the Linear teams and projects: orca failed: Orca is not running." }))
   assert.equal(failing.view.valueOf(linearField('team')), 'OPS')
   assert.deepEqual(linearOptions(failing.view, 'team'), ['Any team', 'OPS'])
+})
+
+test('Project offers Any project, its default, and the Linear projects of the workspace by name, and a chosen one is stored by its id', async () => {
+  const mine = { id: 'f-mine', name: 'Mine', queries: [linearQuery({ assignee: 'me' }), linearQuery({ team: 'ENG', project: 'pr-2' })] }
+  const { view, host } = await showLinearFilters(linearStored({ filters: { linear: [mine] } }))
+  await view.press(editFilter)
+  assert.equal(view.find(linearField('project'))?.label, 'Project')
+  assert.equal(view.valueOf(linearField('project')), ':any')
+  assert.deepEqual(linearOptions(view, 'project'), ['Any project', 'Dark mode', 'Onboarding'])
+  assert.equal(view.valueOf(linearField('project', 1)), 'pr-2')
+  // A project isn't a team's: Project can be chosen with Any team, and choosing a team keeps it.
+  await view.select(linearField('project'), 'pr-1')
+  await view.select(linearField('team'), 'DES')
+  await view.select(linearField('project', 1), ':any')
+  await view.press(saveButton)
+  assert.deepEqual(storedLinearQueries(host), [{ team: 'DES', assignee: 'me', project: 'pr-1' }, { team: 'ENG' }])
+  await view.press(editFilter)
+  await view.select(linearField('team'), ':any')
+  assert.equal(view.valueOf(linearField('project')), 'pr-1')
+  assert.deepEqual(view.errors, [])
+})
+
+test("a stored Linear project the workspace doesn't have stays chosen, marked not found, and so does one while the projects load or can't be read", async () => {
+  const answer = held()
+  const mine = { id: 'f-mine', name: 'Mine', queries: [linearQuery({ project: 'pr-9' })] }
+  const { view } = await showLinearFilters(linearStored({ filters: { linear: [mine] } }), {
+    'linear.choices': async () => {
+      await answer.released
+      return LINEAR_CHOICES
+    }
+  })
+  const opened = view.press(editFilter)
+  await drawn(view, { type: 'Spinner', label: 'Loading the Linear teams and projects' })
+  const whileLoading = linearOptions(view, 'project')
+  answer.release()
+  await opened
+  assert.deepEqual(whileLoading, ['Any project', 'pr-9'])
+  assert.equal(view.valueOf(linearField('project')), 'pr-9')
+  assert.deepEqual(linearOptions(view, 'project'), ['Any project', 'Dark mode', 'Onboarding', 'pr-9 (not found)'])
+  await view.unmount()
+  const failing = await showLinearFilters(linearStored({ filters: { linear: [mine] } }), {
+    'linear.choices': { kind: 'error', message: 'orca failed: Orca is not running.' }
+  })
+  await failing.view.press(editFilter)
+  assert.ok(failing.view.find({ type: 'Text', text: "Couldn't list the Linear teams and projects: orca failed: Orca is not running." }))
+  assert.equal(failing.view.valueOf(linearField('project')), 'pr-9')
+  assert.deepEqual(linearOptions(failing.view, 'project'), ['Any project', 'pr-9'])
+})
+
+test('when Orca stopped reading the Linear projects before the last one, the form says so, and a stored project not among them is not marked not found', async () => {
+  const mine = { id: 'f-mine', name: 'Mine', queries: [linearQuery({ project: 'pr-9' })] }
+  const { view } = await showLinearFilters(linearStored({ filters: { linear: [mine] } }), {
+    'linear.choices': { ...LINEAR_CHOICES, projectsTruncated: true }
+  })
+  await view.press(editFilter)
+  assert.ok(view.find({ type: 'Text', text: "Orca stopped reading the Linear projects before the last one, so some aren't offered." }))
+  assert.deepEqual(linearOptions(view, 'project'), ['Any project', 'Dark mode', 'Onboarding', 'pr-9'])
 })
 
 /** The value of the Linear query field `field` at `index`, and whether it can be changed. From its
@@ -5132,7 +5196,7 @@ test("with a team chosen, State offers Open and the team's states and Label Any 
   await view.press(editFilter)
   assert.deepEqual(
     view.findAll({ type: 'Select' }).filter((select) => /^linear-/.test(select.key ?? '')).map((select) => select.label),
-    ['Team', 'State', 'Assignee', 'Label', 'Order', 'Team', 'State', 'Assignee', 'Label', 'Order']
+    ['Team', 'State', 'Assignee', 'Label', 'Project', 'Order', 'Team', 'State', 'Assignee', 'Label', 'Project', 'Order']
   )
   assert.deepEqual(linearChoice(view, 'state'), ['In Progress', true])
   assert.deepEqual(linearOptions(view, 'state'), ['Open', 'Backlog', 'In Progress', 'Done'])
