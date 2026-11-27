@@ -1,7 +1,7 @@
 // Prompt templates: `{{name}}` filled from the task, the project and the branch (a Start's
 // filled-in branch template, else its worktree name; a Run here's current branch). No Node
 // imports, so the panel can use the constants too.
-import type { ProjectRef, ProjectSettings, PromptTemplate, Task } from './protocol'
+import type { ProjectRef, ProjectSettings, PromptTemplate, Task, TrackerKeys } from './protocol'
 
 /** The text of the template a project lists before it stores any of its own while there is no
  *  global template, and of each new template. A constant, never stored. */
@@ -165,6 +165,10 @@ export const MAX_PROMPT = 30_000
  *  the only one in JQL queries. */
 export const JIRA_PROJECT_VARIABLE = 'jira_project'
 
+/** The variable that names the project's Linear team key, as `{{linear_team}}`: in templates, and
+ *  as a Linear query's team. */
+export const LINEAR_TEAM_VARIABLE = 'linear_team'
+
 /** The variables a template can use, in the order the panel lists them. */
 export const TEMPLATE_VARIABLES = [
   'task_key',
@@ -175,7 +179,8 @@ export const TEMPLATE_VARIABLES = [
   'tracker',
   'repo',
   'branch',
-  JIRA_PROJECT_VARIABLE
+  JIRA_PROJECT_VARIABLE,
+  LINEAR_TEAM_VARIABLE
 ] as const
 
 type TemplateVariable = (typeof TEMPLATE_VARIABLES)[number]
@@ -191,17 +196,18 @@ export const TEMPLATE_VARIABLE_DESCRIPTIONS: Record<TemplateVariable, string> = 
   repo: "The project's repository (owner/name) when Orca knows it, else the project's name.",
   branch:
     "The new worktree's git branch from the branch template the project uses, its own or the global one, such as feature/WEB-12__add-dark-mode. Without a branch template, the worktree's name, such as web-12-add-dark-mode. It doesn't include a -2 Orca may add. In a Run here, the current branch of the worktree selected in Orca, or nothing when it has none.",
-  [JIRA_PROJECT_VARIABLE]: "The project's Jira project key, such as WEB, set in Project settings. Empty when it has none."
+  [JIRA_PROJECT_VARIABLE]: "The project's Jira project key, such as WEB, set in Project settings. Empty when it has none.",
+  [LINEAR_TEAM_VARIABLE]: "The project's Linear team key, such as ENG, set in Project settings. Empty when it has none."
 }
 
 export type PromptResult = { ok: true; prompt: string } | { ok: false; message: string }
 
-/** The prompt for `task` from a template's text, in a project whose Jira project key is
- *  `jiraProjectKey` ('' for none), with `branch` as `{{branch}}`: a Start's filled-in branch
+/** The prompt for `task` from a template's text, in a project with the keys `keys`, its Jira
+ *  project key and Linear team key, with `branch` as `{{branch}}`: a Start's filled-in branch
  *  template, else its worktree name, or a Run here's current branch. An empty text gives the task
  *  URL. A prompt over MAX_PROMPT characters is refused. */
-export function buildPrompt(text: string, task: Task, project: ProjectRef, branch: string, jiraProjectKey: string): PromptResult {
-  const prompt = text === '' ? task.url : fillTemplate(text, templateVariables(task, project, branch, jiraProjectKey))
+export function buildPrompt(text: string, task: Task, project: ProjectRef, branch: string, keys: TrackerKeys): PromptResult {
+  const prompt = text === '' ? task.url : fillTemplate(text, templateVariables(task, project, branch, keys))
   if (prompt.length > MAX_PROMPT) {
     return {
       ok: false,
@@ -211,7 +217,7 @@ export function buildPrompt(text: string, task: Task, project: ProjectRef, branc
   return { ok: true, prompt }
 }
 
-function templateVariables(task: Task, project: ProjectRef, branch: string, jiraProjectKey: string): Record<TemplateVariable, string> {
+function templateVariables(task: Task, project: ProjectRef, branch: string, keys: TrackerKeys): Record<TemplateVariable, string> {
   return {
     task_key: task.key,
     task_title: task.title,
@@ -221,7 +227,8 @@ function templateVariables(task: Task, project: ProjectRef, branch: string, jira
     tracker: task.tracker,
     repo: project.repo ?? project.name,
     branch,
-    [JIRA_PROJECT_VARIABLE]: jiraProjectKey
+    [JIRA_PROJECT_VARIABLE]: keys.jiraProjectKey ?? '',
+    [LINEAR_TEAM_VARIABLE]: keys.linearTeamKey ?? ''
   }
 }
 

@@ -186,7 +186,7 @@ test("linear-queries opens, with ✎, a Linear query form per query, with its te
   const options = (field: string, index: number) => (shown.find({ type: 'Select', testId: `linear-${field}-${index}` })?.props.options as { label: string }[]).map((option) => option.label)
   assert.deepEqual(options('state', 0), ['Open', 'Triage', 'Todo', 'In Progress', 'Done'])
   assert.deepEqual(options('label', 0), ['Any label', 'Bug', 'Feature'])
-  assert.deepEqual(options('team', 1), ['Any team', 'Engineering (ENG)', 'Design (DES)', 'OPS (not found)'])
+  assert.deepEqual(options('team', 1), ['Any team', "This project's team", 'Engineering (ENG)', 'Design (DES)', 'OPS (not found)'])
   assert.deepEqual(options('project', 0), ['Any project', 'Dark mode', 'Onboarding'])
   assert.deepEqual(options('project', 1), ['Any project', 'Dark mode', 'Onboarding', 'pr-9 (not found)'])
   assert.ok(shown.find({ text: "Couldn't list the states and labels of OPS: No connected Linear team matched OPS." }))

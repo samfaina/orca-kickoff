@@ -4,13 +4,16 @@ import {
   filterRecipes,
   filterWriteChanges,
   namesJiraProject,
+  namesLinearTeam,
   newFilterName,
   recipeFilterName,
   withFilterDeleted,
   withFilterMoved,
   withFilterSaved,
-  withJiraProjectVariable
+  withJiraProjectVariable,
+  withLinearTeamVariable
 } from './filter'
+import { readLinearQuery } from './linear-query'
 import { listedFilter, projectFilters } from './protocol'
 
 const DEFAULT_JQL = 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC'
@@ -97,6 +100,12 @@ test('GitHub offers the recipes Open and Assigned to me, and Jira none yet', () 
     { name: 'Assigned to me', queries: ['is:open assignee:@me'] }
   ])
   assert.deepEqual(filterRecipes('jira'), [])
+})
+
+test("Linear offers Assigned to me and Team open, whose team is This project's team only when the project has a Linear team key", () => {
+  const teams = (key?: string) => filterRecipes('linear', key).map((recipe) => [recipe.name, recipe.queries.map(readLinearQuery)])
+  assert.deepEqual(teams(), [['Assigned to me', [{ assignee: 'me' }]], ['Team open', [{}]]])
+  assert.deepEqual(teams('ENG'), [['Assigned to me', [{ assignee: 'me' }]], ['Team open', [{ team: '{{linear_team}}' }]]])
 })
 
 test("a recipe's filter is named after it, or after it with the first free number, ignoring case", () => {
@@ -283,6 +292,22 @@ test('a query names a Jira project key as `project = KEY`, spaces around = optio
   assert.equal(namesJiraProject('subproject = WEB', 'WEB'), false)
   assert.equal(namesJiraProject('project = {{jira_project}}', 'WEB'), false)
   assert.equal(namesJiraProject('project = WEB', ''), false)
+})
+
+test("a Linear query names a Linear team key when its team is that key, ignoring case; no key ('') is never named", () => {
+  assert.equal(namesLinearTeam('{"team":"ENG","assignee":"me"}', 'ENG'), true)
+  assert.equal(namesLinearTeam('{"team":"eng"}', 'ENG'), true)
+  assert.equal(namesLinearTeam('{"team":"OPS","label":"ENG"}', 'ENG'), false)
+  assert.equal(namesLinearTeam('{"team":"{{linear_team}}"}', 'ENG'), false)
+  assert.equal(namesLinearTeam('{"assignee":"me"}', 'ENG'), false)
+  assert.equal(namesLinearTeam('', 'ENG'), false)
+  assert.equal(namesLinearTeam('{"team":"ENG"}', ''), false)
+})
+
+test("a Linear query whose team is the Linear team key takes {{linear_team}} as its team, keeping its other fields; any other stays as written", () => {
+  assert.deepEqual(readLinearQuery(withLinearTeamVariable('{"team":"eng","state":"Todo","assignee":"me"}', 'ENG')), { team: '{{linear_team}}', state: 'Todo', assignee: 'me' })
+  assert.equal(withLinearTeamVariable('{"team":"OPS"}', 'ENG'), '{"team":"OPS"}')
+  assert.equal(withLinearTeamVariable('', 'ENG'), '')
 })
 
 test('the key in each `project = KEY` is replaced by {{jira_project}}, keeping the rest as written', () => {

@@ -2023,7 +2023,8 @@ test('the hint follows the text, and the closed Variables list gives each variab
         ['Code {{branch}}'],
         "{{branch}} The new worktree's git branch from the branch template the project uses, its own or the global one, such as feature/WEB-12__add-dark-mode. Without a branch template, the worktree's name, such as web-12-add-dark-mode. It doesn't include a -2 Orca may add. In a Run here, the current branch of the worktree selected in Orca, or nothing when it has none."
       ],
-      [['Code {{jira_project}}'], "{{jira_project}} The project's Jira project key, such as WEB, set in Project settings. Empty when it has none."]
+      [['Code {{jira_project}}'], "{{jira_project}} The project's Jira project key, such as WEB, set in Project settings. Empty when it has none."],
+      [['Code {{linear_team}}'], "{{linear_team}} The project's Linear team key, such as ENG, set in Project settings. Empty when it has none."]
     ]
   )
   assert.deepEqual(view.warnings, [])
@@ -4917,7 +4918,7 @@ test('switching a Linear project to another tracker and back keeps its Linear co
   assert.ok(view.find({ type: 'Text', text: /Connect Linear in Orca's settings/ }))
 })
 
-type StoredLinearFilters = { filters?: { linear?: StoredFilter[] }; shownFilterId?: { linear?: string } }
+type StoredLinearFilters = { filters?: { linear?: StoredFilter[] }; shownFilterId?: { linear?: string }; linearTeamKey?: string }
 
 /** Stored settings of the web project on Linear (Orca connection), reading `workspaceId`, with these
  *  other fields, and these global filters. */
@@ -5103,7 +5104,7 @@ test('on Linear, ✎ opens the filter editor with a Linear query form per query,
     ['Linear query', 'ENG', 'me', 'createdAt'],
     ['Linear query 2', ':any', 'null', 'updatedAt']
   ])
-  assert.deepEqual(linearOptions(view, 'team'), ['Any team', 'Engineering (ENG)', 'Design (DES)'])
+  assert.deepEqual(linearOptions(view, 'team'), ['Any team', "This project's team", 'Engineering (ENG)', 'Design (DES)'])
   assert.deepEqual(linearOptions(view, 'assignee'), ['Me', 'Unassigned', 'Anyone'])
   assert.deepEqual(linearOptions(view, 'order'), ['Recently updated first', 'Recently created first'])
   assert.deepEqual(
@@ -5180,9 +5181,9 @@ test('the Linear query form asks for the teams of the workspace the project read
   answer.release()
   await opened
   assert.deepEqual(asked, [{ workspaceId: 'ws-2' }])
-  assert.deepEqual(optionsWhileLoading, [['Any team'], ['Any project']])
+  assert.deepEqual(optionsWhileLoading, [['Any team', "This project's team"], ['Any project']])
   assert.equal(view.find({ type: 'Spinner', label: 'Loading the Linear teams and projects' }), null)
-  assert.deepEqual(linearOptions(view, 'team'), ['Any team', 'Engineering (ENG)', 'Design (DES)'])
+  assert.deepEqual(linearOptions(view, 'team'), ['Any team', "This project's team", 'Engineering (ENG)', 'Design (DES)'])
   assert.deepEqual(linearOptions(view, 'project'), ['Any project', 'Dark mode', 'Onboarding'])
   // Listed once, the teams aren't asked for again.
   await view.press({ type: 'Button', text: 'Cancel' })
@@ -5195,7 +5196,7 @@ test("a stored team the workspace doesn't have stays chosen, marked not found, a
   const { view } = await showLinearFilters(linearStored({ filters: { linear: [mine] } }))
   await view.press(editFilter)
   assert.equal(view.valueOf(linearField('team')), 'OPS')
-  assert.deepEqual(linearOptions(view, 'team'), ['Any team', 'Engineering (ENG)', 'Design (DES)', 'OPS (not found)'])
+  assert.deepEqual(linearOptions(view, 'team'), ['Any team', "This project's team", 'Engineering (ENG)', 'Design (DES)', 'OPS (not found)'])
   await view.unmount()
   const failing = await showLinearFilters(linearStored({ filters: { linear: [mine] } }), {
     'linear.choices': { kind: 'error', message: 'orca failed: Orca is not running.' }
@@ -5203,7 +5204,7 @@ test("a stored team the workspace doesn't have stays chosen, marked not found, a
   await failing.view.press(editFilter)
   assert.ok(failing.view.find({ type: 'Text', text: "Couldn't list the Linear teams and projects: orca failed: Orca is not running." }))
   assert.equal(failing.view.valueOf(linearField('team')), 'OPS')
-  assert.deepEqual(linearOptions(failing.view, 'team'), ['Any team', 'OPS'])
+  assert.deepEqual(linearOptions(failing.view, 'team'), ['Any team', "This project's team", 'OPS'])
 })
 
 test('Project offers Any project, its default, and the Linear projects of the workspace by name, and a chosen one is stored by its id', async () => {
@@ -5494,12 +5495,137 @@ test('with no teams listed, the form says Linear may not be connected, and the t
   })
   await view.press(editFilter)
   assert.ok(view.find({ type: 'Text', text: /^Linear lists no teams\. Linear may not be connected: connect it in Orca's settings/ }))
-  assert.deepEqual(linearOptions(view, 'team'), ['Any team'])
+  assert.deepEqual(linearOptions(view, 'team'), ['Any team', "This project's team"])
   await view.press({ type: 'Button', text: 'Cancel' })
   await view.press(editFilter)
   assert.equal(asked, 2)
   assert.equal(view.find({ type: 'Text', text: /^Linear lists no teams/ }), null)
-  assert.deepEqual(linearOptions(view, 'team'), ['Any team', 'Engineering (ENG)', 'Design (DES)'])
+  assert.deepEqual(linearOptions(view, 'team'), ['Any team', "This project's team", 'Engineering (ENG)', 'Design (DES)'])
+})
+
+const linearTeamKeySelect = { type: 'Select', label: 'Linear team key' }
+
+test("a Linear project's settings show the Linear team key, None at first, chosen from the workspace's teams; a Jira or GitHub project's don't", async () => {
+  const { view, host, inputs } = await showLinearFilters(linearStored())
+  await view.press(gear)
+  assert.equal(view.valueOf(linearTeamKeySelect), ':none')
+  assert.deepEqual(optionLabels(view, 'Linear team key'), ['None', 'Engineering (ENG)', 'Design (DES)'])
+  assert.ok(view.find({ type: 'Text', text: /\{\{linear_team\}\}/ }))
+  const loads = inputs.length
+  await view.select(linearTeamKeySelect, 'ENG')
+  assert.equal(view.valueOf(linearTeamKeySelect), 'ENG')
+  assert.equal((storedProject(host) as StoredLinearFilters).linearTeamKey, 'ENG')
+  // A key chosen lists the tasks again, with Project settings kept open.
+  assert.equal(inputs.length, loads + 1)
+  assert.ok(view.find(settingsTitle))
+  await view.select(linearTeamKeySelect, ':none')
+  assert.equal(view.valueOf(linearTeamKeySelect), ':none')
+  assert.equal((storedProject(host) as StoredLinearFilters).linearTeamKey ?? '', '')
+  await view.select({ type: 'Select', label: 'Tracker' }, 'jira-orca')
+  assert.equal(view.find(linearTeamKeySelect), null)
+  await view.select({ type: 'Select', label: 'Tracker' }, 'github')
+  assert.equal(view.find(linearTeamKeySelect), null)
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.warnings, [])
+})
+
+test("a stored Linear team key the workspace doesn't have stays chosen, marked not found, and unmarked while the teams can't be read", async () => {
+  const { view } = await showLinearFilters(linearStored({ linearTeamKey: 'OPS' }))
+  await view.press(gear)
+  assert.equal(view.valueOf(linearTeamKeySelect), 'OPS')
+  assert.deepEqual(optionLabels(view, 'Linear team key'), ['None', 'Engineering (ENG)', 'Design (DES)', 'OPS (not found)'])
+  await view.unmount()
+  const failed = await showLinearFilters(linearStored({ linearTeamKey: 'OPS' }), { 'linear.choices': { kind: 'error', message: 'orca failed: Orca is not running.' } })
+  await failed.view.press(gear)
+  assert.equal(failed.view.valueOf(linearTeamKeySelect), 'OPS')
+  assert.deepEqual(optionLabels(failed.view, 'Linear team key'), ['None', 'OPS'])
+})
+
+test("a Linear query's Team can be This project's team, stored as {{linear_team}}, whose states and labels are the Linear team key's", async () => {
+  const asked: LinearChoicesInput[] = []
+  const { view, host } = await showLinearFilters(linearStored({ linearTeamKey: 'ENG' }), {
+    'linear.choices': (input: LinearChoicesInput) => (asked.push(input), acmeChoices(input))
+  })
+  await view.press(editFilter)
+  assert.deepEqual(linearOptions(view, 'team'), ['Any team', "This project's team (ENG)", 'Engineering (ENG)', 'Design (DES)'])
+  await view.select(linearField('team'), '{{linear_team}}')
+  assert.equal(view.valueOf(linearField('team')), '{{linear_team}}')
+  assert.deepEqual(asked.at(-1), { workspaceId: '', team: 'ENG' })
+  assert.deepEqual(linearOptions(view, 'state'), ['Open', 'Backlog', 'In Progress', 'Done'])
+  assert.deepEqual(linearOptions(view, 'label'), ['Any label', 'Bug', 'Feature'])
+  await view.select(linearField('label'), 'Bug')
+  await view.press(saveButton)
+  assert.deepEqual(storedLinearQueries(host), [{ team: '{{linear_team}}', assignee: 'me', label: 'Bug' }])
+  assert.deepEqual(view.errors, [])
+})
+
+test("a team stored as {{ linear_team }}, spaces inside the braces, shows as This project's team, with the key's lists, as it runs", async () => {
+  const spaced = { id: 'f-team', name: 'Team', queries: [linearQuery({ team: '{{ linear_team }}' })] }
+  const { view } = await showLinearFilters(linearStored({ linearTeamKey: 'ENG', filters: { linear: [spaced] } }))
+  await view.press(editFilter)
+  assert.equal(view.valueOf(linearField('team')), '{{linear_team}}')
+  assert.deepEqual(linearOptions(view, 'team'), ['Any team', "This project's team (ENG)", 'Engineering (ENG)', 'Design (DES)'])
+  assert.deepEqual(linearOptions(view, 'label'), ['Any label', 'Bug', 'Feature'])
+})
+
+test("without a Linear team key, This project's team is still offered, and a stored one stays chosen with lists of its own only", async () => {
+  const global = { id: 'g-team', name: 'Team open', queries: [linearQuery({ team: '{{linear_team}}' })] }
+  const { view } = await showLinearFilters(linearStored({}, { linear: [global] }))
+  await view.press(editFilter)
+  assert.equal(view.valueOf(linearField('team')), '{{linear_team}}')
+  assert.deepEqual(linearOptions(view, 'team'), ['Any team', "This project's team", 'Engineering (ENG)', 'Design (DES)'])
+  assert.deepEqual(linearOptions(view, 'state'), ['Open'])
+  assert.deepEqual(linearOptions(view, 'label'), ['Any label'])
+  assert.deepEqual(view.errors, [])
+})
+
+test('the recipe Team open takes This project\'s team when the project has a Linear team key', async () => {
+  const { view, host } = await showLinearFilters(linearStored({ linearTeamKey: 'ENG' }))
+  await view.press(newFilter)
+  await view.press(recipe('Team open'))
+  assert.equal(view.valueOf(linearField('team')), '{{linear_team}}')
+  await view.press(saveButton)
+  assert.deepEqual(storedLinearQueries(host, 1), [{ team: '{{linear_team}}' }])
+})
+
+const LINEAR_HINT = 'This filter names ENG. Use {{linear_team}} so each project lists its own tasks.'
+const useLinearVariable = { type: 'Button', text: 'Use {{linear_team}}' }
+
+test("a global Linear filter whose team is the project's Linear team key shows a hint under the queries, whose button rewrites the draft", async () => {
+  const teamGlobal = { id: 'g-team', name: 'Team', queries: [linearQuery({ team: 'ENG', state: 'Todo' }), linearQuery({ team: 'DES' })] }
+  const { view, host } = await showLinearFilters(linearStored({ linearTeamKey: 'ENG', filters: { linear: [assignedFilter] }, shownFilterId: { linear: 'g-team' } }, { linear: [teamGlobal] }))
+  await view.press(editFilter)
+  assert.ok(view.find({ type: 'Text', text: LINEAR_HINT }))
+  await view.press(useLinearVariable)
+  assert.deepEqual([view.valueOf(linearField('team', 0)), view.valueOf(linearField('team', 1))], ['{{linear_team}}', 'DES'])
+  assert.equal(view.find({ type: 'Text', text: LINEAR_HINT }), null)
+  assert.equal(view.find(useLinearVariable), null)
+  // Only the draft changed; Save stores it.
+  assert.deepEqual(storedGlobalFilters(host), { linear: [teamGlobal] })
+  await view.press(saveButton)
+  const saved = (storedGlobalFilters(host)?.linear?.[0]?.queries ?? []).map((query) => JSON.parse(query) as unknown)
+  assert.deepEqual(saved, [{ team: '{{linear_team}}', state: 'Todo' }, { team: 'DES' }])
+
+  // An own filter naming the key shows no hint.
+  await view.select(filterSelect, 'assigned')
+  await view.press(editFilter)
+  await view.select(linearField('team'), 'ENG')
+  assert.equal(view.find({ type: 'Text', text: LINEAR_HINT }), null)
+})
+
+test("the Linear hint doesn't show without a Linear team key", async () => {
+  const teamGlobal = { id: 'g-team', name: 'Team', queries: [linearQuery({ team: 'ENG' })] }
+  const { view } = await showLinearFilters(linearStored({}, { linear: [teamGlobal] }))
+  await view.press(editFilter)
+  assert.equal(view.find(globalSwitch)?.props.checked, true)
+  assert.equal(view.find(useLinearVariable), null)
+})
+
+test('a Linear filter that needs the Linear team key shows the message in the list without opening Project settings', async () => {
+  const message = 'This filter uses {{linear_team}}. Set the Linear team key in Project settings.'
+  const { view } = await showWith({ 'tasks.load': { kind: 'error', project: web, message, needsTrackerKey: true }, 'linear.choices': LINEAR_CHOICES }, linearStored())
+  assert.equal(view.find(settingsTitle), null)
+  assert.ok(view.find({ type: 'Callout', text: /Set the Linear team key in Project settings/ }))
 })
 
 test("the twg site and profile save themselves, keeping the other providers' settings, and Enter reloads", async () => {
@@ -6169,7 +6295,7 @@ test('a filter that needs the Jira project key shows the message in the list, un
   // The first load lists "Tasks", which needs the key; the next one "Mine", chosen after it.
   let loads = 0
   const { view } = await showFilters(filtersStored([tasksFilter, mineFilter]), {
-    'tasks.load': () => (++loads === 1 ? { kind: 'error', project: web, message, needsJiraProjectKey: true } : twgReady([twgTask('WEB-3')], { filterId: 'f-mine' }))
+    'tasks.load': () => (++loads === 1 ? { kind: 'error', project: web, message, needsTrackerKey: true } : twgReady([twgTask('WEB-3')], { filterId: 'f-mine' }))
   })
   assert.equal(view.find(settingsTitle), null)
   assert.equal(view.find(filterTitle('Edit filter')), null)

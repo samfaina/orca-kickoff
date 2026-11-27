@@ -4,8 +4,8 @@
 // them.
 import type { About } from './about'
 import { isRecord } from './json'
-import { INITIAL_LINEAR_QUERY } from './linear-query'
-import { fillTemplate, INITIAL_TEMPLATE_ID, INITIAL_TEMPLATE_NAME, JIRA_PROJECT_VARIABLE, sameTemplateName, usesVariable } from './template'
+import { INITIAL_LINEAR_QUERY, PROJECT_TEAM, readLinearQuery, withLinearQueryChanges } from './linear-query'
+import { fillTemplate, INITIAL_TEMPLATE_ID, INITIAL_TEMPLATE_NAME, JIRA_PROJECT_VARIABLE, LINEAR_TEAM_VARIABLE, sameTemplateName, usesVariable } from './template'
 
 export type TrackerId = 'github' | 'jira' | 'linear'
 export type ProviderId = 'github' | 'jira-orca' | 'jira-twg' | 'linear-orca'
@@ -89,6 +89,9 @@ export type ProjectSettings = {
   /** The key of the project's Jira project, such as WEB: trimmed and upper-cased (see
    *  `jiraProjectKey`). A JQL query names it as `{{jira_project}}`. Undefined or '': none. */
   jiraProjectKey?: string
+  /** The key of the project's Linear team, such as ENG: trimmed and upper-cased (see
+   *  `linearTeamKey`). A Linear query's team names it as `{{linear_team}}`. Undefined or '': none. */
+  linearTeamKey?: string
   /** The filters of each tracker, in order; both Jira providers list the same ones. Undefined or
    *  empty: one filter, "Tasks" with DEFAULT_JQL on Jira, "Open" with DEFAULT_GITHUB_QUERY on
    *  GitHub, "Assigned to me" with INITIAL_LINEAR_QUERY on Linear. */
@@ -205,6 +208,8 @@ function readProjectSettings(raw: Record<string, unknown>): ProjectSettings {
   if (PROVIDER_IDS.includes(raw.provider as ProviderId)) project.provider = raw.provider as ProviderId
   const key = typeof raw.jiraProjectKey === 'string' ? jiraProjectKey(raw.jiraProjectKey) : ''
   if (key !== '') project.jiraProjectKey = key
+  const team = typeof raw.linearTeamKey === 'string' ? linearTeamKey(raw.linearTeamKey) : ''
+  if (team !== '') project.linearTeamKey = team
   const filters: ByTracker<Filter[]> = {}
   const shownFilterId: ByTracker<string> = {}
   for (const tracker of TRACKER_IDS) {
@@ -323,6 +328,10 @@ export function jiraProjectKey(typed: string): string {
   return typed.trim().toUpperCase()
 }
 
+/** A Linear team key as it is stored, from the team chosen: trimmed and upper-cased, as the Jira
+ *  project key is. */
+export const linearTeamKey = jiraProjectKey
+
 /** A project's settings, or empty ones when it has none. */
 export function projectSettings(settings: Settings, projectId: string): ProjectSettings {
   return settings.projects[projectId] ?? { providers: {} }
@@ -433,18 +442,33 @@ export function filterQueries(queries: readonly string[]): FilterQuery[] {
  *  has none. */
 export const NO_JIRA_PROJECT_KEY = `This filter uses {{${JIRA_PROJECT_VARIABLE}}}. Set the Jira project key in Project settings.`
 
-/** `filter` with its queries as they run on `tracker`, in a project whose Jira project key is
- *  `jiraProjectKey` ('' for none): on Jira each `{{ jira_project }}` becomes the key; on GitHub,
- *  where it has no meaning, they run as written. Every run of the queries goes through it: the
- *  list, its next pages and a tracker search. A project without a key whose filter names it fails,
- *  and none of the filter's queries runs. What is stored doesn't change. */
-export function filterAsRun(filter: Filter, tracker: TrackerId, jiraProjectKey: string): { ok: true; filter: Filter } | { ok: false; message: string } {
-  if (tracker !== 'jira') return { ok: true, filter }
-  if (jiraProjectKey === '' && filter.queries.some((query) => usesVariable(query, JIRA_PROJECT_VARIABLE))) {
-    return { ok: false, message: NO_JIRA_PROJECT_KEY }
+/** What a list answers when a Linear query's team is the Linear team key and the project has none. */
+export const NO_LINEAR_TEAM_KEY = `This filter uses {{${LINEAR_TEAM_VARIABLE}}}. Set the Linear team key in Project settings.`
+
+/** The keys of a project that its filters and prompt templates name as variables: its Jira project
+ *  key and its Linear team key. Undefined or '': none. */
+export type TrackerKeys = Pick<ProjectSettings, 'jiraProjectKey' | 'linearTeamKey'>
+
+/** `filter` with its queries as they run on `tracker`, in a project with the keys `keys`: on Jira
+ *  each `{{ jira_project }}` becomes the Jira project key; on Linear a Linear query whose team is
+ *  `{{ linear_team }}` takes the Linear team key as its team; on GitHub, where neither has a
+ *  meaning, they run as written. Every run of the queries goes through it: the list, its next pages
+ *  and a tracker search. A project without the key its filter names fails, and none of the
+ *  filter's queries runs. What is stored doesn't change. */
+export function filterAsRun(filter: Filter, tracker: TrackerId, keys: TrackerKeys): { ok: true; filter: Filter } | { ok: false; message: string } {
+  if (tracker === 'jira') {
+    const key = keys.jiraProjectKey ?? ''
+    if (key === '' && filter.queries.some((query) => usesVariable(query, JIRA_PROJECT_VARIABLE))) return { ok: false, message: NO_JIRA_PROJECT_KEY }
+    const variables = { [JIRA_PROJECT_VARIABLE]: key }
+    return { ok: true, filter: { ...filter, queries: filter.queries.map((query) => fillTemplate(query, variables)) } }
   }
-  const variables = { [JIRA_PROJECT_VARIABLE]: jiraProjectKey }
-  return { ok: true, filter: { ...filter, queries: filter.queries.map((query) => fillTemplate(query, variables)) } }
+  if (tracker === 'linear') {
+    const key = keys.linearTeamKey ?? ''
+    const namesTeamKey = (query: string) => readLinearQuery(query).team === PROJECT_TEAM
+    if (key === '' && filter.queries.some(namesTeamKey)) return { ok: false, message: NO_LINEAR_TEAM_KEY }
+    return { ok: true, filter: { ...filter, queries: filter.queries.map((query) => (namesTeamKey(query) ? withLinearQueryChanges(query, { team: key }) : query)) } }
+  }
+  return { ok: true, filter }
 }
 
 /** How many queries a provider runs to list the project's tasks: the non-blank queries of the
@@ -495,10 +519,10 @@ export type TaskList =
   /** No provider for this project. */
   | { kind: 'needs-config'; project: ProjectRef }
   /** `filterId`: the filter one of whose queries failed, or that has none to run; the panel opens
-   *  the filter editor on it. `needsJiraProjectKey`: the filter's JQL queries name the Jira
-   *  project key and the project has none; the list shows the message, and Project settings, where
-   *  the key is set, doesn't open by itself. */
-  | { kind: 'error'; project: ProjectRef | null; message: string; filterId?: string; needsJiraProjectKey?: true }
+   *  the filter editor on it. `needsTrackerKey`: the filter names one of the project's
+   *  `TrackerKeys`, the Jira project key or the Linear team key, and the project has none; the list
+   *  shows the message, and Project settings, where the key is set, doesn't open by itself. */
+  | { kind: 'error'; project: ProjectRef | null; message: string; filterId?: string; needsTrackerKey?: true }
   | {
       kind: 'ready'
       project: ProjectRef

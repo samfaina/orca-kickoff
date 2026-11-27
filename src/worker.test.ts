@@ -512,7 +512,7 @@ test('without a Jira project key, a filter naming {{jira_project}} runs no query
     kind: 'error',
     project: { id: 'github:acme/web', name: 'web', repo: 'acme/web' },
     message: 'This filter uses {{jira_project}}. Set the Jira project key in Project settings.',
-    needsJiraProjectKey: true
+    needsTrackerKey: true
   })
   assert.equal(calls.some((call) => call.tool === 'twg'), false)
   const listed = await worker.request('tasks.load', { filterId: 'f-mine' })
@@ -739,6 +739,52 @@ test('a blank tracker search on Linear lists the filter as usual, without --quer
   assert.ok(list.kind === 'ready')
   assert.deepEqual(list.tasks.map((task) => task.key), ['ENG-1'])
   assert.deepEqual(linearCalls(calls), [['linear', 'list-issues', '--state', 'open', '--assignee', 'me', '--order-by', 'updatedAt', '--limit', '50', '--json']])
+})
+
+test("a Linear query whose team is {{linear_team}} lists the project's Linear team key, on its first page, its next pages and in a tracker search", async () => {
+  const filter = { id: 'f-team', name: 'Team open', queries: ['{"team":"{{linear_team}}"}'] }
+  const answer = (args: string[]) => linearPage([linearIssue('ENG-4')], args.includes('--cursor') ? null : 'cursor-2')
+  const storage = linearSettings({ linearTeamKey: 'ENG', filters: { linear: [filter] } })
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca linear list-issues': answer }, { storage })
+  assert.equal((await worker.request('tasks.load', {})).kind, 'ready')
+  assert.equal((await worker.request('tasks.load', { cursor: '0:cursor-2' })).kind, 'ready')
+  assert.equal((await worker.request('tasks.load', { query: 'dark' })).kind, 'ready')
+  assert.deepEqual(linearCalls(calls), [
+    ['linear', 'list-issues', '--team', 'ENG', '--state', 'open', '--order-by', 'updatedAt', '--limit', '50', '--json'],
+    ['linear', 'list-issues', '--team', 'ENG', '--state', 'open', '--order-by', 'updatedAt', '--limit', '50', '--cursor', 'cursor-2', '--json'],
+    ['linear', 'list-issues', '--team', 'ENG', '--state', 'open', '--order-by', 'updatedAt', '--limit', '50', '--query', 'dark', '--json']
+  ])
+})
+
+test('without a Linear team key, a filter whose team is {{linear_team}} runs no query and asks for the key in Project settings; a filter without it lists', async () => {
+  const team = { id: 'f-team', name: 'Team open', queries: ['{"assignee":"me"}', '{"team":"{{linear_team}}"}'] }
+  const mine = { id: 'f-mine', name: 'Mine', queries: ['{"assignee":"me"}'] }
+  const storage = linearSettings({ jiraProjectKey: 'WEB', filters: { linear: [team, mine] } })
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca linear list-issues': linearPage([linearIssue('ENG-3')]) }, { storage })
+  assert.deepEqual(await worker.request('tasks.load', {}), {
+    kind: 'error',
+    project: { id: 'github:acme/web', name: 'web', repo: 'acme/web' },
+    message: 'This filter uses {{linear_team}}. Set the Linear team key in Project settings.',
+    needsTrackerKey: true
+  })
+  assert.deepEqual(linearCalls(calls), [])
+  const listed = await worker.request('tasks.load', { filterId: 'f-mine' })
+  assert.ok(listed.kind === 'ready')
+  assert.deepEqual(listed.tasks.map((task) => task.key), ['ENG-3'])
+})
+
+test("a global Linear filter whose team is {{linear_team}} lists each project's own team", async () => {
+  const global = { filters: { linear: [{ id: 'g-team', name: 'Team open', queries: ['{"team":"{{linear_team}}"}'] }] } }
+  const teams: string[] = []
+  for (const linearTeamKey of ['ENG', 'OPS']) {
+    const project = { ...linearSettings({ linearTeamKey }).settings.projects['github:acme/web'] }
+    const { worker, calls } = await start({ ...ORCA_OK, 'orca linear list-issues': linearPage([]) }, { storage: { settings: { version: 1, projects: { 'github:acme/web': project }, global } } })
+    const list = await worker.request('tasks.load', {})
+    assert.ok(list.kind === 'ready')
+    assert.equal(list.filterId, 'g-team')
+    teams.push(...linearCalls(calls).map((args) => args[args.indexOf('--team') + 1]))
+  }
+  assert.deepEqual(teams, ['ENG', 'OPS'])
 })
 
 test('a Linear filter whose queries are all blank fails without running Orca, naming the filter for the panel to open its editor', async () => {
@@ -1355,6 +1401,15 @@ const twoTemplates = {
 test("Start fills {{jira_project}} with the project's Jira project key, or with nothing without one", async () => {
   for (const [jiraProjectKey, prompt] of [['WEB', 'Fix #42 in WEB'], [undefined, 'Fix #42 in ']] as const) {
     const project = { providers: {}, template: 'Fix {{task_key}} in {{jira_project}}', ...(jiraProjectKey ? { jiraProjectKey } : {}) }
+    const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED }, { storage: { settings: { version: 1, projects: { 'github:acme/web': project } } } })
+    await worker.request('task.start', startWeb42)
+    assert.deepEqual(creates(calls)[0].args.slice(-2), ['--prompt', prompt])
+  }
+})
+
+test("Start fills {{linear_team}} with the project's Linear team key, or with nothing without one", async () => {
+  for (const [linearTeamKey, prompt] of [['ENG', 'Fix #42 for ENG'], [undefined, 'Fix #42 for ']] as const) {
+    const project = { providers: {}, template: 'Fix {{task_key}} for {{linear_team}}', jiraProjectKey: 'WEB', ...(linearTeamKey ? { linearTeamKey } : {}) }
     const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED }, { storage: { settings: { version: 1, projects: { 'github:acme/web': project } } } })
     await worker.request('task.start', startWeb42)
     assert.deepEqual(creates(calls)[0].args.slice(-2), ['--prompt', prompt])

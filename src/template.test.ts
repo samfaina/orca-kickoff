@@ -31,50 +31,52 @@ const branch = 'web-12-add-dark-mode-to'
 
 test('every variable is filled, also with spaces inside the braces', () => {
   const template =
-    '{{task_key}}|{{ task_title }}|{{task_url}}|{{  task_description}}|{{task_status }}|{{tracker}}|{{repo}}|{{branch}}|{{ jira_project }}'
-  assert.deepEqual(buildPrompt(template, task, web, branch, 'WEB'), {
+    '{{task_key}}|{{ task_title }}|{{task_url}}|{{  task_description}}|{{task_status }}|{{tracker}}|{{repo}}|{{branch}}|{{ jira_project }}|{{linear_team}}'
+  assert.deepEqual(buildPrompt(template, task, web, branch, { jiraProjectKey: 'WEB', linearTeamKey: 'ENG' }), {
     ok: true,
     prompt:
-      'WEB-12|Add dark mode to settings|https://example.atlassian.net/browse/WEB-12|Users want a dark theme.|To Do|jira|acme/web|web-12-add-dark-mode-to|WEB'
+      'WEB-12|Add dark mode to settings|https://example.atlassian.net/browse/WEB-12|Users want a dark theme.|To Do|jira|acme/web|web-12-add-dark-mode-to|WEB|ENG'
   })
 })
 
-test('a project without a Jira project key leaves jira_project empty', () => {
-  assert.deepEqual(buildPrompt('[{{jira_project}}]', task, web, branch, ''), { ok: true, prompt: '[]' })
+test('a project without a Jira project key leaves jira_project empty, and one without a Linear team key linear_team', () => {
+  assert.deepEqual(buildPrompt('[{{jira_project}}]', task, web, branch, { linearTeamKey: 'ENG' }), { ok: true, prompt: '[]' })
+  assert.deepEqual(buildPrompt('[{{linear_team}}]', task, web, branch, { jiraProjectKey: 'WEB' }), { ok: true, prompt: '[]' })
 })
 
-test('jira_project is a template variable, last, with what it gives', () => {
-  assert.equal(TEMPLATE_VARIABLES.at(-1), 'jira_project')
+test('jira_project and linear_team are template variables, last, with what they give', () => {
+  assert.deepEqual(TEMPLATE_VARIABLES.slice(-2), ['jira_project', 'linear_team'])
   assert.equal(TEMPLATE_VARIABLE_DESCRIPTIONS.jira_project, "The project's Jira project key, such as WEB, set in Project settings. Empty when it has none.")
+  assert.equal(TEMPLATE_VARIABLE_DESCRIPTIONS.linear_team, "The project's Linear team key, such as ENG, set in Project settings. Empty when it has none.")
 })
 
 test('an unknown variable is left as it is', () => {
-  assert.deepEqual(buildPrompt('{{task_key}} {{ assignee }}', task, web, branch, ''), { ok: true, prompt: 'WEB-12 {{ assignee }}' })
+  assert.deepEqual(buildPrompt('{{task_key}} {{ assignee }}', task, web, branch, {}), { ok: true, prompt: 'WEB-12 {{ assignee }}' })
 })
 
 test('a task without a status leaves task_status empty', () => {
-  assert.deepEqual(buildPrompt('[{{task_status}}]', { ...task, status: null }, web, branch, ''), { ok: true, prompt: '[]' })
+  assert.deepEqual(buildPrompt('[{{task_status}}]', { ...task, status: null }, web, branch, {}), { ok: true, prompt: '[]' })
 })
 
 test('a project without a repo uses its name for {{repo}}', () => {
   const notes: ProjectRef = { id: 'repo:r2', name: 'notes', repo: null }
-  assert.deepEqual(buildPrompt('{{repo}}', task, notes, branch, ''), { ok: true, prompt: 'notes' })
+  assert.deepEqual(buildPrompt('{{repo}}', task, notes, branch, {}), { ok: true, prompt: 'notes' })
 })
 
 test('a long description is cut to 4000 characters with …', () => {
-  const result = buildPrompt('{{task_description}}', { ...task, description: 'x'.repeat(5000) }, web, branch, '')
+  const result = buildPrompt('{{task_description}}', { ...task, description: 'x'.repeat(5000) }, web, branch, {})
   assert.ok(result.ok)
   assert.equal(result.prompt.length, 4000)
   assert.equal(result.prompt, `${'x'.repeat(3999)}…`)
 })
 
 test('an empty template gives the task URL', () => {
-  assert.deepEqual(buildPrompt('', task, web, branch, ''), { ok: true, prompt: 'https://example.atlassian.net/browse/WEB-12' })
+  assert.deepEqual(buildPrompt('', task, web, branch, {}), { ok: true, prompt: 'https://example.atlassian.net/browse/WEB-12' })
 })
 
 test('INITIAL_TEMPLATE_TEXT is the key and URL of the task', () => {
   assert.equal(INITIAL_TEMPLATE_TEXT, 'Complete {{task_key}}: {{task_url}}')
-  assert.deepEqual(buildPrompt(INITIAL_TEMPLATE_TEXT, task, web, branch, ''), {
+  assert.deepEqual(buildPrompt(INITIAL_TEMPLATE_TEXT, task, web, branch, {}), {
     ok: true,
     prompt: 'Complete WEB-12: https://example.atlassian.net/browse/WEB-12'
   })
@@ -88,11 +90,11 @@ test('a project without stored templates, and with no global ones, has one, "Def
 })
 
 test('a prompt over 30 000 characters is refused with a clear message', () => {
-  const result = buildPrompt('y'.repeat(30_001), task, web, branch, '')
+  const result = buildPrompt('y'.repeat(30_001), task, web, branch, {})
   assert.equal(result.ok, false)
   assert.ok(!result.ok)
   assert.match(result.message, /30[ ,]?000/)
-  assert.deepEqual(buildPrompt('y'.repeat(30_000), task, web, branch, ''), { ok: true, prompt: 'y'.repeat(30_000) })
+  assert.deepEqual(buildPrompt('y'.repeat(30_000), task, web, branch, {}), { ok: true, prompt: 'y'.repeat(30_000) })
 })
 
 const implement = { id: 't-impl', name: 'Implement', text: '/acme-skills:tdd {{task_url}}' }

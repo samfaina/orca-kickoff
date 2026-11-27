@@ -57,12 +57,16 @@ A ready-made filter on GitHub, **Open** or **Assigned to me**, that writes a new
 _Avoid_: Preset, template (that is a prompt template)
 
 **Linear query**:
-One of the queries, in order, that make up a filter on Linear. Linear has no query language, so a Linear query is a set of fields whose values the user chooses from lists rather than types, such as a team of the workspace, one of the team's states or labels, the assignee, one of the workspace's Linear projects and the order; a field left unchosen keeps its default, such as any team, and the state is open unless one is chosen. A state or label can be chosen only once a team is. The filter shows the tasks of the first, then those of the next, each task once, where it first appears.
+One of the queries, in order, that make up a filter on Linear. Linear has no query language, so a Linear query is a set of fields whose values the user chooses from lists rather than types, such as a team of the workspace or the project's Linear team key, one of the team's states or labels, the assignee, one of the workspace's Linear projects and the order; a field left unchosen keeps its default, such as any team, and the state is open unless one is chosen. A state or label can be chosen only once a team is. The filter shows the tasks of the first, then those of the next, each task once, where it first appears.
 _Avoid_: Filter (that is the whole named set of queries), search, view (Linear's own saved filter)
 
 **Linear recipe**:
-A ready-made filter on Linear, **Assigned to me** or **Team open**, that writes a new filter's name and Linear queries for the user to change before saving it. **Team open** leaves the team for the user to choose.
+A ready-made filter on Linear, **Assigned to me** or **Team open**, that writes a new filter's name and Linear queries for the user to change before saving it. **Team open** takes the project's Linear team key when it has one, and otherwise leaves the team for the user to choose.
 _Avoid_: Preset, template (that is a prompt template)
+
+**Linear team key**:
+The key of the Linear team a project's tasks are in, such as `ENG`, chosen among the workspace's teams in its Project settings. It is optional. A Linear query's team can be the Linear team key instead of a named team, so one filter lists each project's own team.
+_Avoid_: Team key (alone), team id, Jira project key (that is Jira's)
 
 **Tracker search**:
 Asking the tracker for the tasks of the filter shown that match the user's words, including tasks not loaded yet. It only narrows that filter, on GitHub, Jira and Linear alike: it never finds tasks outside it. On Linear it matches the whole text as one phrase of the title or the description, not word by word and not the task key.
@@ -121,7 +125,7 @@ An agent Orca can start on the host of the worktree an agent is launched in, the
 _Avoid_: Installed agent (that includes the turned-off ones), configured agent
 
 **Project settings**:
-What Kickoff keeps for one project: its tracker and how the provider reads it (such as the Jira site, or the Linear workspace when Orca is connected to more than one), its Jira project key, its own filters, its agent choice, its own prompt templates with the default template, and whether it uses its own branch settings or the global ones, with its own when it has them. Global filters, prompt templates and branch settings are not part of any one project's settings.
+What Kickoff keeps for one project: its tracker and how the provider reads it (such as the Jira site, or the Linear workspace when Orca is connected to more than one), its Jira project key, its Linear team key, its own filters, its agent choice, its own prompt templates with the default template, and whether it uses its own branch settings or the global ones, with its own when it has them. Global filters, prompt templates and branch settings are not part of any one project's settings.
 _Avoid_: Settings, Kickoff settings, plugin settings, config
 
 **Active project**:
