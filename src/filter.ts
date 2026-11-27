@@ -1,7 +1,7 @@
 // Editing filters: the rules that keep a project's filters and the global ones valid, naming new
-// ones, and the hint to name the Jira project key as `{{jira_project}}`. Each tracker has filters of
-// its own; which filters a project lists, and which one lists, is in src/protocol.ts. No Node
-// imports, so the panel can use them too.
+// ones, and the hints to name the Jira project key as `{{jira_project}}` and the Linear team key as
+// `{{linear_team}}`. Each tracker has filters of its own; which filters a project lists, and which
+// one lists, is in src/protocol.ts. No Node imports, so the panel can use them too.
 import {
   DEFAULT_GITHUB_QUERY,
   isInitialFilterId,
@@ -14,10 +14,11 @@ import {
   type GlobalSettings,
   type ListedFilter,
   type ProjectChanges,
-  type TrackerId
+  type TrackerId,
+  type TrackerKeys
 } from './protocol'
-import { INITIAL_LINEAR_QUERY, NEW_LINEAR_QUERY } from './linear-query'
-import { JIRA_PROJECT_VARIABLE } from './template'
+import { INITIAL_LINEAR_QUERY, NEW_LINEAR_QUERY, PROJECT_TEAM, readLinearQuery, withLinearQueryChanges } from './linear-query'
+import { JIRA_PROJECT_VARIABLE, LINEAR_TEAM_VARIABLE } from './template'
 
 /** What a write of filters changes in a project's settings: every tracker's filters and the one
  *  each shows, since a change replaces them whole. */
@@ -142,23 +143,26 @@ export function newFilterName(filters: readonly Filter[]): string {
  *  before saving it. */
 export type FilterRecipe = { name: string; queries: string[] }
 
-const RECIPES: Record<TrackerId, readonly FilterRecipe[]> = {
-  github: [
+/** Each tracker's recipes, in a project whose Linear team key is `linearTeamKey` ('' for none). */
+const RECIPES: Record<TrackerId, (linearTeamKey: string) => FilterRecipe[]> = {
+  github: () => [
     { name: 'Open', queries: [DEFAULT_GITHUB_QUERY] },
     { name: 'Assigned to me', queries: ['is:open assignee:@me'] }
   ],
-  jira: [],
-  // Team open leaves the team for the person to choose: Any team until they do.
-  linear: [
+  jira: () => [],
+  // Team open takes the project's team, as `{{linear_team}}`, when it has a Linear team key, else
+  // leaves the team for the person to choose: Any team until they do.
+  linear: (linearTeamKey) => [
     { name: 'Assigned to me', queries: [INITIAL_LINEAR_QUERY] },
-    { name: 'Team open', queries: [NEW_LINEAR_QUERY] }
+    { name: 'Team open', queries: [linearTeamKey === '' ? NEW_LINEAR_QUERY : withLinearQueryChanges(NEW_LINEAR_QUERY, { team: PROJECT_TEAM })] }
   ]
 }
 
 /** The recipes the filter editor offers a new filter on `tracker`: GitHub's and Linear's. Jira's JQL
- *  recipes come before the editor, with + (`src/jql-recipe.ts`). */
-export function filterRecipes(tracker: TrackerId): FilterRecipe[] {
-  return RECIPES[tracker].map((recipe) => ({ name: recipe.name, queries: [...recipe.queries] }))
+ *  recipes come before the editor, with + (`src/jql-recipe.ts`). In a project whose Linear team key
+ *  is `linearTeamKey` ('' for none), Linear's Team open takes `{{linear_team}}` as its team. */
+export function filterRecipes(tracker: TrackerId, linearTeamKey = ''): FilterRecipe[] {
+  return RECIPES[tracker](linearTeamKey)
 }
 
 /** The name of a new filter from the recipe `name`: that name, or "<name> 2", "<name> 3"…, the
@@ -194,4 +198,31 @@ export function namesJiraProject(query: string, key: string): boolean {
 export function withJiraProjectVariable(query: string, key: string): string {
   if (key === '') return query
   return query.replace(projectKeyPattern(key), (_whole, field: string) => `${field}{{${JIRA_PROJECT_VARIABLE}}}`)
+}
+
+/** Whether the Linear query `query` names the Linear team key `key` literally, as its team, ignoring
+ *  case: what the hint of a global Linear filter looks for. No key ('') is never named. */
+export function namesLinearTeam(query: string, key: string): boolean {
+  return key !== '' && readLinearQuery(query).team?.toUpperCase() === key.toUpperCase()
+}
+
+/** The Linear query `query` with `{{linear_team}}` as its team when its team is the Linear team key
+ *  `key`, so a global filter lists each project's own team; any other query as written. */
+export function withLinearTeamVariable(query: string, key: string): string {
+  return namesLinearTeam(query, key) ? withLinearQueryChanges(query, { team: PROJECT_TEAM }) : query
+}
+
+/** The hint of a global filter on `tracker` whose `queries` name one of the project's `keys`
+ *  literally, so it would list that project's tasks in every project: the key named, the variable
+ *  to name it as, and `rewrite`, which names it so in a query. Null when none is named, and on
+ *  GitHub, which has no such key. */
+export function trackerKeyHint(tracker: TrackerId, queries: readonly string[], keys: TrackerKeys): { key: string; variable: string; rewrite: (query: string) => string } | null {
+  const hint =
+    tracker === 'jira'
+      ? { key: keys.jiraProjectKey ?? '', variable: JIRA_PROJECT_VARIABLE, names: namesJiraProject, rewrite: withJiraProjectVariable }
+      : tracker === 'linear'
+        ? { key: keys.linearTeamKey ?? '', variable: LINEAR_TEAM_VARIABLE, names: namesLinearTeam, rewrite: withLinearTeamVariable }
+        : null
+  if (hint === null || !queries.some((query) => hint.names(query, hint.key))) return null
+  return { key: hint.key, variable: hint.variable, rewrite: (query) => hint.rewrite(query, hint.key) }
 }

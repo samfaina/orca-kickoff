@@ -14,6 +14,7 @@ import {
   withProjectChanges
 } from './protocol'
 import { defaultTemplate, projectTemplates } from './template'
+import { readLinearQuery } from './linear-query'
 
 const web = { id: 'github:acme/web', name: 'web', repo: 'acme/web' }
 const notes = { id: 'repo:r1', name: 'notes', repo: null }
@@ -181,8 +182,23 @@ test('a Linear project without filters lists "Assigned to me": one Linear query 
 
 test('a Linear query runs as written, with or without a Jira project key', () => {
   const me = { id: 'f-me', name: 'Me', queries: ['{"team":"{{jira_project}}"}'] }
-  assert.deepEqual(filterAsRun(me, 'linear', 'WEB'), { ok: true, filter: me })
-  assert.deepEqual(filterAsRun(me, 'linear', ''), { ok: true, filter: me })
+  assert.deepEqual(filterAsRun(me, 'linear', { jiraProjectKey: 'WEB' }), { ok: true, filter: me })
+  assert.deepEqual(filterAsRun(me, 'linear', {}), { ok: true, filter: me })
+})
+
+test("on Linear, a query whose team is {{linear_team}} runs as the project's Linear team key, its other fields and the other queries as written", () => {
+  const team = { id: 'f-team', name: 'Team', queries: ['{"team":"{{linear_team}}","assignee":"null"}', '', '{"team":"OPS","label":"{{linear_team}}"}'] }
+  const asRun = filterAsRun(team, 'linear', { linearTeamKey: 'ENG', jiraProjectKey: 'WEB' })
+  assert.ok(asRun.ok)
+  assert.deepEqual(asRun.filter.queries.map((query) => (query === '' ? '' : readLinearQuery(query))), [{ team: 'ENG', assignee: 'null' }, '', { team: 'OPS', label: '{{linear_team}}' }])
+})
+
+test('a Linear filter whose team is {{linear_team}} in a project without a Linear team key runs none of its queries, even with a Jira project key', () => {
+  const team = { id: 'f-team', name: 'Team', queries: ['{"assignee":"me"}', '{"team":"{{ linear_team }}"}'] }
+  const message = 'This filter uses {{linear_team}}. Set the Linear team key in Project settings.'
+  assert.deepEqual(filterAsRun(team, 'linear', { jiraProjectKey: 'WEB' }), { ok: false, message })
+  const me = { id: 'f-me', name: 'Me', queries: ['{"assignee":"me"}'] }
+  assert.deepEqual(filterAsRun(me, 'linear', {}), { ok: true, filter: me })
 })
 
 test("a Jira provider starts with its tool's defaults, and switching between the two Jira providers keeps every filter", () => {
@@ -199,6 +215,12 @@ test('the Jira project key is read trimmed and upper-cased; a blank one, or one 
   assert.deepEqual(readProject({ providers: {}, jiraProjectKey: '   ' }), { providers: {} })
   assert.deepEqual(readProject({ providers: {}, jiraProjectKey: 12 }), { providers: {} })
   assert.deepEqual(readProject({ providers: {} }), { providers: {} })
+})
+
+test('the Linear team key is read trimmed and upper-cased, apart from the Jira project key; a blank one, or one of another shape, is no key', () => {
+  assert.deepEqual(readProject({ providers: {}, linearTeamKey: ' eng ', jiraProjectKey: 'web' }), { providers: {}, linearTeamKey: 'ENG', jiraProjectKey: 'WEB' })
+  assert.deepEqual(readProject({ providers: {}, linearTeamKey: '   ' }), { providers: {} })
+  assert.deepEqual(readProject({ providers: {}, linearTeamKey: ['ENG'] }), { providers: {} })
 })
 
 test('the branch settings are read as stored, and settings stored before them read with none', () => {
@@ -226,26 +248,26 @@ test('branch settings of an unexpected shape are dropped, and so are branch type
 
 test('on Jira, each {{jira_project}} of a filter\'s queries runs as the Jira project key, also with spaces inside the braces', () => {
   const sprint = { id: 'f-sprint', name: 'Sprint', queries: ['project = {{jira_project}} ORDER BY Rank', '', 'project in ({{ jira_project }}, API) AND key != {{jira_project}}-1'] }
-  assert.deepEqual(filterAsRun(sprint, 'jira', 'WEB'), {
+  assert.deepEqual(filterAsRun(sprint, 'jira', { jiraProjectKey: 'WEB' }), {
     ok: true,
     filter: { ...sprint, queries: ['project = WEB ORDER BY Rank', '', 'project in (WEB, API) AND key != WEB-1'] }
   })
   // Other variables are not JQL variables, and stay as written.
-  const other = { ...sprint, queries: ['project = WEB AND summary ~ "{{task_key}}"'] }
-  assert.deepEqual(filterAsRun(other, 'jira', 'WEB'), { ok: true, filter: other })
+  const other = { ...sprint, queries: ['project = WEB AND summary ~ "{{task_key}}" AND team = "{{linear_team}}"'] }
+  assert.deepEqual(filterAsRun(other, 'jira', { jiraProjectKey: 'WEB', linearTeamKey: 'ENG' }), { ok: true, filter: other })
 })
 
 test('a filter naming {{jira_project}} in a project without a Jira project key runs none of its queries; one without the variable runs', () => {
   const sprint = { id: 'f-sprint', name: 'Sprint', queries: ['assignee = currentUser()', 'project = {{jira_project}}'] }
   const message = 'This filter uses {{jira_project}}. Set the Jira project key in Project settings.'
-  assert.deepEqual(filterAsRun(sprint, 'jira', ''), { ok: false, message })
-  assert.deepEqual(filterAsRun(mine, 'jira', ''), { ok: true, filter: mine })
+  assert.deepEqual(filterAsRun(sprint, 'jira', { linearTeamKey: 'ENG' }), { ok: false, message })
+  assert.deepEqual(filterAsRun(mine, 'jira', {}), { ok: true, filter: mine })
 })
 
-test('on GitHub, a search runs as written: {{jira_project}} has no meaning there', () => {
-  const triage = { id: 'f-triage', name: 'Triage', queries: ['is:open label:{{jira_project}}'] }
-  assert.deepEqual(filterAsRun(triage, 'github', 'WEB'), { ok: true, filter: triage })
-  assert.deepEqual(filterAsRun(triage, 'github', ''), { ok: true, filter: triage })
+test('on GitHub, a search runs as written: {{jira_project}} and {{linear_team}} have no meaning there', () => {
+  const triage = { id: 'f-triage', name: 'Triage', queries: ['is:open label:{{jira_project}} label:{{linear_team}}'] }
+  assert.deepEqual(filterAsRun(triage, 'github', { jiraProjectKey: 'WEB', linearTeamKey: 'ENG' }), { ok: true, filter: triage })
+  assert.deepEqual(filterAsRun(triage, 'github', {}), { ok: true, filter: triage })
 })
 
 test("a list runs the non-blank queries of its filter, on Jira and on GitHub", () => {

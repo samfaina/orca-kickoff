@@ -2,7 +2,7 @@
 // answers. Pure; the worker reads Orca and runs the launch.
 import type { AgentResolution } from './agent'
 import { agentLaunchArgs, findTaskWorktrees, type OrcaWorktree, type OrcaWorktreeStatus } from './orca'
-import { RUN_HERE_NEEDS_AGENT, type ProjectRef, type PromptTemplate, type Task } from './protocol'
+import { RUN_HERE_NEEDS_AGENT, type ProjectRef, type PromptTemplate, type Task, type TrackerKeys } from './protocol'
 import { buildPrompt, TEMPLATE_GONE } from './template'
 
 export type RunHere = {
@@ -15,8 +15,8 @@ export type RunHere = {
   agent: AgentResolution
   /** The template chosen for the task, undefined when the project no longer lists it. */
   template: PromptTemplate | undefined
-  /** '' for none. */
-  jiraProjectKey: string
+  /** The project's Jira project key and Linear team key, which the prompt can name. */
+  keys: TrackerKeys
 }
 
 /** The `orca agent launch` of a Run here of `task` in the active worktree, or why there is none: no
@@ -24,7 +24,7 @@ export type RunHere = {
  *  worktree, the agent doesn't resolve or is none, the template is gone, or the prompt is over the
  *  limit. The worktree is checked first: with none active, the agents can't be read either. `{{branch}}`
  *  is the active worktree's current branch, only as text. */
-export function runHereLaunch({ projectId, task, projects, worktrees, statuses, agent, template, jiraProjectKey }: RunHere): { ok: true; args: string[] } | { ok: false; message: string } {
+export function runHereLaunch({ projectId, task, projects, worktrees, statuses, agent, template, keys }: RunHere): { ok: true; args: string[] } | { ok: false; message: string } {
   const project = projects.find((candidate) => candidate.id === projectId)
   if (!project) return { ok: false, message: `Orca has no project "${projectId}".` }
   const active = statuses.find((row) => row.isActive)
@@ -38,7 +38,7 @@ export function runHereLaunch({ projectId, task, projects, worktrees, statuses, 
   if (!agent.ok) return agent
   if (agent.agent === null) return { ok: false, message: RUN_HERE_NEEDS_AGENT }
   if (!template) return { ok: false, message: TEMPLATE_GONE }
-  const prompt = buildPrompt(template.text, task, project, active.branch, jiraProjectKey)
+  const prompt = buildPrompt(template.text, task, project, active.branch, keys)
   if (!prompt.ok) return prompt
   return { ok: true, args: agentLaunchArgs({ worktreeId: worktree.id, agent: agent.agent, prompt: prompt.prompt }) }
 }

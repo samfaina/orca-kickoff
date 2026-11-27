@@ -39,13 +39,12 @@ import {
   filterNameProblem,
   filterRecipes,
   filterWriteChanges,
-  namesJiraProject,
   newFilterName,
   recipeFilterName,
+  trackerKeyHint,
   withFilterDeleted,
   withFilterMoved,
   withFilterSaved,
-  withJiraProjectVariable,
   type FilterMove,
   type FilterRecipe,
   type FilterWrite
@@ -53,7 +52,7 @@ import {
 import { projectBranchSettings, sameBranchSettings, usesGlobalBranchSettings, withBranchSwitched } from './branch-settings'
 import { isRecord } from './json'
 import { jqlRecipe, type JqlRecipeAnswers, type RecipeAssignees } from './jql-recipe'
-import { NEW_LINEAR_QUERY, readLinearQuery, withLinearQueryChanges, type LinearQuery } from './linear-query'
+import { NEW_LINEAR_QUERY, PROJECT_TEAM, readLinearQuery, withLinearQueryChanges, type LinearQuery } from './linear-query'
 import {
   BRANCH_VARIABLE_DESCRIPTIONS,
   BRANCH_VARIABLES,
@@ -71,6 +70,7 @@ import {
   globalSettings,
   globalTemplates,
   jiraProjectKey,
+  linearTeamKey,
   listedFilter,
   orcaDefaultAgent,
   projectFilters,
@@ -113,7 +113,7 @@ import { settingsSaver } from './settings-save'
 import {
   defaultTemplate,
   INITIAL_TEMPLATE_TEXT,
-  JIRA_PROJECT_VARIABLE,
+  LINEAR_TEAM_VARIABLE,
   projectTemplates,
   TEMPLATE_VARIABLE_DESCRIPTIONS,
   TEMPLATE_VARIABLES,
@@ -154,12 +154,13 @@ const PROVIDER_OPTIONS: { value: ProviderId; label: string }[] = [
   { value: 'linear-orca', label: 'Linear (Orca connection)' }
 ]
 
-/** Select values can't be empty, so these stand for "no tracker yet", "Orca's default site" and
- *  "Orca's selected Linear workspace". None can be a provider id, an Orca site id or a Linear
- *  workspace id. */
+/** Select values can't be empty, so these stand for "no tracker yet", "Orca's default site",
+ *  "Orca's selected Linear workspace" and "no Linear team key". None can be a provider id, an Orca
+ *  site id, a Linear workspace id or a team key. */
 const NO_TRACKER = ':none'
 const DEFAULT_SITE = ':default'
 const DEFAULT_WORKSPACE = ':default'
+const NO_TEAM_KEY = ':none'
 
 /** The listed project's settings, as the person sees them. `provider` is null while none is set.
  *  `filterSettings` holds every tracker's own filters and the one each showed last, as stored, and
@@ -171,6 +172,8 @@ type ShownSettings = {
   providers: ProviderConfigs
   /** '' while the project has none. */
   jiraProjectKey: string
+  /** '' while the project has none. */
+  linearTeamKey: string
   filterSettings: FilterSettings
   globalFilters: ByTracker<Filter[]>
   agent: string
@@ -519,7 +522,7 @@ type SettingsChange = Omit<ProjectChanges, keyof FilterSettings | keyof BranchSe
 function changeSettings(changes: SettingsChange): void {
   const current = read(shownSettings)
   if (!current) return
-  if (changes.provider !== undefined || changes.providers !== undefined || changes.jiraProjectKey !== undefined) {
+  if (changes.provider !== undefined || changes.providers !== undefined || changes.jiraProjectKey !== undefined || changes.linearTeamKey !== undefined) {
     trackerSettingsVersion++
     // A tracker search narrows the list the tracker settings give, which this changes.
     leaveTrackerSearch()
@@ -543,6 +546,7 @@ async function showSettings(project: ProjectRef): Promise<void> {
     provider,
     providers: settings.providers,
     jiraProjectKey: settings.jiraProjectKey ?? '',
+    linearTeamKey: settings.linearTeamKey ?? '',
     filterSettings: { filters: settings.filters, shownFilterId: settings.shownFilterId },
     globalFilters: globalSettings(stored).filters ?? {},
     agent: settings.agent ?? 'orca-default',
@@ -697,9 +701,15 @@ function openFilter(id: string | null, loadError: string | null = null, recipe: 
     confirmingDelete: false
   })
   if (current.tracker !== 'linear') return
-  const workspaceId = linearWorkspace(shown)
-  void loadLinearChoices(workspaceId)
-  for (const team of new Set(queries.map((query) => readLinearQuery(query).team))) if (team !== undefined) void loadLinearChoices(workspaceId, team)
+  void loadLinearChoices(linearWorkspace(shown))
+  loadTeamListsOf(shown, queries)
+}
+
+/** Asks for the states and labels of each team the Linear queries `queries` name, This project's
+ *  team as the project's Linear team key, in the workspace the project reads. */
+function loadTeamListsOf(shown: ShownSettings, queries: readonly string[]): void {
+  const teams = new Set(queries.map((query) => listedTeam(readLinearQuery(query).team, shown.linearTeamKey)))
+  for (const team of teams) if (team !== undefined) void loadLinearChoices(linearWorkspace(shown), team)
 }
 
 /** `queries` as the filter editor's draft holds them on `tracker`: one new query when there are
@@ -763,9 +773,12 @@ function changeFilterDraft(expected: FilterDraft, changes: Partial<FilterDraft>)
   update(filterDraft, (draft) => (draft && isSameDraft(draft, expected) ? { ...draft, ...changes } : draft))
 }
 
-/** Writes a recipe's name and queries into the draft of a new filter, the name made free. */
+/** Writes a recipe's name and queries into the draft of a new filter, the name made free. On Linear,
+ *  asks for the lists of the teams its queries name. */
 function useRecipe(draft: FilterDraft, filters: Filter[], recipe: FilterRecipe): void {
   changeFilterDraft(draft, { name: recipeFilterName(filters, recipe.name), queries: [...recipe.queries] })
+  const shown = read(shownSettings)
+  if (draft.tracker === 'linear' && shown) loadTeamListsOf(shown, recipe.queries)
 }
 
 /** Leaves the filter editor, or the choice of + before it, without saving. */
@@ -1833,6 +1846,7 @@ export default function Panel() {
         draft={filterEdit}
         filters={listedFilters(shown, filterEdit.tracker)}
         jiraProjectKey={shown.jiraProjectKey}
+        linearTeamKey={shown.linearTeamKey}
         linearWorkspaceId={linearWorkspace(shown)}
         projectName={project?.name ?? ''}
       />
@@ -1857,9 +1871,9 @@ export default function Panel() {
 
 /** Whether Project settings opens by itself: the project has no tracker, or its load failed for a
  *  reason other than a filter's query, which opens the filter editor instead, or than a missing
- *  Jira project key, which the list asks for. */
+ *  Jira project key or Linear team key, which the list asks for. */
 const needsSettings = (current: TaskList | null) =>
-  current?.kind === 'needs-config' || (current?.kind === 'error' && current.filterId === undefined && current.needsJiraProjectKey !== true)
+  current?.kind === 'needs-config' || (current?.kind === 'error' && current.filterId === undefined && current.needsTrackerKey !== true)
 
 /** The panel's title, since its tab shows only its icon, and its actions. `gear` shows the buttons
  *  that open the Prompt templates view and Project settings. */
@@ -2183,7 +2197,7 @@ function TrackerFields({ shown }: { shown: ShownSettings }) {
       {shown.provider === 'jira-orca' ? <JiraOrcaSettings providers={shown.providers} /> : null}
       {shown.provider === 'jira-twg' ? <JiraTwgSettings providers={shown.providers} /> : null}
       {shown.provider !== null && trackerOf(shown.provider) === 'jira' ? <JiraProjectKeyField value={shown.jiraProjectKey} /> : null}
-      {shown.provider === 'linear-orca' ? <LinearOrcaSettings providers={shown.providers} /> : null}
+      {shown.provider === 'linear-orca' ? <LinearOrcaSettings providers={shown.providers} teamKey={shown.linearTeamKey} /> : null}
     </Stack>
   )
 }
@@ -2191,8 +2205,10 @@ function TrackerFields({ shown }: { shown: ShownSettings }) {
 /** Linear (Orca connection)'s settings: the Workspace Select, only once more than one workspace is
  *  connected, or while the workspace chosen isn't among those connected, or isn't known to be yet,
  *  so it stays shown as chosen, marked not connected once the workspaces are read. A workspace
- *  chosen is stored and lists its tasks. */
-function LinearOrcaSettings({ providers }: { providers: ProviderConfigs }) {
+ *  chosen is stored and lists its tasks. Then the Linear team key, `teamKey` ('' for none), chosen
+ *  among the workspace's teams or None: a stored key the workspace doesn't have stays shown, marked
+ *  not found once the teams are read. A key chosen is stored and lists the tasks. */
+function LinearOrcaSettings({ providers, teamKey }: { providers: ProviderConfigs; teamKey: string }) {
   const { workspaceId } = providerConfig({ providers }, 'linear-orca')
   const connected = read(linearWorkspaces)
   const listed = connected !== null
@@ -2206,6 +2222,8 @@ function LinearOrcaSettings({ providers }: { providers: ProviderConfigs }) {
     listed,
     'not connected'
   )
+  const teams = readChoices(answer)?.teams ?? null
+  const teamOptions = withStored([{ value: NO_TEAM_KEY, label: 'None' }, ...(teams ?? []).map(teamOption)], teamKey || undefined, teams !== null)
   return (
     <Stack gap="sm">
       {(connected?.length ?? 0) > 1 || missing ? (
@@ -2233,6 +2251,20 @@ function LinearOrcaSettings({ providers }: { providers: ProviderConfigs }) {
       <Text size="sm" muted>
         Kickoff reads Linear through the connection saved in Orca. Connect Linear in Orca's settings first if you haven't.
       </Text>
+      <Stack gap="xs">
+        <Select
+          label="Linear team key"
+          value={teamKey || NO_TEAM_KEY}
+          options={teamOptions}
+          onChange={(value) => {
+            changeSettings({ linearTeamKey: value === NO_TEAM_KEY ? '' : linearTeamKey(value) })
+            loadKeepingSettingsOpen()
+          }}
+        />
+        <Text size="sm" muted>
+          {`The project's Linear team, if it has one. A Linear query takes it as This project's team, and prompt templates name it as {{${LINEAR_TEAM_VARIABLE}}}, so the same filter lists each project's own team.`}
+        </Text>
+      </Stack>
     </Stack>
   )
 }
@@ -2353,23 +2385,34 @@ function withStored(options: ChoiceOption[], stored: string | undefined, listed:
 /** The answer `answer` when it is read, else null. */
 const readChoices = (answer: ShownLinearChoices | undefined) => (answer !== undefined && answer !== 'loading' && answer.kind === 'ready' ? answer : null)
 
+/** A Linear team as a Team or Linear team key option: its name, then its key. */
+const teamOption = (team: { key: string; name: string }): ChoiceOption => ({ value: team.key, label: `${team.name} (${team.key})` })
+
+/** The team whose states and labels a Linear query's team `team` lists: the project's Linear team
+ *  key `teamKey` for This project's team, none while the project has no key, else `team`. */
+const listedTeam = (team: string | undefined, teamKey: string): string | undefined => (team === PROJECT_TEAM ? teamKey || undefined : team)
+
 /** One Linear query as a form, whose values are chosen: Team, from the teams in `answers['']`, then
  *  State and Label, from the team's lists in `answers[team]`, then Assignee, Project, from the
  *  workspace's Linear projects in `answers['']`, and Order. Without a team, State and Label can't be
  *  changed, except to put a stored one back to its default; Project is the workspace's, so it can
  *  be chosen with any team. `index` names its fields' keys. A change stores the query again with
  *  the field changed, keeping the others; choosing Any team puts State and Label back to their
- *  defaults, and choosing a team runs `onTeamChosen` to read its lists again. */
+ *  defaults, and choosing a team runs `onTeamChosen` to read its lists again. Team also offers This
+ *  project's team, `{{linear_team}}`, whose lists are those of the project's Linear team key
+ *  `teamKey`, or none while the project has no key (''). */
 function LinearQueryForm({
   query,
   index,
   answers,
+  teamKey,
   onTeamChosen,
   onChange
 }: {
   query: string
   index: number
   answers: Record<string, ShownLinearChoices>
+  teamKey: string
   onTeamChosen: (team: string) => void
   onChange: (query: string) => void
 }) {
@@ -2378,27 +2421,30 @@ function LinearQueryForm({
   const workspaceLists = readChoices(answers[''])
   const teams = workspaceLists?.teams ?? null
   const projects = workspaceLists?.projects ?? null
-  const lists = fields.team === undefined ? null : readChoices(answers[fields.team])
+  const team = listedTeam(fields.team, teamKey)
+  const lists = team === undefined ? null : readChoices(answers[team])
   const listed = lists !== null
   const states = (lists?.states ?? []).filter((state) => state.toLowerCase() !== LINEAR_OPEN.value)
-  const chooseTeam = (team: string) => {
-    if (team === LINEAR_ANY) {
+  const chooseTeam = (chosen: string) => {
+    if (chosen === LINEAR_ANY) {
       change({ team: undefined, state: undefined, label: undefined })
       return
     }
-    change({ team })
-    onTeamChosen(team)
+    change({ team: chosen })
+    const lister = listedTeam(chosen, teamKey)
+    if (lister !== undefined) onTeamChosen(lister)
   }
+  const projectTeam = { value: PROJECT_TEAM, label: teamKey === '' ? "This project's team" : `This project's team (${teamKey})` }
   return (
     <Stack gap="xs">
       <Select
         key={`linear-team-${index}`}
         label="Team"
         value={fields.team ?? LINEAR_ANY}
-        options={withStored([{ value: LINEAR_ANY, label: 'Any team' }, ...(teams ?? []).map((team) => ({ value: team.key, label: `${team.name} (${team.key})` }))], fields.team, teams !== null)}
+        options={withStored([{ value: LINEAR_ANY, label: 'Any team' }, projectTeam, ...(teams ?? []).map(teamOption)], fields.team, teams !== null)}
         onChange={chooseTeam}
       />
-      {fields.team !== undefined ? <LinearTeamListsNote team={fields.team} answer={answers[fields.team] ?? 'loading'} /> : null}
+      {team !== undefined ? <LinearTeamListsNote team={team} answer={answers[team] ?? 'loading'} /> : null}
       <Select
         key={`linear-state-${index}`}
         label="State"
@@ -2487,18 +2533,20 @@ function LinearChoicesNote({ answer }: { answer: ShownLinearChoices }) {
 
 /** The queries of a filter on `tracker`, each with its Remove button while more than one is left,
  *  then Add JQL (Add query on GitHub and Linear). Each is a text field, or on Linear a Linear query
- *  form whose lists come from the workspace `linearWorkspaceId`. Ctrl+Enter (Cmd+Enter on macOS) in
- *  any text field runs `onSubmit`. */
+ *  form whose lists come from the workspace `linearWorkspaceId`, in a project whose Linear team key
+ *  is `linearTeamKey`. Ctrl+Enter (Cmd+Enter on macOS) in any text field runs `onSubmit`. */
 function FilterQueries({
   tracker,
   queries: stored,
   linearWorkspaceId,
+  linearTeamKey: teamKey,
   onChange: change,
   onSubmit
 }: {
   tracker: TrackerId
   queries: string[]
   linearWorkspaceId: string
+  linearTeamKey: string
   onChange: (queries: string[]) => void
   onSubmit: () => void
 }) {
@@ -2525,7 +2573,7 @@ function FilterQueries({
             <Box direction="row" align="center" gap="xs">
               <Box grow minWidth={0}>
                 {tracker === 'linear' ? (
-                  <LinearQueryForm query={query} index={index} answers={answers} onTeamChosen={loadTeamLists} onChange={changeQuery} />
+                  <LinearQueryForm query={query} index={index} answers={answers} teamKey={teamKey} onTeamChosen={loadTeamLists} onChange={changeQuery} />
                 ) : (
                   <Textarea
                     label={label}
@@ -3287,21 +3335,23 @@ function FilterEditor({
   draft,
   filters,
   jiraProjectKey,
+  linearTeamKey,
   linearWorkspaceId,
   projectName
 }: {
   draft: FilterDraft
   filters: ListedFilter[]
   jiraProjectKey: string
+  linearTeamKey: string
   linearWorkspaceId: string
   projectName: string
 }) {
   const nameProblem = filterNameProblem(filters, draft.name, draft.id, draft.global)
   const save = () => void saveFilter()
-  const recipes = filterRecipes(draft.tracker)
+  const recipes = filterRecipes(draft.tracker, linearTeamKey)
   const isGlobal = draft.global && !draft.confirmingOwn
-  // A global Jira filter that names the project's key lists that project's tasks in every project.
-  const namesJiraProjectKey = isGlobal && draft.tracker === 'jira' && draft.queries.some((query) => namesJiraProject(query, jiraProjectKey))
+  // A global filter that names the project's key lists that project's tasks in every project.
+  const keyHint = isGlobal ? trackerKeyHint(draft.tracker, draft.queries, { jiraProjectKey, linearTeamKey }) : null
   return (
     <Box direction="column" gap="sm" height="100%">
       <TitleRow prefix={projectName !== '' ? `${projectName} ·` : null} title={draft.isNew ? 'New filter' : 'Edit filter'} level={3}>
@@ -3353,23 +3403,24 @@ function FilterEditor({
           tracker={draft.tracker}
           queries={draft.queries}
           linearWorkspaceId={linearWorkspaceId}
+          linearTeamKey={linearTeamKey}
           onChange={(queries) => changeFilterDraft(draft, { queries })}
           onSubmit={save}
         />
-        {namesJiraProjectKey ? (
+        {keyHint !== null ? (
           <Stack gap="xs">
             <Text size="sm" tone="warning">
-              {`This filter names ${jiraProjectKey}. Use {{${JIRA_PROJECT_VARIABLE}}} so each project lists its own tasks.`}
+              {`This filter names ${keyHint.key}. Use {{${keyHint.variable}}} so each project lists its own tasks.`}
             </Text>
             <Row gap="xs" align="center">
               <Button
-                key="filter-use-jira-project"
+                key={`filter-use-${keyHint.variable}`}
                 size="sm"
                 variant="outline"
                 disabled={draft.saving}
-                onPress={() => changeFilterDraft(draft, { queries: draft.queries.map((query) => withJiraProjectVariable(query, jiraProjectKey)) })}
+                onPress={() => changeFilterDraft(draft, { queries: draft.queries.map(keyHint.rewrite) })}
               >
-                {`Use {{${JIRA_PROJECT_VARIABLE}}}`}
+                {`Use {{${keyHint.variable}}}`}
               </Button>
             </Row>
           </Stack>

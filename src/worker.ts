@@ -160,8 +160,9 @@ export function activateWith(orca: OrcaWorkerApi, { run, now, workerUrl, readFil
   }
 
   /** A page of the tasks of the filter `filterId` names, on the project's tracker, among its own
-   *  and the global ones of that tracker: of its whole list, or of a tracker search with `query`. Its queries run as `filterAsRun` gives them, with
-   *  the project's Jira project key. A failure its queries cause names it. */
+   *  and the global ones of that tracker: of its whole list, or of a tracker search with `query`.
+   *  Its queries run as `filterAsRun` gives them, with the project's Jira project key and Linear
+   *  team key. A failure its queries cause names it. */
   async function loadTasks({ filterId, ...request }: { filterId?: string } & Omit<PageRequest, 'filter'>): Promise<TaskList> {
     let project: ProjectRef | null = null
     try {
@@ -175,8 +176,8 @@ export function activateWith(orca: OrcaWorkerApi, { run, now, workerUrl, readFil
       const tracker = trackerOf(providerId)
       const global = globalFilters(stored, tracker)
       const filter = listedFilter(settings, tracker, global, filterId)
-      const asRun = filterAsRun(filter, tracker, settings.jiraProjectKey ?? '')
-      if (!asRun.ok) return { kind: 'error', project, message: asRun.message, needsJiraProjectKey: true }
+      const asRun = filterAsRun(filter, tracker, settings)
+      if (!asRun.ok) return { kind: 'error', project, message: asRun.message, needsTrackerKey: true }
       const page = await taskLister(providerId)(run, project, settings, { ...request, filter: asRun.filter })
       const { state } = active
       return {
@@ -266,7 +267,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, now, workerUrl, readFil
       const { branch, problem } = startBranch(branchSettings, task)
       if (problem !== null) return { ok: false, message: problem }
       // {{branch}} is the branch as filled in, without a -2 Orca may add: the prompt comes first.
-      const prompt = buildPrompt(template.text, task, project, branch ?? name, settings.jiraProjectKey ?? '')
+      const prompt = buildPrompt(template.text, task, project, branch ?? name, settings)
       if (!prompt.ok) return prompt
       const args = worktreeCreateArgs({ projectId, name, branch, task, agent: agent.agent, prompt: prompt.prompt })
       creating.set(id, { projectId, taskKey: task.key })
@@ -337,7 +338,7 @@ export function activateWith(orca: OrcaWorkerApi, { run, now, workerUrl, readFil
         // The agent chosen on the task's card, else the project's agent choice.
         agent: resolveAgent(choice ?? settings.agent, agents),
         template: findTemplate(settings, globalTemplates(stored), templateId),
-        jiraProjectKey: settings.jiraProjectKey ?? ''
+        keys: settings
       })
       if (!launch.ok) return launch
       checkOrcaAnswer(await run('orca', launch.args))
