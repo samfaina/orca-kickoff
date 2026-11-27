@@ -145,7 +145,8 @@ const WORKSPACE_REFRESH_MS = 300
 const PROVIDER_OPTIONS: { value: ProviderId; label: string }[] = [
   { value: 'github', label: 'GitHub' },
   { value: 'jira-orca', label: 'Jira (Orca connection)' },
-  { value: 'jira-twg', label: 'Jira (twg)' }
+  { value: 'jira-twg', label: 'Jira (twg)' },
+  { value: 'linear-orca', label: 'Linear (Orca connection)' }
 ]
 
 /** Select values can't be empty, so these stand for "no tracker yet" and "Orca's default site".
@@ -2108,6 +2109,11 @@ function TrackerFields({ shown }: { shown: ShownSettings }) {
       {shown.provider === 'jira-orca' ? <JiraOrcaSettings providers={shown.providers} /> : null}
       {shown.provider === 'jira-twg' ? <JiraTwgSettings providers={shown.providers} /> : null}
       {shown.provider !== null && trackerOf(shown.provider) === 'jira' ? <JiraProjectKeyField value={shown.jiraProjectKey} /> : null}
+      {shown.provider === 'linear-orca' ? (
+        <Text size="sm" muted>
+          Kickoff reads Linear through the connection saved in Orca. Connect Linear in Orca's settings first if you haven't.
+        </Text>
+      ) : null}
     </Stack>
   )
 }
@@ -2163,9 +2169,9 @@ function JiraOrcaSettings({ providers }: { providers: ProviderConfigs }) {
   )
 }
 
-/** How the filter editor names a tracker's queries: "JQL" on Jira, "Query" on GitHub, with the
- *  button that adds one, the placeholder of the first and what the queries are, when it needs
- *  saying. */
+/** How the filter editor names a tracker's queries: "JQL" on Jira, "Query" on GitHub, "Linear
+ *  query" on Linear, with the button that adds one, the placeholder of the first and what the
+ *  queries are, when it needs saying. The panel doesn't edit Linear filters yet. */
 const QUERY_WORDING: Record<TrackerId, { label: string; add: string; placeholder: string; hint: string | null }> = {
   jira: { label: 'JQL', add: 'Add JQL', placeholder: DEFAULT_JQL, hint: null },
   github: {
@@ -2173,7 +2179,8 @@ const QUERY_WORDING: Record<TrackerId, { label: string; add: string; placeholder
     add: 'Add query',
     placeholder: DEFAULT_GITHUB_QUERY,
     hint: 'Each query is a GitHub issue search, such as is:open label:bug or assignee:@me. Kickoff lists open issues only.'
-  }
+  },
+  linear: { label: 'Linear query', add: 'Add query', placeholder: '', hint: 'Each Linear query lists open issues unless a state is chosen.' }
 }
 
 /** The queries of a filter on `tracker`, each with its Remove button while more than one is left,
@@ -2382,11 +2389,13 @@ function FiltersSection({ projectId, words = '', children }: { projectId: string
   )
 }
 
-/** On a project with a tracker, the filter shown, ✎ to edit it and + to add one. */
+/** On a project with a tracker, the filter shown, ✎ to edit it and + to add one. Linear filters
+ *  can't be edited yet, so a Linear project has neither. */
 function FilterRow({ projectId }: { projectId: string }) {
   const shown = read(shownSettings)
   const current = shown?.projectId === projectId ? trackerFilters(shown) : null
   if (!current) return null
+  const editable = current.tracker !== 'linear'
   return (
     <Box direction="row" align="center" gap="xs">
       <Box grow minWidth={0}>
@@ -2398,12 +2407,14 @@ function FilterRow({ projectId }: { projectId: string }) {
           onChange={chooseFilter}
         />
       </Box>
-      <Box shrink={false}>
-        <Row gap="none" align="center">
-          <IconButton icon="edit" label="Edit filter" tooltip="Edit filter" size="sm" variant="ghost" onPress={() => openFilter(current.shownFilterId)} />
-          <IconButton icon="add" label="New filter" tooltip="New filter" size="sm" variant="ghost" onPress={newFilter} />
-        </Row>
-      </Box>
+      {editable ? (
+        <Box shrink={false}>
+          <Row gap="none" align="center">
+            <IconButton icon="edit" label="Edit filter" tooltip="Edit filter" size="sm" variant="ghost" onPress={() => openFilter(current.shownFilterId)} />
+            <IconButton icon="add" label="New filter" tooltip="New filter" size="sm" variant="ghost" onPress={newFilter} />
+          </Row>
+        </Box>
+      ) : null}
     </Box>
   )
 }
@@ -2431,7 +2442,8 @@ function LoadError({ message }: { message: string }) {
 type ReadyTaskList = Extract<TaskList, { kind: 'ready' }>
 
 /** The tracker's name, as the panel says it. */
-const trackerName = (tracker: TrackerId) => (tracker === 'github' ? 'GitHub' : 'Jira')
+const TRACKER_NAMES: Record<TrackerId, string> = { github: 'GitHub', jira: 'Jira', linear: 'Linear' }
+const trackerName = (tracker: TrackerId) => TRACKER_NAMES[tracker]
 
 /** The warnings, "Filters" with the filter row and the field, and the tracker search's title, which
  *  stay in place, then the list, which scrolls inside the rest of the panel's height: the loaded

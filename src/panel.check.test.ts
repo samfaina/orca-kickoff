@@ -155,6 +155,20 @@ test('jira-started shows started tasks with their worktree and agent, one starti
   assert.ok(starts.length > 0 && starts.every((start) => !start.disabled))
 })
 
+test('linear-ready lists the Linear issues assigned to the user, with their state, one started, and Load more, but no filter editing', async () => {
+  const shown = await render('linear-ready')
+  assert.equal(shown.valueOf({ type: 'Select', label: 'Filter' }), 'assigned')
+  assert.equal(shown.find({ type: 'IconButton', label: 'Edit filter' }), null)
+  assert.ok(shown.find({ type: 'Link', text: 'ENG-12' }))
+  assert.ok(shown.find({ type: 'Badge', text: 'Triage' }))
+  assert.ok(shown.find({ text: 'Agent: claude' }))
+  const starts = shown.findAll({ role: 'button', label: /^Start ENG-/ })
+  assert.ok(starts.length >= 3 && starts.every((start) => !start.disabled), `${starts.length} Start buttons`)
+  assert.ok(shown.find({ role: 'button', text: /^Showing \d+ · Load more$/ }))
+  await shown.press({ type: 'IconButton', label: 'Project settings' })
+  assert.equal(shown.valueOf({ label: 'Tracker' }), 'linear-orca')
+})
+
 test('truncated ends the list with the truncation notice', async () => {
   const shown = await render('truncated')
   assert.ok(shown.find({ text: /^Showing the first 100 tasks — narrow your JQL/ }))

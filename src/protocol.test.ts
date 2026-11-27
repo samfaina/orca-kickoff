@@ -4,10 +4,12 @@ import {
   filterAsRun,
   globalFilters,
   globalTemplates,
+  listedFilter,
   projectProvider,
   projectSettings,
   queryCount,
   readSettings,
+  trackerOf,
   withGlobalChanges,
   withProjectChanges
 } from './protocol'
@@ -149,6 +151,38 @@ test("each provider's configuration survives switching away and back", () => {
   settings = chooseProvider(settings, 'jira-orca')
   assert.equal(settings.provider, 'jira-orca')
   assert.deepEqual(settings.providers['jira-orca'], { siteId: 'site-2' })
+})
+
+test("Linear (Orca connection) reads Linear, starts with Orca's workspace, and its configuration and filters survive switching away and back", () => {
+  assert.equal(trackerOf('linear-orca'), 'linear')
+  const first = chooseProvider({ providers: { 'jira-orca': { siteId: 'site-2' } } }, 'linear-orca')
+  assert.deepEqual(first.providers, { 'jira-orca': { siteId: 'site-2' }, 'linear-orca': { workspaceId: '' } })
+  const linear = { ...first, providers: { ...first.providers, 'linear-orca': { workspaceId: 'ws-1' } }, filters: { linear: [{ id: 'f-me', name: 'Me', queries: ['{"assignee":"me"}'] }] } }
+  const back = chooseProvider(chooseProvider(linear, 'jira-orca'), 'linear-orca')
+  assert.deepEqual(back, { ...linear, provider: 'linear-orca' })
+})
+
+test('a Linear project\'s stored configuration and filters are read, apart from the other trackers\'; one of an unexpected shape is dropped', () => {
+  const me = { id: 'f-me', name: 'Me', queries: ['{"assignee":"me"}', ''] }
+  const read = readProject({
+    provider: 'linear-orca',
+    providers: { 'linear-orca': { workspaceId: 'ws-1' } },
+    filters: { linear: [me, { id: 'f-x', name: 'No queries' }], jira: [mine] },
+    shownFilterId: { linear: 'f-me' }
+  })
+  assert.deepEqual(read, { provider: 'linear-orca', providers: { 'linear-orca': { workspaceId: 'ws-1' } }, filters: { linear: [me], jira: [mine] }, shownFilterId: { linear: 'f-me' } })
+  assert.deepEqual(readProject({ provider: 'linear-orca', providers: { 'linear-orca': { workspaceId: 7 } } }), { provider: 'linear-orca', providers: {} })
+})
+
+test('a Linear project without filters lists "Assigned to me": one Linear query of the open issues assigned to the user', () => {
+  assert.deepEqual(listedFilter({}, 'linear', []), { id: 'assigned', name: 'Assigned to me', queries: ['{"assignee":"me"}'], global: false })
+  assert.equal(queryCount({ providers: {} }, 'linear-orca', []), 1)
+})
+
+test('a Linear query runs as written, with or without a Jira project key', () => {
+  const me = { id: 'f-me', name: 'Me', queries: ['{"team":"{{jira_project}}"}'] }
+  assert.deepEqual(filterAsRun(me, 'linear', 'WEB'), { ok: true, filter: me })
+  assert.deepEqual(filterAsRun(me, 'linear', ''), { ok: true, filter: me })
 })
 
 test("a Jira provider starts with its tool's defaults, and switching between the two Jira providers keeps every filter", () => {
@@ -358,16 +392,18 @@ test('global templates are read apart from every project, in order, and those of
   assert.deepEqual(readSettings({ version: 1, projects: {}, global: { templates: [] } }), { version: 1, projects: {} })
 })
 
-test('settings stored before global filters read the same, with no global filter on either tracker', () => {
+test('settings stored before global filters read the same, with no global filter on any tracker', () => {
   const stored = { version: 1, projects: { [web.id]: { providers: {}, filters: { jira: [board] } } }, global: { templates: [{ id: 't-plan', name: 'Plan', text: '' }] } }
   const settings = readSettings(stored)
   assert.deepEqual(settings, stored)
   assert.deepEqual(globalFilters(settings, 'jira'), [])
   assert.deepEqual(globalFilters(settings, 'github'), [])
+  assert.deepEqual(globalFilters(settings, 'linear'), [])
 })
 
 test('global filters are read by tracker, apart from every project, in order, and those of an unexpected shape are dropped', () => {
-  const sprint = { id: 'g-sprint', name: 'Sprint', queries: ['project = {{jira_project}}', ''] }
+  const linearMine = { id: 'g-me', name: 'Mine', queries: ['{"assignee":"me"}'] }
+  const sprint ={ id: 'g-sprint', name: 'Sprint', queries: ['project = {{jira_project}}', ''] }
   const triage = { id: 'g-triage', name: 'Triage', queries: ['is:open label:needs-triage'] }
   const settings = readSettings({
     version: 1,
@@ -376,13 +412,15 @@ test('global filters are read by tracker, apart from every project, in order, an
       filters: {
         jira: [sprint, { id: 'g-x', name: 'No queries' }, { id: 'g-sprint', name: 'Again', queries: [] }, { id: 'g-other', name: ' SPRINT ', queries: [] }, { ...mine, name: ' Mine ' }],
         github: [triage],
-        linear: [mine]
+        linear: [linearMine, { id: 'g-y', name: 'Bad queries', queries: [7] }],
+        gitlab: [mine]
       }
     }
   })
-  assert.deepEqual(settings.global, { filters: { jira: [sprint, mine], github: [triage] } })
+  assert.deepEqual(settings.global, { filters: { jira: [sprint, mine], github: [triage], linear: [linearMine] } })
   assert.deepEqual(globalFilters(settings, 'jira'), [sprint, mine])
   assert.deepEqual(globalFilters(settings, 'github'), [triage])
+  assert.deepEqual(globalFilters(settings, 'linear'), [linearMine])
   assert.deepEqual(readSettings({ version: 1, projects: {}, global: { filters: { jira: 'none', github: [] } } }), { version: 1, projects: {} })
   const both = readSettings({ version: 1, projects: {}, global: { templates: [{ id: 't-plan', name: 'Plan', text: '' }], filters: { github: [triage] } } })
   assert.deepEqual(both.global, { templates: [{ id: 't-plan', name: 'Plan', text: '' }], filters: { github: [triage] } })

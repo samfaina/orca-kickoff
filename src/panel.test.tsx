@@ -653,7 +653,7 @@ test('Project settings opens by itself for a project without a tracker, not an e
   assert.ok(view.find({ type: 'Text', text: 'notes ·' }))
   assert.equal(view.find({ type: 'Callout' }), null)
   assert.equal(view.valueOf({ type: 'Select', label: 'Tracker' }), ':none')
-  assert.deepEqual(optionLabels(view, 'Tracker'), ['Choose a tracker', 'GitHub', 'Jira (Orca connection)', 'Jira (twg)'])
+  assert.deepEqual(optionLabels(view, 'Tracker'), ['Choose a tracker', 'GitHub', 'Jira (Orca connection)', 'Jira (twg)', 'Linear (Orca connection)'])
   await view.press(done)
   assert.equal(view.find(settingsTitle), null)
   const empty = view.find({ type: 'EmptyState' })
@@ -1944,9 +1944,9 @@ test('the hint follows the text, and the closed Variables list gives each variab
       [['Code {{task_key}}'], '{{task_key}} The task key, such as WEB-12 or #42.'],
       [['Code {{task_title}}'], "{{task_title}} The task's title."],
       [['Code {{task_url}}'], "{{task_url}} The task's link in the tracker."],
-      [['Code {{task_description}}'], "{{task_description}} The task's description as plain text, cut to 4000 characters."],
+      [['Code {{task_description}}'], "{{task_description}} The task's description as plain text (Markdown on Linear), cut to 4000 characters."],
       [['Code {{task_status}}'], '{{task_status}} The status as the tracker shows it, such as "In Progress". "Open" on GitHub.'],
-      [['Code {{tracker}}'], '{{tracker}} "github" or "jira".'],
+      [['Code {{tracker}}'], '{{tracker}} "github", "jira" or "linear".'],
       [['Code {{repo}}'], "{{repo}} The project's repository (owner/name) when Orca knows it, else the project's name."],
       [
         ['Code {{branch}}'],
@@ -3642,7 +3642,7 @@ test('a GitHub project shows GitHub as its tracker, without the "Choose a tracke
   const { view } = await showWith({ 'tasks.load': ready([task('#42')]) })
   await view.press(gear)
   assert.equal(view.valueOf({ type: 'Select', label: 'Tracker' }), 'github')
-  assert.deepEqual(optionLabels(view, 'Tracker'), ['GitHub', 'Jira (Orca connection)', 'Jira (twg)'])
+  assert.deepEqual(optionLabels(view, 'Tracker'), ['GitHub', 'Jira (Orca connection)', 'Jira (twg)', 'Linear (Orca connection)'])
   assert.equal(view.find({ label: /^JQL/ }), null)
 })
 
@@ -3665,7 +3665,7 @@ test("setting up a Jira project takes the tracker and its site, no JQL, and Done
   assert.equal(view.find({ text: /JQL/ }), null)
   assert.equal(view.valueOf({ type: 'Select', label: 'Site' }), ':default')
   assert.deepEqual(optionLabels(view, 'Site'), ['Default site', 'Example', 'Other'])
-  assert.deepEqual(optionLabels(view, 'Tracker'), ['GitHub', 'Jira (Orca connection)', 'Jira (twg)'])
+  assert.deepEqual(optionLabels(view, 'Tracker'), ['GitHub', 'Jira (Orca connection)', 'Jira (twg)', 'Linear (Orca connection)'])
   assert.ok(view.find({ type: 'Text', text: /Connect Jira in Orca's settings/ }))
   await view.press(done)
   assert.equal(loads, 2)
@@ -4803,6 +4803,47 @@ test('choosing Jira (twg) shows its Site and Profile fields, no JQL, with the tw
   assert.equal((storedProject(host) as { provider: string }).provider, 'jira-twg')
   assert.deepEqual(view.errors, [])
   assert.deepEqual(view.warnings, [])
+})
+
+const eng12 = task('ENG-12', { tracker: 'linear', title: 'Add dark mode to settings', url: 'https://linear.app/acme/issue/ENG-12/add-dark-mode', status: 'Todo' })
+
+test('choosing Linear (Orca connection) lists the tasks of its filter "Assigned to me", with the Orca connection hint and no filter editing', async () => {
+  let loads = 0
+  const { view, host } = await showWith({
+    'tasks.load': () => (++loads === 1 ? ready([task('#42')]) : ready([eng12], { provider: 'linear-orca', filterId: 'assigned' }))
+  })
+  await view.press(gear)
+  await view.select({ type: 'Select', label: 'Tracker' }, 'linear-orca')
+  assert.equal(loads, 2)
+  assert.deepEqual(storedProject(host), { provider: 'linear-orca', providers: { 'linear-orca': { workspaceId: '' } } })
+  assert.ok(view.find({ type: 'Text', text: /Connect Linear in Orca's settings/ }))
+  assert.equal(view.find(jiraProjectKeyField), null)
+  assert.equal(view.find({ type: 'Select', label: 'Site' }), null)
+  await view.press(done)
+  assert.deepEqual(optionLabels(view, 'Filter'), ['Assigned to me'])
+  assert.ok(view.find({ type: 'Link', text: 'ENG-12' }))
+  assert.ok(view.find({ type: 'Badge', text: 'Todo' }))
+  assert.equal(view.find({ type: 'IconButton', label: 'Edit filter' }), null)
+  assert.equal(view.find({ type: 'IconButton', label: 'New filter' }), null)
+  await view.type({ type: 'Input', label: 'Search tasks' }, 'dark')
+  assert.ok(view.find({ type: 'Button', text: 'Search in Linear' }))
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.warnings, [])
+})
+
+test('switching a Linear project to another tracker and back keeps its Linear configuration', async () => {
+  const stored = { settings: { version: 1, projects: { 'github:acme/web': { provider: 'linear-orca', providers: { 'linear-orca': { workspaceId: 'ws-1' } } } } } }
+  const { view, host } = await showWith({ 'tasks.load': ready([eng12], { provider: 'linear-orca', filterId: 'assigned' }), 'jira.sites': SITES }, stored)
+  await view.press(gear)
+  assert.equal(view.valueOf({ type: 'Select', label: 'Tracker' }), 'linear-orca')
+  await view.select({ type: 'Select', label: 'Tracker' }, 'jira-orca')
+  await view.select({ type: 'Select', label: 'Tracker' }, 'github')
+  await view.select({ type: 'Select', label: 'Tracker' }, 'linear-orca')
+  assert.deepEqual(storedProject(host), {
+    provider: 'linear-orca',
+    providers: { 'linear-orca': { workspaceId: 'ws-1' }, 'jira-orca': { siteId: '' }, github: {} }
+  })
+  assert.ok(view.find({ type: 'Text', text: /Connect Linear in Orca's settings/ }))
 })
 
 test("the twg site and profile save themselves, keeping the other providers' settings, and Enter reloads", async () => {

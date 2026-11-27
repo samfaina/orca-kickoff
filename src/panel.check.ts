@@ -1,6 +1,6 @@
 // States of the panel for `orca plugin check` and `orca plugin shot --scenario`; the plugin itself
 // never loads this file. Every scenario answers every panel request itself: a request left out goes to the
-// real worker, which runs the real `orca`, `gh` and `twg` and shows real data. All data is invented,
+// real worker, which runs the real `orca` (Linear included), `gh` and `twg` and shows real data. All data is invented,
 // and each list is short, since a tall panel draws unreliably in `shot` (`docs/reference.md`).
 import { defineCheck, type MockRequests } from 'orca/testing'
 import {
@@ -195,6 +195,41 @@ const sprintTasks = ready(
   { filterId: sprintFilter.id, queryCount: sprintFilter.queries.length }
 )
 
+const linearTask = (key: string, title: string, status: string, category: Task['statusCategory'], labels: string[] = []): Task => ({
+  tracker: 'linear',
+  key,
+  title,
+  url: `https://linear.app/acme/issue/${key}/task`,
+  description: '',
+  status,
+  statusCategory: category,
+  assignees: ['Ana Example'],
+  labels
+})
+
+/** The filter a Linear project starts with. */
+const [assignedFilter] = ownFilters({}, 'linear', [])
+
+/** `web` reading Linear through Orca's connection, with its initial filter "Assigned to me". */
+const linearSettings = { settings: { version: 1, projects: { [web.id]: { provider: 'linear-orca', providers: { 'linear-orca': { workspaceId: '' } } } } } }
+
+/** The first page of "Assigned to me": ENG-12 runs an agent in its linked worktree. */
+const linearStarted = ready(
+  web,
+  'linear-orca',
+  [
+    linearTask('ENG-12', 'Add dark mode to settings', 'In Progress', 'in_progress', ['Feature']),
+    linearTask('ENG-14', 'Retry failed payments once', 'Todo', 'todo', ['Bug']),
+    linearTask('ENG-15', 'Translate the error pages', 'Backlog', 'todo'),
+    linearTask('ENG-17', 'Show the order history on the account page', 'Triage', 'todo')
+  ],
+  {
+    filterId: assignedFilter.id,
+    nextCursor: '0:cursor-2',
+    worktrees: { 'ENG-12': { worktreeId: 'wt-eng-12', name: 'eng-12-add-dark-mode-to', agent: 'claude' } }
+  }
+)
+
 /** What the worker answers when twg has no login, when the Orca CLI can't be found, and when
  *  `orca worktree list` fails. */
 const TWG_LOGGED_OUT =
@@ -302,6 +337,9 @@ export default defineCheck({
     requests: answers(ready(web, 'jira-twg', jiraTasks.slice(0, 2), { filterId: 'g-sprint' }))
   },
   'jira-started': { storage: jiraSettings('jira-twg'), requests: answers(jiraStarted) },
+  // A Linear project on its initial filter: the filter row has no ✎ or +, since Linear filters
+  // can't be edited yet, and each card shows the state's name.
+  'linear-ready': { storage: linearSettings, requests: answers(linearStarted) },
   // Five tasks stand for the 100 Orca's Jira search answers at most.
   truncated: {
     storage: jiraSettings('jira-orca'),

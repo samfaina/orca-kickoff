@@ -3,15 +3,15 @@
   "id": "kickoff",
   "name": "Kickoff",
   "version": "0.6.0",
-  "description": "Stop pasting tickets into your agent. Pick a GitHub or Jira task and Kickoff starts it in a fresh worktree, with a prompt filled from your template.",
+  "description": "Stop pasting tickets into your agent. Pick a GitHub, Jira or Linear task and Kickoff starts it in a fresh worktree, with a prompt filled from your template.",
   "license": "MIT",
   "icon": "assets/icon.png",
   "cover": {
     "path": "assets/cover.png",
-    "alt": "Kickoff with the line \"Your prompt templates, one click from any GitHub or Jira task.\" and an arrow to the open template menu in its panel."
+    "alt": "Kickoff with the line \"Your prompt templates, one click from any GitHub, Jira or Linear task.\" and an arrow to the open template menu in its panel."
   },
   "engines": {
-    "orca": ">=1.4.271"
+    "orca": ">=1.4.277"
   },
   "execution": "trusted-worker",
   "pluginApi": 1,

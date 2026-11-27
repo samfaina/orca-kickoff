@@ -21,6 +21,15 @@ test('a Jira worktree name is the lower-cased key and up to four words of the ti
   assert.equal(worktreeName({ tracker: 'jira', key: 'WEB-12', title: 'Añadir modo oscuro a ajustes' }, {}), 'web-12-anadir-modo-oscuro-a')
 })
 
+test('a Linear worktree name is the lower-cased identifier and up to four words of the title', () => {
+  assert.equal(worktreeName({ tracker: 'linear', key: 'ENG-12', title: 'Add dark mode to settings' }, {}), 'eng-12-add-dark-mode-to')
+})
+
+test('a Linear task fills {{task_key}} with its identifier and gets the fallback branch type, having no issue type', () => {
+  const settings = { branchTemplate: '{{branch_type}}/{{task_key}}-{{task_slug}}', branchTypes: [{ issueType: 'Bug', branchType: 'fix' }], branchTypeFallback: 'task' }
+  assert.equal(filledBranch(settings, { tracker: 'linear', key: 'ENG-12', title: 'Add dark mode to settings' }), 'task/ENG-12-add-dark-mode-to')
+})
+
 test('a GitHub worktree name starts with issue-<n>', () => {
   assert.equal(worktreeName({ tracker: 'github', key: '#42', title: 'Add dark mode' }, {}), 'issue-42-add-dark-mode')
 })
@@ -174,6 +183,13 @@ test('a Jira worktree name reads back as its key', () => {
   assert.equal(taskKeyFromWorktreeName('web-12-anadir-modo', 'jira'), 'WEB-12')
   assert.equal(taskKeyFromWorktreeName('web-12', 'jira'), 'WEB-12')
   assert.equal(taskKeyFromWorktreeName('data_ops-3-fix', 'jira'), 'DATA_OPS-3')
+})
+
+test('a Linear worktree name reads back as its identifier', () => {
+  assert.equal(taskKeyFromWorktreeName('eng-12-add-dark-mode-to', 'linear'), 'ENG-12')
+  assert.equal(taskKeyFromWorktreeName('eng2-7', 'linear'), 'ENG2-7')
+  assert.equal(taskKeyFromWorktreeName('issue-42-add-dark-mode', 'linear'), 'ISSUE-42')
+  assert.equal(taskKeyFromWorktreeName('main', 'linear'), null)
 })
 
 test('a GitHub worktree name reads back as #<n>', () => {

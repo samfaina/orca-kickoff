@@ -185,9 +185,9 @@ export const TEMPLATE_VARIABLE_DESCRIPTIONS: Record<TemplateVariable, string> = 
   task_key: 'The task key, such as WEB-12 or #42.',
   task_title: "The task's title.",
   task_url: "The task's link in the tracker.",
-  task_description: `The task's description as plain text, cut to ${MAX_DESCRIPTION} characters.`,
+  task_description: `The task's description as plain text (Markdown on Linear), cut to ${MAX_DESCRIPTION} characters.`,
   task_status: 'The status as the tracker shows it, such as "In Progress". "Open" on GitHub.',
-  tracker: '"github" or "jira".',
+  tracker: '"github", "jira" or "linear".',
   repo: "The project's repository (owner/name) when Orca knows it, else the project's name.",
   branch:
     "The new worktree's git branch from the branch template the project uses, its own or the global one, such as feature/WEB-12__add-dark-mode. Without a branch template, the worktree's name, such as web-12-add-dark-mode. It doesn't include a -2 Orca may add. In a Run here, the current branch of the worktree selected in Orca, or nothing when it has none.",

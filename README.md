@@ -1,16 +1,17 @@
 # Kickoff
 
-An [Orca](https://github.com/stablyai/orca) plugin that lists the open tasks of the active project's tracker (GitHub Issues, or Jira) in a side panel, and starts each one in its own worktree, linked to the task, with an agent and a prompt built from a template you write per project, or once for every project.
+An [Orca](https://github.com/stablyai/orca) plugin that lists the open tasks of the active project's tracker (GitHub Issues, Jira or Linear) in a side panel, and starts each one in its own worktree, linked to the task, with an agent and a prompt built from a template you write per project, or once for every project.
 
 Inspired by [rr235/orca-task-launcher](https://github.com/rr235/orca-task-launcher), which reads GitHub only.
 
 ## Requirements
 
-- **Orca 1.4.271 or later.**
+- **Orca 1.4.277 or later.**
 - For **GitHub** projects: the [GitHub CLI](https://cli.github.com) (`gh`), logged in with `gh auth login`.
 - For **Jira**, one of:
   - Orca's own Jira connection, set up in Orca's settings; or
   - the [Teamwork Graph CLI](https://developer.atlassian.com/cloud/twg-cli/) (`twg`), logged in with `twg login`. `twg` reads Jira Cloud only.
+- For **Linear**: Orca's own Linear connection, set up in Orca's settings (Settings › Integrations › Linear).
 
 Kickoff holds no credentials of its own: it runs these tools, which already hold your login ([ADR-0001](docs/adr/0001-credentials-stay-in-external-tools.md)). Windows is the main platform; macOS and Linux are supported but less tried.
 
@@ -35,15 +36,16 @@ Open the **Kickoff** panel from its icon (a lightning bolt) in Orca's right side
   - **GitHub**, for a project whose repository Orca knows.
   - **Jira (Orca connection)**: the site, when Orca is connected to more than one (Orca's default site otherwise).
   - **Jira (twg)**: optionally `twg`'s site and profile.
+  - **Linear (Orca connection)**: nothing to set. Kickoff reads the Linear workspace Orca reads.
 
   On Jira, the **Jira project key** is the key of the Jira project the tasks are in, such as `WEB`. It starts empty, is never guessed from your JQL, and is stored trimmed and upper-cased. [Filters](#filters) and [prompt templates](#prompt-templates) name it as `{{jira_project}}`.
 
-  **Done** shows the project's tasks: those of its first [filter](#filters), **Tasks** on Jira and **Open** on GitHub. The gear in the panel's header opens Project settings again later, and **Done** goes back to the list, loading it again when a tracker setting changed.
+  **Done** shows the project's tasks: those of its first [filter](#filters), **Tasks** on Jira, **Assigned to me** on Linear and **Open** on GitHub. The gear in the panel's header opens Project settings again later, and **Done** goes back to the list, loading it again when a tracker setting changed.
 
-Each task shows as a card with its key and title, then its labels, after its status on Jira, then its assignees, if any. **Start** (the play button):
+Each task shows as a card with its key and title, then its labels, after its status on Jira and Linear, then its assignees, if any. **Start** (the play button):
 
-1. creates a worktree named after the task's key and up to four words of its title, without bracketed tags such as `[FE]` (see [Branch](#branch)), such as `web-12-add-dark-mode` for Jira's `WEB-12` "[FE] Add dark mode", or `issue-42-add-dark-mode` for GitHub's `#42`; its git branch comes from the [branch template](#branch) of the branch settings the project uses, its own or the [global](#global-branch-settings) ones, or, without one, Orca names it;
-2. links it to the task in Orca, so Orca shows the task on the worktree;
+1. creates a worktree named after the task's key and up to four words of its title, without bracketed tags such as `[FE]` (see [Branch](#branch)), such as `web-12-add-dark-mode` for Jira's `WEB-12` "[FE] Add dark mode", `eng-12-add-dark-mode-to` for Linear's `ENG-12` "Add dark mode to settings", or `issue-42-add-dark-mode` for GitHub's `#42`; its git branch comes from the [branch template](#branch) of the branch settings the project uses, its own or the [global](#global-branch-settings) ones, or, without one, Orca names it;
+2. links it to the task in Orca, so Orca shows the task on the worktree, and an agent in it finds a Linear issue with `orca linear issue --current`;
 3. launches the agent chosen for the task in it, with the prompt filled from the chosen template.
 
 Creating the worktree can take a minute. Once it exists, the card shows the worktree, as a link that opens it, the assignees, and the agent running in it, and the task can't be started again.
@@ -66,9 +68,9 @@ Under **Branch**, they hold how a Start names its git branch, or say that the pr
 
 At the very bottom, Project settings show which Kickoff runs: `Kickoff 0.6.0`, or `Kickoff 0.6.0 · development` for Kickoff loaded with `orca plugin dev load` straight from a folder you are working on, whose version can match a release's. Say it when you report a problem. After it, **★ Star on GitHub** opens Kickoff's repository in your browser, where you can star it; it shows alone while the version isn't known.
 
-**Filters**, above the list and open at first, holds the filter row and the **Search tasks** field; closed, it says the filter listed and the words typed. The field narrows the loaded tasks as you type, by key, title or label. **Enter** (or **Search in GitHub** / **Search in Jira**) asks the tracker instead, for the tasks of the same list that match your words, including those not loaded yet. **Clear search** goes back to the list.
+**Filters**, above the list and open at first, holds the filter row and the **Search tasks** field; closed, it says the filter listed and the words typed. The field narrows the loaded tasks as you type, by key, title or label. **Enter** (or **Search in GitHub** / **Search in Jira** / **Search in Linear**) asks the tracker instead, for the tasks of the same list that match your words, including those not loaded yet. **Clear search** goes back to the list.
 
-GitHub lists up to 100 tasks per query, and Orca's Jira connection up to 100 per JQL query, and both say so when there are more. With `twg`, a page holds up to 50 tasks, filled from each query in turn, and **Load more** reads the next one.
+GitHub lists up to 100 tasks per query, and Orca's Jira connection up to 100 per JQL query, and both say so when there are more. With `twg` and Linear, a page holds up to 50 tasks, filled from each query in turn, and **Load more** reads the next one.
 
 ### Run here
 
@@ -86,6 +88,7 @@ A filter is a named way to ask the tracker for the project's tasks, made of one 
 
 - A Jira project starts with one, **Tasks**, whose query is `assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC`.
 - A GitHub project starts with one, **Open**, whose query is `is:open`: its open issues, as before filters.
+- A Linear project starts with one, **Assigned to me**: the open issues assigned to you, those in triage and backlog included. Linear filters can't be edited or added yet, so a Linear project's filter row has no ✎ or **+**.
 
 The filter row, in **Filters** above **Search tasks**, shows the filter listed, with ✎ to edit it and **+** to add one. It lists the project's own filters first, then the global ones, marked **(Global)**. Choosing another filter loads its tasks from the tracker, keeping the words in **Search tasks**; the panel opens on the filter shown last. Both Jira providers list the same filters.
 
@@ -110,7 +113,7 @@ A JQL query can name the project's Jira project key as `{{jira_project}}`, space
 
 A GitHub query is any issue search, such as `label:needs-triage`, `assignee:@me` or `label:bug OR label:ui`. Kickoff runs it as `gh issue list --state open --search "(<query>) is:open"`, so it lists open issues only, even with `is:closed`; `is:pr` fails, since gh lists issues only. A malformed query lists nothing rather than failing: GitHub answers it with no issues.
 
-A query the tracker rejects names its filter and its place in it, such as `Board: JQL query 2 failed: …` on Jira or `Mine: Query 2 failed: …` on GitHub, and the panel opens the filter editor on that filter. A filter whose queries are all blank opens it too. Any other failure, such as a missing `twg` or `gh` login or Jira connection, shows the tool's own message and opens Project settings. Settings stored before filters, with JQL in Project settings, become one filter, **Tasks**, with those queries.
+A query the tracker rejects names its filter and its place in it, such as `Board: JQL query 2 failed: …` on Jira or `Mine: Query 2 failed: …` on GitHub, and the panel opens the filter editor on that filter. A filter whose queries are all blank opens it too. Any other failure, such as a missing `twg` or `gh` login or Jira connection, shows the tool's own message and opens Project settings. Without a Linear connection in Orca, the message says to connect Linear in Orca's settings. Settings stored before filters, with JQL in Project settings, become one filter, **Tasks**, with those queries.
 
 ### Global filters
 
@@ -131,9 +134,9 @@ A template is the text the agent gets as its prompt. `{{name}}` is replaced by t
 | `{{task_key}}` | The task key, such as `WEB-12` or `#42`. |
 | `{{task_title}}` | The task's title. |
 | `{{task_url}}` | The task's link in the tracker. |
-| `{{task_description}}` | The task's description as plain text, cut to 4000 characters. |
+| `{{task_description}}` | The task's description as plain text (Markdown on Linear), cut to 4000 characters. |
 | `{{task_status}}` | The status as the tracker shows it, such as `In Progress`; `Open` on GitHub. |
-| `{{tracker}}` | `github` or `jira`. |
+| `{{tracker}}` | `github`, `jira` or `linear`. |
 | `{{repo}}` | The project's repository (`owner/name`) when Orca knows it, else the project's name. |
 | `{{branch}}` | The new worktree's git branch from the [branch template](#branch) the project uses, such as `feature/WEB-12__add-dark-mode`; without one, the worktree's name, such as `web-12-add-dark-mode`. It doesn't include a `-2` Orca may add to a taken branch, since the prompt is filled before the worktree is created. In a [Run here](#run-here), the current branch of the worktree selected in Orca, or nothing when it has none. |
 | `{{jira_project}}` | The project's Jira project key, such as `WEB`, set in Project settings; empty when it has none. |
@@ -179,12 +182,12 @@ The **Branch** section of Project settings holds the project's **branch settings
 
   | Variable | Value |
   | --- | --- |
-  | `{{task_key}}` | The task key: `WEB-12` on Jira, `42` on GitHub (no `#`). |
+  | `{{task_key}}` | The task key: `WEB-12` on Jira, the identifier `ENG-12` on Linear, `42` on GitHub (no `#`). |
   | `{{task_slug}}` | Up to four words of the title, without what the title exclusion pattern removes: accents folded, lower-cased, joined by `-`, such as `add-dark-mode`. |
   | `{{branch_type}}` | The task's branch type, from the table below. |
 
   Anything else is written as it is, such as your initials: `{{branch_type}}/{{task_key}}__{{task_slug}}--AB` gives `bugfix/WEB-12__add-dark-mode--AB` for the Jira bug `WEB-12` "[FE] | [Mobile][Widgets] Add dark mode".
-- **Branch types**: a table of Jira issue types, typed as the tracker shows them, such as `Bug` → `bugfix` and `Story` → `feature`, matched ignoring case, with **Add branch type** and the trash can to remove a row, then a **Fallback branch type**. A row with either side empty counts as none. A type not in the table, a task with no type, and every GitHub task get the fallback.
+- **Branch types**: a table of Jira issue types, typed as the tracker shows them, such as `Bug` → `bugfix` and `Story` → `feature`, matched ignoring case, with **Add branch type** and the trash can to remove a row, then a **Fallback branch type**. A row with either side empty counts as none. A type not in the table, a task with no type, and every GitHub and Linear task get the fallback.
 - **Title exclusion pattern**: a regular expression, `\[[^\]]*\]` at first, which removes bracketed tags such as `[FE]` anywhere in the title. Every match, ignoring case, is removed before `{{task_slug}}` and the worktree's name are made, keeping the words on either side apart. Empty, it removes nothing. When it would leave no words, the whole title is used.
 - **Preview**: the branch and the worktree's name a Start of the first loaded task would get, or of an example task, `WEB-12` "[FE] | [Mobile] Add dark mode", a Story, when none is loaded. It sits in the bar under Project settings, so it stays in view while you edit any field of the section.
 
@@ -198,7 +201,7 @@ A Start checks the filled-in branch the same way, for a branch type git can't ho
 
 ### Global branch settings
 
-The branch settings can be **global**: kept once, apart from every project's settings, and used *instead of* a project's own by every project that has none of its own, on Jira and GitHub alike. A team whose projects all name their branches the same way sets that up once.
+The branch settings can be **global**: kept once, apart from every project's settings, and used *instead of* a project's own by every project that has none of its own, on every tracker alike. A team whose projects all name their branches the same way sets that up once.
  A Start, `{{branch}}` and the preview use the branch settings the project uses.
 
 - **Which ones a project uses**: once the Global switch below has been used in a project, the project says which: its own or the global ones. Until then, a project that stores any branch setting of its own, even an empty template, uses its own; one with none uses the global ones, if there are any. While there are no global branch settings, a project with none of its own names branches as before: Orca names the branch, and the title exclusion pattern is the initial one.
@@ -220,6 +223,7 @@ A **provider** is the code that reads one tracker through one tool. Each lives i
 | `github` (`github.ts`) | GitHub Issues | `gh issue list --search` | No: the first 100 per query |
 | `jira-orca` (`jira-orca.ts`) | Jira | `orca jira search` | No: the first 100 |
 | `jira-twg` (`jira-twg.ts`) | Jira | `twg jira workitem query` | Yes, 50 at a time |
+| `linear-orca` (`linear-orca.ts`) | Linear | `orca linear list-issues` | Yes, 50 at a time |
 
 Every provider turns its tool's output into the same `Task` shape, so the panel and the templates never know which one a task came from.
 
@@ -229,16 +233,16 @@ For a tracker Kickoff already knows (another way to read Jira, say), adding a pr
 
 1. **A provider file** in `src/providers/`, exporting a `Provider` (`src/providers/types.ts`): an `id`, a `tracker`, a `label`, and `list(run, project, config, request)`, which answers one page of open tasks. `run` runs a CLI and is passed in, so the provider's tests run nothing. Keep parsing and argument building in pure functions, tested against real-shaped output with invented data.
 2. **A line in the registry**, `src/providers/index.ts`.
-3. **A configuration entry**: the id in `ProviderId` and `PROVIDER_IDS`, and its settings in `ProviderConfigs`, `readProviderConfigs` and the defaults of `providerConfig`, all in `src/protocol.ts`.
+3. **A configuration entry**: the id in `ProviderId` and `PROVIDER_TRACKERS`, and its settings in `ProviderConfigs`, `readProviderConfigs` and the defaults of `providerConfig`, all in `src/protocol.ts`.
 4. **Its panel settings**: an entry in `PROVIDER_OPTIONS` and the fields its configuration needs in `TrackerFields`, in `src/panel.tsx`.
 
-The type check points at most of these once the id is added to `ProviderId`. A provider for a new tracker, such as Linear or GitLab, also adds the tracker to `TrackerId` and `trackerOf`, with the filter a project starts with in `INITIAL_FILTERS` (`src/protocol.ts`), the recipes its filter editor offers a new filter in `RECIPES` (`src/filter.ts`), says how its worktrees are named and read back (`src/naming.ts`), how a Start links the worktree to the task and how a linked worktree is found (`src/orca.ts`), and how the panel names the tracker and its queries, in `QUERY_WORDING` (`src/panel.tsx`).
+The type check points at most of these once the id is added to `ProviderId`. A provider for a new tracker, such as GitLab, as Linear was, also adds the tracker to `TrackerId` and `PROVIDER_TRACKERS`, with the filter a project starts with in `INITIAL_FILTERS` (`src/protocol.ts`), the recipes its filter editor offers a new filter in `RECIPES` (`src/filter.ts`), says how its worktrees are named and read back (`src/naming.ts`), how a Start links the worktree to the task and how a linked worktree is found (`src/orca.ts`), and how the panel names the tracker and its queries, in `TRACKER_NAMES` and `QUERY_WORDING` (`src/panel.tsx`).
 
 ## Known limitations
 
 - **The same task can be started in two projects.** Kickoff looks for a task's worktree in the active project only, so two Orca projects that read the same tracker can each start it.
 - **A renamed worktree without an Orca link isn't found.** A worktree counts as started for a task when Orca links it to the task, or, as a fallback, when its name starts with the task's key (`web-12-…`, `issue-42-…`). A worktree that has no link and was renamed is seen by neither.
-- GitHub lists at most 100 tasks per query, and Orca's Jira connection at most 100 per JQL query; a tracker search with them gives at most as many results: narrow the filter's queries, or refine the search. Only `twg` pages, 50 tasks at a time, filled from each query in turn.
+- GitHub lists at most 100 tasks per query, and Orca's Jira connection at most 100 per JQL query; a tracker search with them gives at most as many results: narrow the filter's queries, or refine the search. Only `twg` and Linear page, 50 tasks at a time, filled from each query in turn.
 - On Windows, Kickoff gives the tools the default `APPDATA` folder, which Orca leaves out of the worker's environment. If yours is redirected elsewhere, the tools can't find their login or Orca.
 
 ## Development
