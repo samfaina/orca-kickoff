@@ -60,8 +60,6 @@ export function titleExclusion(settings: Pick<ProjectSettings, 'titleExclusion'>
 
 /** `<prefix>-<up to four words of the title, cleaned by the title exclusion pattern>`, that of
  *  `settings`, the branch settings the project uses:
-
-
  *  `issue-42-add-dark-mode` on GitHub, `web-12-anadir-modo-oscuro-a` on Jira. */
 export function worktreeName(task: Pick<Task, 'tracker' | 'key' | 'title'>, settings: Pick<ProjectSettings, 'titleExclusion'>): string {
   const prefix = task.tracker === 'github' ? `issue-${githubIssueNumber(task.key)}` : task.key.toLowerCase()
