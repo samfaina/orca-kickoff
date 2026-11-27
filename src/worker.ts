@@ -56,7 +56,15 @@ import {
 import { taskLister } from './providers'
 import { runHereLaunch } from './run-here'
 import { JIRA_CONNECTION_ARGS, parseJiraSites } from './providers/jira-orca'
-import { linearTeamArgs, linearTeamListArgs, parseLinearTeamNames, parseLinearTeams } from './providers/linear-orca'
+import {
+  LINEAR_PROJECT_LIST_TIMEOUT_MS,
+  linearProjectListArgs,
+  linearTeamArgs,
+  linearTeamListArgs,
+  parseLinearProjects,
+  parseLinearTeamNames,
+  parseLinearTeams
+} from './providers/linear-orca'
 import { FilterError } from './providers/queries'
 import type { PageRequest } from './providers/types'
 import { buildPrompt, findTemplate, TEMPLATE_GONE } from './template'
@@ -357,12 +365,17 @@ export function activateWith(orca: OrcaWorkerApi, { run, now, workerUrl, readFil
     }
   }
 
-  /** The Linear query form's choices for the workspace `workspaceId`: its teams, with the states and
-   *  labels of the team `team` unless it is blank, all read at once. A failure of any is data. */
+  /** The Linear query form's choices for the workspace `workspaceId`: its teams, with its Linear
+   *  projects when `team` is blank, else with the states and labels of the team `team`, all read at
+   *  once. A failure of any is data. */
   async function linearChoices(workspaceId: string, team = ''): Promise<LinearChoicesResult> {
     try {
       const teams = run('orca', linearTeamListArgs(workspaceId)).then(parseLinearTeams)
-      if (team.trim() === '') return { kind: 'ready', teams: await teams }
+      if (team.trim() === '') {
+        const projects = run('orca', linearProjectListArgs(workspaceId), { timeoutMs: LINEAR_PROJECT_LIST_TIMEOUT_MS }).then(parseLinearProjects)
+        const [teamsListed, projectsListed] = await Promise.all([teams, projects])
+        return { kind: 'ready', teams: teamsListed, projects: projectsListed.projects, ...(projectsListed.truncated ? { projectsTruncated: true as const } : {}) }
+      }
       const teamNames = (list: 'states' | 'labels') => run('orca', linearTeamArgs(list, workspaceId, team)).then((stdout) => parseLinearTeamNames(stdout, list))
       const [listed, states, labels] = await Promise.all([teams, teamNames('states'), teamNames('labels')])
       return { kind: 'ready', teams: listed, states, labels }

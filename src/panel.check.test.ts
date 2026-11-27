@@ -171,7 +171,7 @@ test('linear-ready lists the Linear issues assigned to the user, with their stat
   assert.equal(shown.valueOf({ label: 'Tracker' }), 'linear-orca')
 })
 
-test("linear-queries opens, with ✎, a Linear query form per query, with its team's states and labels, the stored team the workspace lacks marked not found", async () => {
+test("linear-queries opens, with ✎, a Linear query form per query, with its team's states and labels and the workspace's projects, the stored team and project the workspace lacks marked not found", async () => {
   const shown = await render('linear-queries')
   assert.equal(shown.valueOf({ type: 'Select', label: 'Filter' }), 'f-triage')
   await shown.press({ type: 'IconButton', label: 'Edit filter' })
@@ -180,13 +180,15 @@ test("linear-queries opens, with ✎, a Linear query form per query, with its te
     ['Linear query', 'Linear query 2']
   )
   assert.deepEqual(
-    ['team', 'state', 'assignee', 'label', 'order'].map((field) => shown.valueOf({ type: 'Select', testId: `linear-${field}-0` })),
-    ['ENG', 'Triage', 'null', 'Bug', 'createdAt']
+    ['team', 'state', 'assignee', 'label', 'project', 'order'].map((field) => shown.valueOf({ type: 'Select', testId: `linear-${field}-0` })),
+    ['ENG', 'Triage', 'null', 'Bug', 'pr-1', 'createdAt']
   )
   const options = (field: string, index: number) => (shown.find({ type: 'Select', testId: `linear-${field}-${index}` })?.props.options as { label: string }[]).map((option) => option.label)
   assert.deepEqual(options('state', 0), ['Open', 'Triage', 'Todo', 'In Progress', 'Done'])
   assert.deepEqual(options('label', 0), ['Any label', 'Bug', 'Feature'])
   assert.deepEqual(options('team', 1), ['Any team', 'Engineering (ENG)', 'Design (DES)', 'OPS (not found)'])
+  assert.deepEqual(options('project', 0), ['Any project', 'Dark mode', 'Onboarding'])
+  assert.deepEqual(options('project', 1), ['Any project', 'Dark mode', 'Onboarding', 'pr-9 (not found)'])
   assert.ok(shown.find({ text: "Couldn't list the states and labels of OPS: No connected Linear team matched OPS." }))
   assert.deepEqual(shown.errors, [])
   assert.deepEqual(shown.warnings, [])
