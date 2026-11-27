@@ -9,11 +9,11 @@ An Orca project: one repository registered in Orca, which owns its worktrees.
 _Avoid_: Repo (except for the GitHub `owner/name` a project points to), workspace
 
 **Tracker**:
-The external system a project's tasks come from, such as GitHub Issues or Jira.
+The external system a project's tasks come from: GitHub Issues, Jira or Linear.
 _Avoid_: Provider (that is the code that talks to a tracker), backend, source
 
 **Provider**:
-The plugin's adapter that reads tasks from one tracker through one tool. A tracker can have more than one provider: Jira is read either through Orca's own Jira support or through `twg`.
+The plugin's adapter that reads tasks from one tracker through one tool. A tracker can have more than one provider: Jira is read either through Orca's own Jira support or through `twg`. Linear is read through Orca's own Linear support.
 _Avoid_: Integration, connector
 
 **Task**:
@@ -21,11 +21,11 @@ One open item in a tracker, in a shape that does not depend on which tracker it 
 _Avoid_: Issue, work item, ticket (except inside a single provider, where the tracker's own word is fine)
 
 **Task key**:
-The identifier a tracker gives a task and users recognise: `#42` in GitHub, `WEB-12` in Jira.
+The identifier a tracker gives a task and users recognise: `#42` in GitHub, `WEB-12` in Jira, the identifier `ENG-12` in Linear.
 _Avoid_: Task id, number
 
 **Assignee**:
-A person the tracker says a task is assigned to, by the name the tracker shows for them: the login on GitHub, the display name on Jira. A GitHub task can have several; a Jira task has at most one. A task can have none.
+A person the tracker says a task is assigned to, by the name the tracker shows for them: the login on GitHub, the display name on Jira and Linear. A GitHub task can have several; a Jira or Linear task has at most one. A task can have none.
 _Avoid_: Owner, responsible
 
 **Status category**:
@@ -81,7 +81,7 @@ A text with task variables, part of the branch settings, that gives the git bran
 _Avoid_: Naming convention, branch pattern, template (alone)
 
 **Branch type**:
-The word a branch template puts for a task's kind, such as `bugfix` for a Jira bug. The branch settings choose it per Jira issue type, with one fallback for every other task and for every GitHub task.
+The word a branch template puts for a task's kind, such as `bugfix` for a Jira bug. The branch settings choose it per Jira issue type, with one fallback for every other task and for every GitHub and Linear task, which have no issue type.
 _Avoid_: Task type, issue type (that is the tracker's own value), prefix
 
 **Title exclusion pattern**:
@@ -121,7 +121,7 @@ The project of the worktree currently selected in Orca's sidebar.
 _Avoid_: Current repo, selected workspace
 
 **Login**:
-Credentials held outside the plugin that a provider relies on: a CLI login (`gh auth login`, `twg login`) or the Jira connection in Orca's settings. The plugin never holds credentials itself.
+Credentials held outside the plugin that a provider relies on: a CLI login (`gh auth login`, `twg login`), or the Jira or Linear connection in Orca's settings. The plugin never holds credentials itself.
 _Avoid_: Session, auth, token
 
 **Development plugin**:

@@ -4,11 +4,12 @@ import { providerConfig, type ProjectRef, type ProjectSettings, type ProviderCon
 import { github } from './github'
 import { jiraOrca } from './jira-orca'
 import { jiraTwg } from './jira-twg'
+import { linearOrca } from './linear-orca'
 import type { PageRequest, Provider, TaskPage } from './types'
 
 type Registry = { [K in ProviderId]: Provider<Required<ProviderConfigs>[K]> }
 
-const PROVIDERS: Registry = { github, 'jira-orca': jiraOrca, 'jira-twg': jiraTwg }
+const PROVIDERS: Registry = { github, 'jira-orca': jiraOrca, 'jira-twg': jiraTwg, 'linear-orca': linearOrca }
 
 export type ListTasks = (run: RunCli, project: ProjectRef, settings: ProjectSettings, request?: PageRequest) => Promise<TaskPage>
 

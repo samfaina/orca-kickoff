@@ -1,0 +1,130 @@
+// Linear through the connection saved in Orca, with `orca linear list-issues`. Kickoff never sees
+// the API key (ADR-0001). Orca pages with an opaque cursor, so a page is up to 50 tasks, filled
+// across the filter's Linear queries with the shared code in ./queries. Rows carry the Linear
+// organisation's name, so only the fields a task needs are read, and the raw answer is never logged.
+import { CliError, unreadableOutput, type RunCli } from '../cli'
+import { isRecord, text } from '../json'
+import { readLinearQuery, type LinearQuery } from '../linear-query'
+import { orcaResult } from '../orca'
+import type { Filter, FilterQuery, ProviderConfigs, Task } from '../protocol'
+import { FilterError, pageAcrossQueries, requireQueries, type QueryPage } from './queries'
+import type { Provider } from './types'
+
+const LIMIT = 50
+
+type Config = Required<ProviderConfigs>['linear-orca']
+
+/** What the list says when Orca has no Linear connection. */
+export const LINEAR_NOT_CONNECTED = "Linear isn't connected in Orca. Connect Linear in Orca's settings (Settings › Integrations › Linear), then reload the tasks."
+
+/** The `orca linear list-issues` arguments for one page of at most `limit` tasks of `query`, after
+ *  Orca's cursor `after`, of a tracker search for `search` when it isn't blank: each field of the
+ *  query as its flag, `--state open` and `--order-by updatedAt` when it has none, and `--cursor`,
+ *  `--workspace` and `--query` only when not blank. Never `--workspace all`, which refuses a
+ *  cursor. Each flag takes one value, passed as it is. */
+export function linearListArgs(config: Config, query: LinearQuery, after = '', limit = LIMIT, search = ''): string[] {
+  const args = ['linear', 'list-issues']
+  if (query.team !== undefined) args.push('--team', query.team)
+  args.push('--state', query.state ?? 'open')
+  if (query.assignee !== undefined) args.push('--assignee', query.assignee)
+  if (query.label !== undefined) args.push('--label', query.label)
+  if (query.project !== undefined) args.push('--project', query.project)
+  args.push('--order-by', query.orderBy ?? 'updatedAt', '--limit', String(limit))
+  if (after !== '') args.push('--cursor', after)
+  const workspace = config.workspaceId.trim()
+  if (workspace !== '') args.push('--workspace', workspace)
+  // Linear matches the whole text as one substring of the title or the description.
+  if (search.trim() !== '') args.push('--query', search.trim())
+  args.push('--json')
+  return args
+}
+
+export const linearOrca: Provider<Config> = {
+  id: 'linear-orca',
+  tracker: 'linear',
+  label: 'Linear (Orca connection)',
+  /** Up to `LIMIT` tasks, filled across the filter's Linear queries (see `pageAcrossQueries`), with
+   *  `<index>:<Orca cursor>` as the panel's cursor. */
+  async list(run, _project, config, request = {}) {
+    const queries = linearQueries(request.filter)
+    return pageAcrossQueries(
+      queries,
+      request.cursor,
+      LIMIT,
+      (query, after, limit) => queryPage(run, linearListArgs(config, readLinearQuery(query.text), after, limit, request.query)),
+      (_query, error) => linearFailure(error)
+    )
+  }
+}
+
+/** The Linear queries of `filter` to run (see `requireQueries`). With none, the failure names no
+ *  filter: the panel opens the filter editor on a filter that fails, and it can't edit Linear
+ *  filters yet. */
+function linearQueries(filter: Filter | undefined): FilterQuery[] {
+  try {
+    return requireQueries(filter, 'Add a Linear query to list Linear tasks.').queries
+  } catch (error) {
+    throw error instanceof FilterError ? new CliError(error.message) : error
+  }
+}
+
+/** `error` as the failure of the list: no Linear connection says how to connect; any other failure,
+ *  such as an unknown workspace, is Orca's own message. Linear rejects none of a query's values (an
+ *  unknown team, state or label lists nothing), so no failure is the filter's. */
+function linearFailure(error: unknown): unknown {
+  return error instanceof CliError && error.code === 'linear_not_connected' ? new CliError(LINEAR_NOT_CONNECTED, false, error.code) : error
+}
+
+/** One `list-issues` page, with Orca's cursor for the next one while `meta.hasMore` is true. */
+async function queryPage(run: RunCli, args: string[]): Promise<QueryPage> {
+  const result = orcaResult(await run('orca', args))
+  if (!isRecord(result) || !Array.isArray(result.issues)) throw unreadableOutput('orca')
+  const meta = isRecord(result.meta) ? result.meta : {}
+  return { tasks: toTasks(result.issues), nextCursor: meta.hasMore === true ? text(meta.nextCursor) || null : null }
+}
+
+function toTasks(issues: unknown[]): Task[] {
+  return issues.flatMap((issue): Task[] => {
+    if (!isRecord(issue)) return []
+    const key = text(issue.identifier)
+    const title = text(issue.title)
+    const url = text(issue.url)
+    if (!key || !title || !url) return []
+    const state = isRecord(issue.state) ? issue.state : {}
+    const assignee = isRecord(issue.assignee) ? text(issue.assignee.displayName) : ''
+    const labels = Array.isArray(issue.labels) ? issue.labels.flatMap((label) => (isRecord(label) && text(label.name) ? [text(label.name)] : [])) : []
+    return [
+      {
+        tracker: 'linear',
+        key,
+        title,
+        url,
+        description: text(issue.description),
+        status: text(state.name) || null,
+        statusCategory: linearStatusCategory(state.type),
+        assignees: assignee ? [assignee] : [],
+        labels
+      }
+    ]
+  })
+}
+
+/** Linear's state type as a tracker-independent category. The type stays the same whatever the
+ *  workspace calls its states. Orca's `--state open` keeps `duplicate`, so an open list can show a
+ *  task whose category is done: accepted (#157), rather than leaving such rows out. */
+function linearStatusCategory(type: unknown): Task['statusCategory'] {
+  switch (type) {
+    case 'backlog':
+    case 'triage':
+    case 'unstarted':
+      return 'todo'
+    case 'started':
+      return 'in_progress'
+    case 'completed':
+    case 'canceled':
+    case 'duplicate':
+      return 'done'
+    default:
+      return null
+  }
+}

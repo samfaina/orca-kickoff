@@ -573,6 +573,255 @@ test('jira.sites answers a failure as data', async () => {
   assert.deepEqual(await worker.request('jira.sites', {}), { kind: 'error', message: 'orca failed: Orca is not running.' })
 })
 
+/** A `list-issues` row of the invented Acme workspace, with these fields changed. */
+const linearIssue = (identifier: string, fields: Record<string, unknown> = {}) => ({
+  id: `uuid-${identifier}`,
+  identifier,
+  title: `Task ${identifier}`,
+  url: `https://linear.app/acme/issue/${identifier}/task`,
+  description: 'Some **Markdown**.',
+  state: { id: 'st-1', name: 'Todo', type: 'unstarted', color: '#000000' },
+  team: { id: 'tm-1', name: 'Engineering', key: 'ENG', color: '#000000' },
+  project: null,
+  cycle: null,
+  assignee: { id: 'us-1', displayName: 'Ana Example', avatarUrl: null },
+  labels: [{ id: 'lb-1', name: 'Feature', color: '#000000' }],
+  priority: 2,
+  priorityLabel: 'High',
+  branchName: `${identifier.toLowerCase()}-task`,
+  workspace: { id: 'ws-1', name: 'Acme' },
+  ...fields
+})
+
+/** `orca linear list-issues --json` with these rows, and `nextCursor` while there are more. */
+const linearPage = (issues: unknown[], nextCursor: string | null = null) =>
+  wrap({
+    issues,
+    truncated: false,
+    meta: { limit: 50, returned: issues.length, hasMore: nextCursor !== null, ...(nextCursor ? { nextCursor } : {}), orderBy: 'updatedAt', workspaceId: 'ws-1', partial: false, workspaceErrors: [] }
+  })
+
+/** Stored settings of the web project on Linear (Orca connection), with these other fields. */
+const linearSettings = (project: Record<string, unknown> = {}) => ({
+  settings: { version: 1, projects: { 'github:acme/web': { provider: 'linear-orca', providers: { 'linear-orca': { workspaceId: '' } }, ...project } } }
+})
+
+/** The arguments of each `orca linear list-issues` call. */
+const linearCalls = (calls: Call[]) => calls.filter((call) => call.args[0] === 'linear' && call.args[1] === 'list-issues').map((call) => call.args)
+
+test("a Linear project lists the open issues assigned to the user, its initial filter, through Orca's Linear connection", async () => {
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca linear list-issues': linearPage([linearIssue('ENG-12', { title: 'Add dark mode to settings' })]) }, { storage: linearSettings() })
+  const list = await worker.request('tasks.load', {})
+  assert.ok(list.kind === 'ready')
+  assert.equal(list.provider, 'linear-orca')
+  assert.deepEqual([list.filterId, list.queryCount, list.nextCursor, list.truncated], ['assigned', 1, null, false])
+  assert.deepEqual(list.tasks, [
+    {
+      tracker: 'linear',
+      key: 'ENG-12',
+      title: 'Add dark mode to settings',
+      url: 'https://linear.app/acme/issue/ENG-12/task',
+      description: 'Some **Markdown**.',
+      status: 'Todo',
+      statusCategory: 'todo',
+      assignees: ['Ana Example'],
+      labels: ['Feature']
+    }
+  ])
+  assert.deepEqual(linearCalls(calls), [['linear', 'list-issues', '--state', 'open', '--assignee', 'me', '--order-by', 'updatedAt', '--limit', '50', '--json']])
+})
+
+test("a Linear task's status category comes from its state's type, whatever the state is called, and an unknown type gives none", async () => {
+  const types = ['backlog', 'triage', 'unstarted', 'started', 'completed', 'canceled', 'duplicate', 'paused']
+  const issues = types.map((type, index) => linearIssue(`ENG-${index + 1}`, { state: { id: `st-${index}`, name: `Estado ${type}`, type } }))
+  const { worker } = await start({ ...ORCA_OK, 'orca linear list-issues': linearPage(issues) }, { storage: linearSettings() })
+  const list = await worker.request('tasks.load', {})
+  assert.ok(list.kind === 'ready')
+  assert.deepEqual(
+    list.tasks.map((task) => [task.status, task.statusCategory]),
+    [
+      ['Estado backlog', 'todo'],
+      ['Estado triage', 'todo'],
+      ['Estado unstarted', 'todo'],
+      ['Estado started', 'in_progress'],
+      ['Estado completed', 'done'],
+      ['Estado canceled', 'done'],
+      ['Estado duplicate', 'done'],
+      ['Estado paused', null]
+    ]
+  )
+})
+
+test('an unassigned Linear issue has no assignees, one with no description an empty one, and rows without an identifier, title or URL are dropped', async () => {
+  const issues = [
+    linearIssue('ENG-1', { assignee: null, description: null, labels: [] }),
+    linearIssue('ENG-2', { identifier: null }),
+    linearIssue('ENG-3', { title: '' }),
+    linearIssue('ENG-4', { url: undefined }),
+    'not a row',
+    linearIssue('ENG-5')
+  ]
+  const { worker } = await start({ ...ORCA_OK, 'orca linear list-issues': linearPage(issues) }, { storage: linearSettings() })
+  const list = await worker.request('tasks.load', {})
+  assert.ok(list.kind === 'ready')
+  assert.deepEqual(list.tasks.map((task) => task.key), ['ENG-1', 'ENG-5'])
+  assert.deepEqual([list.tasks[0].assignees, list.tasks[0].description, list.tasks[0].labels], [[], '', []])
+  assert.deepEqual([list.tasks[1].assignees, list.tasks[1].description, list.tasks[1].labels], [['Ana Example'], 'Some **Markdown**.', ['Feature']])
+})
+
+test("Load more reads Linear's next page with its cursor, then the filter's next Linear query, each task once where it first appears", async () => {
+  const everything = JSON.stringify({ team: 'ENG', state: 'Todo', assignee: 'null', label: 'Bug', project: 'proj-1', orderBy: 'createdAt', cycle: 'c-1' })
+  const filter = { id: 'f-two', name: 'Two', queries: ['{"assignee":"me"}', ' ', everything] }
+  const answer = (args: string[]) => {
+    if (args.includes('--team')) return linearPage([linearIssue('ENG-2'), linearIssue('ENG-3')])
+    return args.includes('--cursor') ? linearPage([linearIssue('ENG-2')]) : linearPage([linearIssue('ENG-1')], 'cursor-2')
+  }
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca linear list-issues': answer }, { storage: linearSettings({ filters: { linear: [filter] } }) })
+  const first = await worker.request('tasks.load', {})
+  assert.ok(first.kind === 'ready')
+  assert.deepEqual([first.filterId, first.queryCount, first.tasks.map((task) => task.key), first.nextCursor], ['f-two', 2, ['ENG-1'], '0:cursor-2'])
+  const more = await worker.request('tasks.load', { cursor: '0:cursor-2' })
+  assert.ok(more.kind === 'ready')
+  assert.deepEqual([more.tasks.map((task) => task.key), more.nextCursor], [['ENG-2', 'ENG-3'], null])
+  assert.deepEqual(linearCalls(calls), [
+    ['linear', 'list-issues', '--state', 'open', '--assignee', 'me', '--order-by', 'updatedAt', '--limit', '50', '--json'],
+    ['linear', 'list-issues', '--state', 'open', '--assignee', 'me', '--order-by', 'updatedAt', '--limit', '50', '--cursor', 'cursor-2', '--json'],
+    ['linear', 'list-issues', '--team', 'ENG', '--state', 'Todo', '--assignee', 'null', '--label', 'Bug', '--project', 'proj-1', '--order-by', 'createdAt', '--limit', '49', '--json']
+  ])
+})
+
+test('a Linear query that is not a JSON object lists with every default, and a field of the wrong type is ignored', async () => {
+  const filter = { id: 'f-odd', name: 'Odd', queries: ['assignee = me', '{"assignee":"someone","team":7,"orderBy":"rank"}'] }
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca linear list-issues': linearPage([]) }, { storage: linearSettings({ filters: { linear: [filter] } }) })
+  assert.equal((await worker.request('tasks.load', {})).kind, 'ready')
+  const defaults = ['linear', 'list-issues', '--state', 'open', '--order-by', 'updatedAt']
+  assert.deepEqual(linearCalls(calls), [
+    [...defaults, '--limit', '50', '--json'],
+    [...defaults, '--limit', '50', '--json']
+  ])
+})
+
+test('a tracker search on Linear adds the trimmed words, whole, as --query to each Linear query, and its next page sends them again', async () => {
+  const { worker, calls } = await start(
+    { ...ORCA_OK, 'orca linear list-issues': (args) => linearPage([linearIssue('ENG-7')], args.includes('--cursor') ? null : 'cursor-2') },
+    { storage: linearSettings() }
+  )
+  const found = await worker.request('tasks.load', { query: '  dark mode ' })
+  assert.ok(found.kind === 'ready')
+  assert.equal(found.nextCursor, '0:cursor-2')
+  await worker.request('tasks.load', { query: '  dark mode ', cursor: '0:cursor-2' })
+  assert.deepEqual(linearCalls(calls).map((args) => args.slice(-5)), [
+    ['--limit', '50', '--query', 'dark mode', '--json'],
+    ['--cursor', 'cursor-2', '--query', 'dark mode', '--json']
+  ])
+})
+
+test("a Linear filter whose queries are all blank fails without running Orca and names no filter, since the panel can't edit Linear filters yet", async () => {
+  const filter = { id: 'f-blank', name: 'Blank', queries: ['', ' '] }
+  const { worker, calls } = await start({ ...ORCA_OK }, { storage: linearSettings({ filters: { linear: [filter] } }) })
+  assert.deepEqual(await worker.request('tasks.load', {}), {
+    kind: 'error',
+    project: { id: 'github:acme/web', name: 'web', repo: 'acme/web' },
+    message: 'Blank: Add a Linear query to list Linear tasks.'
+  })
+  assert.deepEqual(linearCalls(calls), [])
+})
+
+test("with no Linear connection in Orca, the list says to connect Linear in Orca's settings, and names no filter", async () => {
+  const notConnected = JSON.stringify({ ok: false, error: { code: 'linear_not_connected', message: 'Linear is not signed in on this computer.' } })
+  const { worker } = await start({ ...ORCA_OK, 'orca linear list-issues': notConnected }, { storage: linearSettings() })
+  assert.deepEqual(await worker.request('tasks.load', {}), {
+    kind: 'error',
+    project: { id: 'github:acme/web', name: 'web', repo: 'acme/web' },
+    message: "Linear isn't connected in Orca. Connect Linear in Orca's settings (Settings › Integrations › Linear), then reload the tasks."
+  })
+})
+
+test("any other Orca failure on Linear is Orca's own message, and a chosen workspace is passed as --workspace", async () => {
+  const unknown = JSON.stringify({ ok: false, error: { code: 'linear_invalid_workspace', message: 'Unknown Linear workspace ws-9.', data: { nextSteps: [] } } })
+  const { worker, calls } = await start(
+    { ...ORCA_OK, 'orca linear list-issues': unknown },
+    { storage: linearSettings({ providers: { 'linear-orca': { workspaceId: 'ws-9' } } }) }
+  )
+  assert.deepEqual(await worker.request('tasks.load', {}), {
+    kind: 'error',
+    project: { id: 'github:acme/web', name: 'web', repo: 'acme/web' },
+    message: 'orca failed: Unknown Linear workspace ws-9.'
+  })
+  assert.deepEqual(linearCalls(calls)[0].slice(-3), ['--workspace', 'ws-9', '--json'])
+})
+
+const eng12: Task = {
+  tracker: 'linear',
+  key: 'ENG-12',
+  title: 'Add dark mode to settings',
+  url: 'https://linear.app/acme/issue/ENG-12/add-dark-mode-to-settings',
+  description: 'Users want a **dark** theme.',
+  status: 'Todo',
+  statusCategory: 'todo',
+  assignees: ['Ana Example'],
+  labels: ['Feature']
+}
+
+test('Start on Linear links the worktree with --reference <issue URL>, names it after the identifier and fills the branch template with the fallback branch type', async () => {
+  const storage = linearSettings({
+    branchTemplate: '{{branch_type}}/{{task_key}}-{{task_slug}}',
+    branchTypes: [{ issueType: 'Feature', branchType: 'feat' }],
+    branchTypeFallback: 'task',
+    templates: [{ id: 'default', name: 'Default', text: '{{tracker}} {{task_key}} {{task_status}}: {{task_description}}' }]
+  })
+  const { worker, calls } = await start({ ...ORCA_OK, 'orca worktree create': CREATED }, { storage })
+  assert.deepEqual(await worker.request('task.start', { projectId: 'github:acme/web', task: eng12, templateId: 'default' }), { ok: true, underWay: true })
+  assert.deepEqual(creates(calls)[0].args, [
+    'worktree', 'create', '--project', 'github:acme/web', '--name', 'eng-12-add-dark-mode-to', '--branch', 'task/ENG-12-add-dark-mode-to', '--no-parent', '--json',
+    '--reference', 'https://linear.app/acme/issue/ENG-12/add-dark-mode-to-settings',
+    '--agent', 'claude', '--prompt', 'linear ENG-12 Todo: Users want a **dark** theme.'
+  ])
+})
+
+test("a Linear project's task worktrees are those linked to a Linear issue, with or without linearIdentifier, else named after an identifier", async () => {
+  const linked = (id: string, item: Record<string, unknown>) => ({
+    id: `r1::/src/${id}`, projectId: 'github:acme/web', displayName: id, isArchived: false, linkedIssue: null,
+    linkedItems: [{ type: 'issue', number: 0, url: 'https://linear.app/acme/issue/x', ...item }]
+  })
+  const worktrees = worktreesWith(
+    linked('dark', { provider: 'linear', identifier: 'ENG-12', linearIdentifier: 'eng-12', linearOrganizationUrlKey: 'acme' }),
+    linked('login', { provider: 'linear', identifier: 'eng-13' }),
+    linked('jira-linked', { provider: 'jira', identifier: 'ENG-15', jiraIdentifier: 'ENG-15' }),
+    { id: 'r1::/src/eng-14', projectId: 'github:acme/web', displayName: 'eng-14-fix-the-login', isArchived: false, linkedIssue: null, linkedItems: [] }
+  )
+  const { worker } = await start(
+    { ...ORCA_OK, 'orca worktree list': worktrees, 'orca linear list-issues': linearPage([linearIssue('ENG-12')]) },
+    { storage: linearSettings() }
+  )
+  const expected = {
+    'ENG-12': { worktreeId: 'r1::/src/dark', name: 'dark', agent: null },
+    'ENG-13': { worktreeId: 'r1::/src/login', name: 'login', agent: null },
+    'ENG-14': { worktreeId: 'r1::/src/eng-14', name: 'eng-14-fix-the-login', agent: null }
+  }
+  assert.deepEqual(await worker.request('worktrees.load', { projectId: 'github:acme/web' }), { kind: 'ready', worktrees: expected })
+  const list = await worker.request('tasks.load', {})
+  assert.ok(list.kind === 'ready')
+  assert.deepEqual(list.worktrees, expected)
+})
+
+test('a Start of a Linear task already linked in Orca creates nothing, and Run here launches the agent for a Linear task', async () => {
+  const linkedEng12 = {
+    id: 'r1::/src/dark', projectId: 'github:acme/web', displayName: 'dark', isArchived: false, linkedIssue: null,
+    linkedItems: [{ provider: 'linear', type: 'issue', number: 0, identifier: 'ENG-12', linearIdentifier: 'ENG-12', url: eng12.url }]
+  }
+  const started = await start({ ...ORCA_OK, 'orca worktree list': worktreesWith(linkedEng12) }, { storage: linearSettings() })
+  assert.deepEqual(await started.worker.request('task.start', { projectId: 'github:acme/web', task: eng12, templateId: 'default' }), { ok: true, underWay: false })
+  assert.deepEqual(creates(started.calls), [])
+
+  const here = await start({ ...ORCA_OK, 'orca agent launch': wrap({ outcome: { kind: 'terminal' } }) }, { storage: linearSettings() })
+  assert.deepEqual(await here.worker.request('task.runHere', { projectId: 'github:acme/web', task: eng12, templateId: 'default' }), { ok: true })
+  const launch = here.calls.find((call) => call.args[0] === 'agent' && call.args[1] === 'launch')
+  assert.deepEqual(launch?.args, [
+    'agent', 'launch', '--agent', 'claude', '--worktree', 'id:r1::/src/web', '--prompt', `Complete ENG-12: ${eng12.url}`, '--focus', '--json'
+  ])
+})
+
 const web12: Task = {
   tracker: 'jira',
   key: 'WEB-12',

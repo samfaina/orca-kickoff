@@ -26,6 +26,8 @@ export type OrcaWorktree = {
   githubIssues: number[]
   /** Jira keys linked through `linkedItems`, upper-cased. */
   jiraKeys: string[]
+  /** Linear identifiers linked through `linkedItems` with `provider: 'linear'`, upper-cased. */
+  linearKeys: string[]
 }
 
 /** One row of `orca worktree ps`. `branch` is the worktree's current branch without `refs/heads/`,
@@ -66,7 +68,12 @@ export function parseWorktrees(stdout: string): OrcaWorktree[] {
         isArchived: worktree.isArchived === true,
         isMain: worktree.isMainWorktree === true,
         githubIssues,
-        jiraKeys: items.flatMap((item) => (nonEmpty(item.jiraIdentifier) ? [item.jiraIdentifier.toUpperCase()] : []))
+        jiraKeys: items.flatMap((item) => (nonEmpty(item.jiraIdentifier) ? [item.jiraIdentifier.toUpperCase()] : [])),
+        linearKeys: items.flatMap((item) => {
+          if (item.provider !== 'linear') return []
+          const identifier = nonEmpty(item.linearIdentifier) ? item.linearIdentifier : item.identifier
+          return nonEmpty(identifier) ? [identifier.toUpperCase()] : []
+        })
       }
     ]
   })
@@ -130,9 +137,13 @@ export function findTaskWorktrees(
     const agent = statuses.find((row) => row.worktreeId === worktree.id)?.agent ?? null
     found[key] = { worktreeId: worktree.id, name: worktree.name, agent }
   }
+  const linkedKeys: Record<TrackerId, (worktree: OrcaWorktree) => string[]> = {
+    github: (worktree) => worktree.githubIssues.map((n) => `#${n}`),
+    jira: (worktree) => worktree.jiraKeys,
+    linear: (worktree) => worktree.linearKeys
+  }
   for (const worktree of own) {
-    const keys = tracker === 'github' ? worktree.githubIssues.map((n) => `#${n}`) : worktree.jiraKeys
-    for (const key of keys) add(key, worktree)
+    for (const key of linkedKeys[tracker](worktree)) add(key, worktree)
   }
   for (const worktree of own) {
     const key = taskKeyFromWorktreeName(worktree.name, tracker)
@@ -153,7 +164,8 @@ export type WorktreeCreate = {
 }
 
 /** `orca worktree create` for a task, linked with `--issue <n>` on GitHub or `--reference <url>`
- *  on Jira (the full URL, so Orca needs no Jira connection to resolve it), with `--branch` when the
+ *  on Jira and Linear (the full URL, so Orca needs no Jira connection to resolve it, and a bare
+ *  Linear identifier would read as a Jira key), with `--branch` when the
  *  branch template of the branch settings the project uses gives one. */
 export function worktreeCreateArgs({ projectId, name, branch, task, agent, prompt }: WorktreeCreate): string[] {
   const args = ['worktree', 'create', '--project', projectId, '--name', name]

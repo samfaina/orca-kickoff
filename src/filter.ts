@@ -146,11 +146,12 @@ const RECIPES: Record<TrackerId, readonly FilterRecipe[]> = {
     { name: 'Open', queries: [DEFAULT_GITHUB_QUERY] },
     { name: 'Assigned to me', queries: ['is:open assignee:@me'] }
   ],
-  jira: []
+  jira: [],
+  linear: []
 }
 
 /** The recipes the filter editor offers a new filter on `tracker`: GitHub's. Jira's JQL recipes come
- *  before the editor, with + (`src/jql-recipe.ts`). */
+ *  before the editor, with + (`src/jql-recipe.ts`). The panel doesn't edit Linear filters yet. */
 export function filterRecipes(tracker: TrackerId): FilterRecipe[] {
   return RECIPES[tracker].map((recipe) => ({ name: recipe.name, queries: [...recipe.queries] }))
 }

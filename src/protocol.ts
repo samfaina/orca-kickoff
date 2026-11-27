@@ -4,21 +4,22 @@
 // them.
 import type { About } from './about'
 import { isRecord } from './json'
+import { INITIAL_LINEAR_QUERY } from './linear-query'
 import { fillTemplate, INITIAL_TEMPLATE_ID, INITIAL_TEMPLATE_NAME, JIRA_PROJECT_VARIABLE, sameTemplateName, usesVariable } from './template'
 
-export type TrackerId = 'github' | 'jira'
-export type ProviderId = 'github' | 'jira-orca' | 'jira-twg'
+export type TrackerId = 'github' | 'jira' | 'linear'
+export type ProviderId = 'github' | 'jira-orca' | 'jira-twg' | 'linear-orca'
 /** The providers that read Jira, and share its JQL. */
-export type JiraProviderId = Exclude<ProviderId, 'github'>
+export type JiraProviderId = 'jira-orca' | 'jira-twg'
 
 export type Task = {
   tracker: TrackerId
-  /** "#42" on GitHub, "WEB-12" on Jira. */
+  /** "#42" on GitHub, "WEB-12" on Jira, the identifier "ENG-12" on Linear. */
   key: string
   title: string
   /** Browser URL. */
   url: string
-  /** Plain text, '' when none. */
+  /** Plain text on GitHub and Jira, Linear Markdown on Linear; '' when none. */
   description: string
   /** As the tracker shows it. */
   status: string | null
@@ -26,7 +27,8 @@ export type Task = {
   /** Display names (GitHub: login). */
   assignees: string[]
   labels: string[]
-  /** The Jira issue type's name as the tracker shows it, such as "Bug". GitHub tasks have none. */
+  /** The Jira issue type's name as the tracker shows it, such as "Bug". GitHub and Linear tasks
+   *  have none. */
   issueType?: string
 }
 
@@ -46,6 +48,9 @@ export type ProviderConfigs = {
   'jira-orca'?: { siteId: string }
   /** '' = twg's default. */
   'jira-twg'?: { site: string; profile: string }
+  /** workspaceId '' = no `--workspace`, so Orca reads the workspace it picks (docs/reference.md,
+   *  Orca's Linear support). */
+  'linear-orca'?: { workspaceId: string }
 }
 
 /** A named way to ask the tracker for a project's tasks. */
@@ -86,7 +91,7 @@ export type ProjectSettings = {
   jiraProjectKey?: string
   /** The filters of each tracker, in order; both Jira providers list the same ones. Undefined or
    *  empty: one filter, "Tasks" with DEFAULT_JQL on Jira, "Open" with DEFAULT_GITHUB_QUERY on
-   *  GitHub. */
+   *  GitHub, "Assigned to me" with INITIAL_LINEAR_QUERY on Linear. */
   filters?: ByTracker<Filter[]>
   /** The filter each tracker showed last; undefined or unknown: the first. */
   shownFilterId?: ByTracker<string>
@@ -155,16 +160,21 @@ export const INITIAL_FILTER_NAME = 'Tasks'
 /** The GitHub search of the filter a GitHub project has before it stores any: its open issues. */
 export const DEFAULT_GITHUB_QUERY = 'is:open'
 
-/** The filter each tracker has before a project stores any. */
+/** The filter each tracker has before a project stores any. On Linear, the open issues assigned to
+ *  the user. */
 const INITIAL_FILTERS: Record<TrackerId, Filter> = {
   jira: { id: INITIAL_FILTER_ID, name: INITIAL_FILTER_NAME, queries: [DEFAULT_JQL] },
-  github: { id: 'open', name: 'Open', queries: [DEFAULT_GITHUB_QUERY] }
+  github: { id: 'open', name: 'Open', queries: [DEFAULT_GITHUB_QUERY] },
+  linear: { id: 'assigned', name: 'Assigned to me', queries: [INITIAL_LINEAR_QUERY] }
 }
 
 /** Every tracker, from the map above, so a new one can't be left out of reading settings. */
 const TRACKER_IDS = Object.keys(INITIAL_FILTERS) as TrackerId[]
 
-const PROVIDER_IDS: readonly ProviderId[] = ['github', 'jira-orca', 'jira-twg']
+/** The tracker each provider reads, so a new provider can't be left out of reading settings. */
+const PROVIDER_TRACKERS: Record<ProviderId, TrackerId> = { github: 'github', 'jira-orca': 'jira', 'jira-twg': 'jira', 'linear-orca': 'linear' }
+
+const PROVIDER_IDS = Object.keys(PROVIDER_TRACKERS) as ProviderId[]
 
 /** Settings as read from storage. Anything of an unexpected shape (empty, an old version,
  *  corrupt data) falls back to the defaults instead of failing. */
@@ -299,6 +309,8 @@ function readProviderConfigs(raw: unknown): ProviderConfigs {
   if (isRecord(orca) && strings(orca, 'siteId')) configs['jira-orca'] = { siteId: orca.siteId }
   const twg = raw['jira-twg']
   if (isRecord(twg) && strings(twg, 'site', 'profile')) configs['jira-twg'] = { site: twg.site, profile: twg.profile }
+  const linear = raw['linear-orca']
+  if (isRecord(linear) && strings(linear, 'workspaceId')) configs['linear-orca'] = { workspaceId: linear.workspaceId }
   return configs
 }
 
@@ -391,13 +403,14 @@ export function projectProvider(settings: ProjectSettings, project: ProjectRef):
 
 /** The tracker a provider reads. */
 export function trackerOf(provider: ProviderId): TrackerId {
-  return provider === 'github' ? 'github' : 'jira'
+  return PROVIDER_TRACKERS[provider]
 }
 
 /** A provider's stored configuration, or its defaults when none is stored: the tool's own default
- *  site and profile. The filters don't depend on it: both Jira providers list the same ones. */
+ *  site, profile or workspace. The filters don't depend on it: both Jira providers list the same
+ *  ones. */
 export function providerConfig<K extends ProviderId>(settings: Pick<ProjectSettings, 'providers'>, id: K): Required<ProviderConfigs>[K] {
-  const defaults: Required<ProviderConfigs> = { github: {}, 'jira-orca': { siteId: '' }, 'jira-twg': { site: '', profile: '' } }
+  const defaults: Required<ProviderConfigs> = { github: {}, 'jira-orca': { siteId: '' }, 'jira-twg': { site: '', profile: '' }, 'linear-orca': { workspaceId: '' } }
   const configs: Required<ProviderConfigs> = { ...defaults, ...settings.providers }
   return configs[id]
 }
