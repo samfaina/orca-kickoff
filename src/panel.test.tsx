@@ -5124,6 +5124,33 @@ test('on Linear, ✎ opens the filter editor with a Linear query form per query,
   assert.deepEqual(view.warnings, [])
 })
 
+/** The types of the queries' part of the filter editor: each query's Field, and what parts them. */
+function queryParts(view: TestPanel, firstLabel: string): string[] {
+  const holdsFirst = (node: TreeSnapshot) => elementsIn(node).some((child) => child.type === 'Field' && child.props?.label === firstLabel)
+  const [queries] = nodesIn(view.tree(), (node) => node.type === 'Stack' && holdsFirst(node))
+  assert.ok(queries, `no queries under ${firstLabel}`)
+  return elementsIn(queries)
+    .filter((node) => node.type === 'Field' || node.type === 'Separator')
+    .map((node) => node.type)
+}
+
+test('on Linear, a divider parts each query form from the next, and only between them; text queries have none', async () => {
+  const mine = { id: 'f-mine', name: 'Mine', queries: [linearQuery({ assignee: 'me' }), linearQuery({ assignee: 'null' })] }
+  const { view } = await showLinearFilters(linearStored({ filters: { linear: [mine] } }))
+  await view.press(editFilter)
+  assert.deepEqual(queryParts(view, 'Linear query'), ['Field', 'Separator', 'Field'])
+  await view.press({ type: 'Button', text: 'Add query' })
+  assert.deepEqual(queryParts(view, 'Linear query'), ['Field', 'Separator', 'Field', 'Separator', 'Field'])
+  await view.press(removeQuery('Linear query'))
+  await view.press(removeQuery('Linear query'))
+  assert.deepEqual(queryParts(view, 'Linear query'), ['Field'])
+  assert.deepEqual(view.errors, [])
+  assert.deepEqual(view.warnings, [])
+  const jira = await showFilters(filtersStored([tasksFilter, boardFilter], 'f-board'))
+  await jira.view.press(editFilter)
+  assert.deepEqual(queryParts(jira.view, 'JQL'), ['Field', 'Field'])
+})
+
 test("a Linear query's choices are saved as its fields, the defaults left out and the fields the form doesn't show kept, and Save lists the filter's tasks", async () => {
   const later = linearQuery({ state: 'Todo', label: 'Bug', project: 'proj-1' })
   const mine = { id: 'f-mine', name: 'Mine', queries: [linearQuery({ assignee: 'me' }), later] }

@@ -2532,7 +2532,7 @@ function LinearChoicesNote({ answer }: { answer: ShownLinearChoices }) {
 }
 
 /** The queries of a filter on `tracker`, each with its Remove button while more than one is left,
- *  then Add JQL (Add query on GitHub and Linear). Each is a text field, or on Linear a Linear query
+ *  on Linear with a divider between each two, then Add JQL (Add query on GitHub and Linear). Each is a text field, or on Linear a Linear query
  *  form whose lists come from the workspace `linearWorkspaceId`, in a project whose Linear team key
  *  is `linearTeamKey`. Ctrl+Enter (Cmd+Enter on macOS) in any text field runs `onSubmit`. */
 function FilterQueries({
@@ -2564,11 +2564,15 @@ function FilterQueries({
         </Text>
       ) : null}
       {tracker === 'linear' ? <LinearChoicesNote answer={answers[''] ?? 'loading'} /> : null}
-      {queries.map((query, index) => {
+      {queries.flatMap((query, index) => {
         const label = index === 0 ? wording.label : `${wording.label} ${index + 1}`
         const changeQuery = (value: string) => change(queries.map((other, at) => (at === index ? value : other)))
+        // A Linear query form is a column of Selects with no box around it, so a divider parts each
+        // from the one before; a text query's box parts itself.
+        const divider = tracker === 'linear' && index > 0 ? [<Separator key={`query-divider-${index}`} />] : []
         // The label is the Field's, above the row, so Remove centres on the query's box alone.
-        return (
+        return [
+          ...divider,
           <Field key={`query-${index}`} label={label}>
             <Box direction="row" align="center" gap="xs">
               <Box grow minWidth={0}>
@@ -2601,7 +2605,7 @@ function FilterQueries({
               ) : null}
             </Box>
           </Field>
-        )
+        ]
       })}
       <Row gap="none" align="center">
         <Button key="query-add" icon="add" size="sm" variant="solid" onPress={() => change([...queries, wording.fresh])}>
